@@ -1,0 +1,42 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "relaycli"
+version = "0.1.0"
+description = "RelayCLI — a provider-agnostic, installable terminal coding agent."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "RelayCLI" }]
+keywords = ["cli", "coding-agent", "llm", "litellm", "terminal"]
+
+# Pinned to versions verified to install on CPython 3.12–3.14.
+dependencies = [
+    "litellm==1.83.7",
+    "prompt_toolkit==3.0.52",
+    "rich==15.0.0",
+    "pydantic==2.12.5",
+    "pydantic-settings==2.14.2",
+    "typer==0.26.8",
+    "python-dotenv==1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+]
+
+[project.scripts]
+relaycli = "relaycli.cli:app"
+
+[project.urls]
+Homepage = "https://github.com/relaycli/relaycli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["relaycli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
