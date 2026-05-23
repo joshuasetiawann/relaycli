@@ -1,0 +1,467 @@
+"""LiteLLM wrapper — the single gateway for every model call.
+
+All provider access in RelayCLI flows through this module; nothing else
+imports LiteLLM directly. The wrapper:
+
+* normalizes the provider response into :class:`LLMResponse`
+  (plain text + a list of :class:`ToolCall`),
+* supports streaming via an ``on_token`` callback,
+* captures token usage and an estimated cost per call,
+* raises :class:`LLMError` with a clear message (never a raw stack trace)
+  when a key or model is missing or a provider call fails.
+
+Credentials come exclusively from :mod:`relaycli.config`. Keys are passed
+directly to LiteLLM (not exported into the process environment) by this module.
+Note that a user's shell may still hold provider keys as real environment
+variables; ``run_command`` therefore scrubs the known provider-key names from a
+spawned command's environment so a command cannot read them back.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import Any, Callable, Iterator, Sequence
+
+import litellm
+
+from relaycli.config import Settings, get_settings
+
+# Keep LiteLLM quiet and well-behaved:
+# - drop_params: silently drop params a given provider doesn't support
+# - telemetry off: never phone home (privacy / no surprise network calls)
+litellm.drop_params = True
+litellm.telemetry = False
+litellm.suppress_debug_info = True
+
+# LiteLLM provider id -> the Settings attribute holding that provider's key.
+_PROVIDER_KEY_ATTR: dict[str, str] = {
+    "openai": "openai_api_key",
+    "anthropic": "anthropic_api_key",
+    "gemini": "gemini_api_key",
+    "groq": "groq_api_key",
+    "mistral": "mistral_api_key",
+}
+_KEYLESS_PROVIDERS = {"ollama", "ollama_chat"}
+
+
+class LLMError(RuntimeError):
+    """A configuration or provider error, carrying a user-facing message."""
+
+
+@dataclass
+class ToolCall:
+    """A single tool/function call requested by the model."""
+
+    id: str
+    name: str
+    arguments: str  # raw JSON string exactly as the model produced it
+
+    def parsed_arguments(self) -> dict[str, Any]:
+        """Best-effort parse of the JSON argument string."""
+        raw = (self.arguments or "").strip()
+        if not raw:
+            return {}
+        return json.loads(raw)
+
+
+@dataclass
+class Usage:
+    """Token accounting + estimated USD cost for one or more calls."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    cost_usd: float = 0.0
+
+    def add(self, other: "Usage") -> "Usage":
+        return Usage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+            cost_usd=self.cost_usd + other.cost_usd,
+        )
+
+
+@dataclass
+class LLMResponse:
+    """Normalized result of a single model call."""
+
+    text: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    usage: Usage = field(default_factory=Usage)
+    finish_reason: str | None = None
+    model: str | None = None
+
+    def to_assistant_message(self) -> dict[str, Any]:
+        """Re-serialize this response as an OpenAI-style assistant message.
+
+        Used to append the model's turn (including its tool calls) back into
+        the conversation before sending tool results.
+        """
+        msg: dict[str, Any] = {"role": "assistant", "content": self.text or None}
+        if self.tool_calls:
+            msg["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": tc.arguments},
+                }
+                for tc in self.tool_calls
+            ]
+        return msg
+
+
+def make_tool_result_message(tool_call: ToolCall, content: str) -> dict[str, Any]:
+    """Build the ``role: tool`` message carrying a tool's output."""
+    return {
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "name": tool_call.name,
+        "content": content,
+    }
+
+
+class LLM:
+    """Thin, normalized client over LiteLLM for one configured session."""
+
+    def __init__(self, settings: Settings | None = None) -> None:
+        self.settings = settings or get_settings()
+
+    # -- public API ------------------------------------------------------
+    def complete(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+        stream: bool = False,
+        on_token: Callable[[str], None] | None = None,
+    ) -> LLMResponse:
+        """Call the model once and return a normalized :class:`LLMResponse`.
+
+        If ``stream`` is true (or an ``on_token`` callback is given), the reply
+        is streamed; ``on_token`` receives each text delta as it arrives and the
+        full structured response (text + tool calls + usage) is still returned.
+        """
+        model = model or self.settings.model
+        call_args = self._build_call_args(messages, tools, model, temperature)
+
+        if stream or on_token is not None:
+            return self._complete_streaming(call_args, model, on_token)
+        return self._complete_blocking(call_args, model)
+
+    def stream(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        temperature: float | None = None,
+    ) -> Iterator[str]:
+        """Generator yielding text deltas as they stream in.
+
+        Convenience wrapper around :meth:`complete` for simple display loops
+        that don't need the final structured response.
+        """
+        queue: list[str] = []
+        self.complete(
+            messages,
+            tools=tools,
+            model=model,
+            temperature=temperature,
+            stream=True,
+            on_token=queue.append,
+        )
+        yield from queue
+
+    # -- internals -------------------------------------------------------
+    def _build_call_args(
+        self,
+        messages: Sequence[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+        model: str,
+        temperature: float | None,
+    ) -> dict[str, Any]:
+        args: dict[str, Any] = {
+            "model": model,
+            "messages": list(messages),
+            "temperature": self.settings.temperature if temperature is None else temperature,
+        }
+        args.update(self._credential_kwargs(model))
+        if tools:
+            args["tools"] = tools
+            args["tool_choice"] = "auto"
+        return args
+
+    def _credential_kwargs(self, model: str) -> dict[str, Any]:
+        """Resolve provider-specific credentials for ``model``.
+
+        Raises :class:`LLMError` for an unknown model or a missing key.
+        """
+        try:
+            _, provider, _, _ = litellm.get_llm_provider(model)
+        except Exception as exc:  # unknown/malformed model id
+            raise LLMError(
+                f"Could not determine a provider for model '{model}'. "
+                f"Check the model id (e.g. 'gpt-4o-mini', 'claude-3-5-sonnet-latest', "
+                f"'ollama_chat/llama3.1'). ({exc})"
+            ) from exc
+
+        if provider in _KEYLESS_PROVIDERS:
+            return {"api_base": self.settings.ollama_base_url}
+
+        attr = _PROVIDER_KEY_ATTR.get(provider)
+        if attr is not None:
+            key = getattr(self.settings, attr)
+            if not key:
+                raise LLMError(
+                    f"No API key configured for provider '{provider}' (model '{model}'). "
+                    f"Set {attr.upper()} in your environment / .env, or add it to "
+                    f"~/.relaycli/config.toml."
+                )
+            return {"api_key": key}
+
+        # Provider we don't special-case: let LiteLLM read its own env var.
+        return {}
+
+    def _complete_blocking(self, call_args: dict[str, Any], model: str) -> LLMResponse:
+        try:
+            resp = litellm.completion(**call_args)
+            # Normalize inside the try so a malformed/empty response is surfaced
+            # as a clean LLMError, not a raw traceback (the module's contract).
+            return self._normalize(resp, model)
+        except Exception as exc:
+            raise self._wrap_error(exc, model) from exc
+
+    def _complete_streaming(
+        self,
+        call_args: dict[str, Any],
+        model: str,
+        on_token: Callable[[str], None] | None,
+    ) -> LLMResponse:
+        # include_usage: ask the provider to emit a final usage chunk so token
+        # counts/cost are the provider's real numbers rather than a heuristic
+        # (which under-counts tool-call turns). drop_params=True means providers
+        # that don't support it silently ignore it.
+        call_args = {**call_args, "stream": True, "stream_options": {"include_usage": True}}
+        chunks: list[Any] = []
+        try:
+            for chunk in litellm.completion(**call_args):
+                chunks.append(chunk)
+                content = _chunk_text(chunk)
+                if content and on_token is not None:
+                    on_token(content)
+        except Exception as exc:
+            raise self._wrap_error(exc, model) from exc
+
+        # Reassemble ourselves. We do NOT use litellm.stream_chunk_builder for
+        # tool calls: some providers (Ollama) stream the *full* arguments in
+        # every chunk rather than incremental fragments, and naive
+        # concatenation doubles the JSON ({"x":1}{"x":1}).
+        return self._reassemble(chunks, model, call_args["messages"])
+
+    def _reassemble(
+        self, chunks: list[Any], model: str, messages: list[dict[str, Any]]
+    ) -> LLMResponse:
+        text_parts: list[str] = []
+        tool_acc: dict[Any, dict[str, Any]] = {}
+        order: list[Any] = []
+        usage_obj: Any = None
+        finish_reason: str | None = None
+
+        for chunk in chunks:
+            u = getattr(chunk, "usage", None)
+            if u is not None:
+                usage_obj = u
+            choices = getattr(chunk, "choices", None)
+            if not choices:
+                continue
+            choice = choices[0]
+            if getattr(choice, "finish_reason", None):
+                finish_reason = choice.finish_reason
+            delta = getattr(choice, "delta", None)
+            if delta is None:
+                continue
+            content = getattr(delta, "content", None)
+            if content:
+                text_parts.append(content)
+            for tc in getattr(delta, "tool_calls", None) or []:
+                idx = getattr(tc, "index", None)
+                if idx is None:
+                    idx = len(order)
+                if idx not in tool_acc:
+                    tool_acc[idx] = {"id": None, "name": None, "frags": []}
+                    order.append(idx)
+                slot = tool_acc[idx]
+                if getattr(tc, "id", None):
+                    slot["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    if getattr(fn, "name", None):
+                        slot["name"] = fn.name
+                    arg = getattr(fn, "arguments", None)
+                    if arg:
+                        slot["frags"].append(arg)
+
+        tool_calls: list[ToolCall] = []
+        for i, idx in enumerate(order):
+            slot = tool_acc[idx]
+            if not slot["name"]:
+                continue
+            tool_calls.append(
+                ToolCall(
+                    id=slot["id"] or f"call_{i}",
+                    name=slot["name"],
+                    arguments=_resolve_arguments(slot["frags"]),
+                )
+            )
+
+        text = "".join(text_parts)
+        return LLMResponse(
+            text=text,
+            tool_calls=tool_calls,
+            usage=self._usage_from_stream(usage_obj, model, messages, text, tool_calls),
+            finish_reason=finish_reason,
+            model=model,
+        )
+
+    def _usage_from_stream(
+        self,
+        usage_obj: Any,
+        model: str,
+        messages: list[dict[str, Any]],
+        text: str,
+        tool_calls: list[ToolCall] | None = None,
+    ) -> Usage:
+        if usage_obj is not None:
+            pt = int(getattr(usage_obj, "prompt_tokens", 0) or 0)
+            ct = int(getattr(usage_obj, "completion_tokens", 0) or 0)
+            tt = int(getattr(usage_obj, "total_tokens", 0) or (pt + ct))
+        else:
+            # Fallback estimate: count the tool-call payload too, not just the
+            # text — tool-call-only turns would otherwise be scored as 0.
+            completion = text + "".join(
+                f"{tc.name}{tc.arguments}" for tc in (tool_calls or [])
+            )
+            pt = ct = tt = 0
+            try:
+                pt = int(litellm.token_counter(model=model, messages=messages) or 0)
+                ct = int(litellm.token_counter(model=model, text=completion) or 0) if completion else 0
+                tt = pt + ct
+            except Exception:
+                pass
+        cost = 0.0
+        if tt:
+            try:
+                pc, cc = litellm.cost_per_token(
+                    model=model, prompt_tokens=pt, completion_tokens=ct
+                )
+                cost = float((pc or 0.0) + (cc or 0.0))
+            except Exception:
+                cost = 0.0
+        return Usage(prompt_tokens=pt, completion_tokens=ct, total_tokens=tt, cost_usd=cost)
+
+    def _normalize(self, resp: Any, model: str) -> LLMResponse:
+        choices = getattr(resp, "choices", None)
+        if not choices:
+            raise LLMError(f"Model '{model}' returned no choices (empty/blocked response).")
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        text = getattr(message, "content", None) or "" if message is not None else ""
+
+        tool_calls: list[ToolCall] = []
+        for idx, tc in enumerate(getattr(message, "tool_calls", None) or []):
+            fn = getattr(tc, "function", None)
+            name = getattr(fn, "name", None) or ""
+            arguments = getattr(fn, "arguments", None) or "{}"
+            tool_calls.append(
+                ToolCall(id=getattr(tc, "id", None) or f"call_{idx}", name=name, arguments=arguments)
+            )
+
+        return LLMResponse(
+            text=text,
+            tool_calls=tool_calls,
+            usage=self._usage(resp, model),
+            finish_reason=getattr(choice, "finish_reason", None),
+            model=model,
+        )
+
+    def _usage(self, resp: Any, model: str) -> Usage:
+        u = getattr(resp, "usage", None)
+        pt = int(getattr(u, "prompt_tokens", 0) or 0)
+        ct = int(getattr(u, "completion_tokens", 0) or 0)
+        tt = int(getattr(u, "total_tokens", 0) or (pt + ct))
+        cost = 0.0
+        try:
+            cost = float(litellm.completion_cost(completion_response=resp) or 0.0)
+        except Exception:
+            cost = 0.0  # local/unknown-priced models have no cost data
+        return Usage(prompt_tokens=pt, completion_tokens=ct, total_tokens=tt, cost_usd=cost)
+
+    def _wrap_error(self, exc: Exception, model: str) -> LLMError:
+        if isinstance(exc, LLMError):
+            return exc
+        name = type(exc).__name__
+        detail = str(exc).strip().splitlines()[0] if str(exc).strip() else name
+        return LLMError(f"Model call failed for '{model}' ({name}): {detail}")
+
+
+def _chunk_text(chunk: Any) -> str:
+    """Extract the text delta from a streaming chunk, tolerating odd shapes."""
+    try:
+        choices = chunk.choices
+    except Exception:
+        return ""
+    if not choices:
+        return ""
+    delta = getattr(choices[0], "delta", None)
+    if delta is None:
+        return ""
+    return getattr(delta, "content", None) or ""
+
+
+def count_tokens(messages: Sequence[dict[str, Any]], model: str) -> int:
+    """Estimate the token count of ``messages`` for ``model``.
+
+    Kept here so token counting (a LiteLLM facility) stays behind this gateway.
+    Falls back to a ~4-chars/token heuristic if the provider tokenizer is
+    unavailable.
+    """
+    try:
+        return int(litellm.token_counter(model=model, messages=list(messages)) or 0)
+    except Exception:
+        chars = 0
+        for m in messages:
+            content = m.get("content")
+            if isinstance(content, str):
+                chars += len(content)
+        return max(1, chars // 4)
+
+
+def _is_json(text: str) -> bool:
+    try:
+        json.loads(text)
+        return True
+    except Exception:
+        return False
+
+
+def _resolve_arguments(frags: list[str]) -> str:
+    """Turn streamed argument fragments into one JSON string.
+
+    Handles two provider behaviours:
+    * incremental (OpenAI): fragments concatenate into one JSON object.
+    * non-incremental (Ollama): each fragment is the *complete* JSON, so
+      concatenation would duplicate it — fall back to a single valid fragment.
+    """
+    if not frags:
+        return "{}"
+    concat = "".join(frags)
+    if _is_json(concat):
+        return concat
+    valid = [f for f in frags if _is_json(f)]
+    if valid:
+        return max(valid, key=len)
+    return frags[-1]
