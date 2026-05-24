@@ -13,6 +13,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from relaycli import __version__
@@ -92,7 +93,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     )
 
     console.print(
-        f"[dim]model[/dim] [green]{settings.model}[/green]  "
+        f"[dim]model[/dim] [green]{escape(settings.model)}[/green]  "
         f"[dim]mode[/dim] [yellow]{settings.permission_mode}[/yellow]  "
         f"[dim]cwd[/dim] {project.root}"
     )
@@ -104,11 +105,14 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
 
     if settings.relay_enabled:
         from relaycli.relay import Relay
-        from relaycli.render import RelayRichObserver, render_relay_summary
-        from relaycli.router import routing_table
+        from relaycli.render import (
+            RelayRichObserver,
+            render_relay_summary,
+            render_routing_banner,
+        )
 
-        routes = " · ".join(f"{role}:{m}" for role, m in routing_table(settings).items())
-        console.print(f"[dim]relay[/dim] [cyan]on[/cyan]  [dim]{routes}[/dim]\n")
+        render_routing_banner(console, settings)
+        console.print()
         relay_pipeline = Relay(
             settings, console=console, project=project, permissions=permissions
         )
@@ -145,7 +149,7 @@ def config() -> None:
     table = Table(title="RelayCLI configuration", show_header=True, header_style="bold")
     table.add_column("setting", style="cyan", no_wrap=True)
     table.add_column("value")
-    table.add_row("model", str(settings.model))
+    table.add_row("model", escape(str(settings.model)))
     table.add_row("permission_mode", str(settings.permission_mode))
     table.add_row("max_iterations", str(settings.max_iterations))
     table.add_row("token_budget", str(settings.token_budget))
@@ -164,7 +168,7 @@ def config() -> None:
     for role, resolved in routing_table(settings).items():
         override = getattr(settings, f"{role.value}_model")
         note = "" if override else "  [dim](= model)[/dim]"
-        rtable.add_row(str(role), f"{resolved}{note}")
+        rtable.add_row(str(role), f"{escape(resolved)}{note}")
     console.print(rtable)
 
     ptable = Table(title="Providers", show_header=True, header_style="bold")

@@ -106,17 +106,26 @@ How to work:
     + _SECURITY_BLOCK
 )
 
-_VERDICT_RE = re.compile(r"VERDICT:\s*(approve|revise)", re.IGNORECASE)
+_VERDICT_LINE_RE = re.compile(r"^\s*VERDICT:\s*(approve|revise)\b", re.IGNORECASE | re.MULTILINE)
+_VERDICT_ANY_RE = re.compile(r"VERDICT:\s*(approve|revise)", re.IGNORECASE)
 
 
 def parse_verdict(text: str) -> str | None:
-    """Extract 'approve'/'revise' from the LAST ``VERDICT:`` line, or None.
+    """Extract the reviewer's 'approve'/'revise' decision, or None.
 
-    The last match wins because models sometimes restate the rubric before
-    giving their actual verdict.
+    Only lines that *start* with ``VERDICT:`` count as the decision — inline
+    mentions (e.g. revise feedback quoting the rubric: "... before I can give
+    VERDICT: approve") must not flip it. If several anchored verdicts appear,
+    or only inline mentions exist, 'revise' wins: a false 'revise' costs one
+    bounded retry cycle, while a false 'approve' silently ends the quality
+    loop.
     """
-    matches = _VERDICT_RE.findall(text or "")
-    return matches[-1].lower() if matches else None
+    matches = [m.lower() for m in _VERDICT_LINE_RE.findall(text or "")]
+    if not matches:
+        matches = [m.lower() for m in _VERDICT_ANY_RE.findall(text or "")]
+    if not matches:
+        return None
+    return "revise" if "revise" in matches else "approve"
 
 
 class RelayObserver:
@@ -262,11 +271,14 @@ class Relay:
                 reviewer, Role.reviewer, review_request, cycle, observer, result
             )
             if review_run.result.stopped_reason != "done":
-                # The work already exists; a failed review is advisory.
+                # The work already exists; a failed review is advisory. Any
+                # verdict from an earlier cycle judged superseded work — clear
+                # it so the summary matches the "unreviewed" note.
                 result.notes.append(
                     f"Reviewer failed ({review_run.result.stopped_reason}); "
                     f"the Coder's work stands unreviewed."
                 )
+                result.verdict = None
                 result.stopped_reason = "done"
                 return
 

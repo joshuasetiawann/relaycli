@@ -78,7 +78,7 @@ This module is deliberately trivial: it is the future home of smarter routing
 | `planner_model` | `None` | falls back to `model` |
 | `coder_model` | `None` | falls back to `model` |
 | `reviewer_model` | `None` | falls back to `model` |
-| `max_review_cycles` | `2` | `ge=0`; 0 = review is advisory only (no retry) |
+| `max_review_cycles` | `2` | `ge=0`; 0 = no retries (an unresolved `revise` ends as `review_exhausted`) |
 
 Env names follow the existing `RELAYCLI_` prefix (e.g.
 `RELAYCLI_PLANNER_MODEL`). None of these joins `_DOTENV_BLOCKED_FIELDS`: they
@@ -131,11 +131,15 @@ permissions injectable; one shared `LLM` instance — it is stateless per call).
    cap → abort with the Coder's partial report as `final_text`.
 3. **Review.** Reviewer agent (same session across cycles) inspects the work —
    it reads files itself and may run tests — then must end with a `VERDICT:`
-   line. Parsing: last case-insensitive `VERDICT: (approve|revise)` match in
-   its final text wins; **no match → treat as approve** (bias to terminating;
+   line. Parsing: only lines *starting* with `VERDICT:` (case-insensitive)
+   count as the decision — inline mentions (feedback quoting the rubric) are
+   ignored; if anchored verdicts conflict or only inline mentions exist,
+   `revise` wins (fails toward one bounded retry, never toward a false
+   approval); **no match at all → treat as approve** (bias to terminating;
    the note is surfaced in the summary). Reviewer LLM error → return the
    Coder's result as `done` with the failed review recorded in `role_runs`
-   (review is advisory; the work already exists).
+   and any stale verdict from a superseded cycle cleared (review is advisory;
+   the work already exists).
 4. **Reflect.** `revise` with cycles remaining → back to step 2 with the
    feedback. `revise` with none remaining → `review_exhausted`, with the
    feedback shown so the user can act on it.

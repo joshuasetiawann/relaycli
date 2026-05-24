@@ -175,9 +175,25 @@ class TestParseVerdict:
     def test_revise_case_insensitive(self):
         assert parse_verdict("verdict: REVISE\n- fix x") == "revise"
 
-    def test_last_match_wins(self):
+    def test_inline_mentions_ignored(self):
+        # Only line-anchored VERDICT: lines count as the decision.
         text = "If broken I'd say VERDICT: revise. But all is well.\nVERDICT: approve"
         assert parse_verdict(text) == "approve"
+
+    def test_verdict_first_feedback_quoting_approve_stays_revise(self):
+        # The template mandates verdict-first-then-feedback; feedback that
+        # mentions the approve token must not flip the decision.
+        text = "VERDICT: revise\n1. The test must pass before I can give VERDICT: approve."
+        assert parse_verdict(text) == "revise"
+
+    def test_ambiguous_anchored_verdicts_fail_safe(self):
+        # Two anchored verdicts: revise wins (a false revise costs one bounded
+        # cycle; a false approve silently ends the quality loop).
+        assert parse_verdict("VERDICT: approve\nVERDICT: revise") == "revise"
+
+    def test_inline_only_falls_back_safe(self):
+        text = "End with 'VERDICT: approve' if correct, or 'VERDICT: revise' if not."
+        assert parse_verdict(text) == "revise"
 
     def test_no_verdict(self):
         assert parse_verdict("great work, ship it") is None
@@ -288,7 +304,7 @@ class TestRelayReflection:
         assert result.final_text == "v2"
         assert any("revision limit" in n for n in result.notes)
 
-    def test_zero_cycles_review_is_advisory(self, sample_project):
+    def test_zero_cycles_means_no_retry(self, sample_project):
         llm = ScriptedLLM([
             _resp(text="plan"), _resp(text="v1"),
             _resp(text="VERDICT: revise\n1. x"),
@@ -343,6 +359,37 @@ class TestRelayFailureModes:
         assert any("unreviewed" in n for n in result.notes)
         assert result.role_runs[-1].result.stopped_reason == "error"
 
+    def test_reviewer_error_after_revise_clears_stale_verdict(self, sample_project):
+        # The cycle-0 'revise' applied to superseded work; when the re-review
+        # fails, no verdict was ever issued on the work that stands.
+        llm = ScriptedLLM([
+            _resp(text="plan"),
+            _resp(text="v1"), _resp(text="VERDICT: revise\n1. x"),
+            _resp(text="v2"), LLMError("reviewer exploded"),
+        ])
+        result = _relay(sample_project, llm).run("req")
+        assert result.stopped_reason == "done"
+        assert result.final_text == "v2"
+        assert result.verdict is None
+        assert any("unreviewed" in n for n in result.notes)
+
+    def test_coder_iteration_cap_propagates(self, sample_project):
+        import json as _json
+
+        from relaycli.llm import ToolCall
+
+        run_tool = ToolCall(id="c1", name="run_command",
+                            arguments=_json.dumps({"command": "true"}))
+        llm = ScriptedLLM([
+            _resp(text="plan"),                      # planner (done in 1 iteration)
+            _resp(tool_calls=[run_tool]),            # coder keeps calling tools → cap
+        ])
+        relay = _relay(sample_project, llm, max_iterations=1)
+        result = relay.run("req")
+        assert result.stopped_reason == "max_iterations"
+        assert "Stopped after the maximum" in result.final_text
+        assert len(llm.calls) == 2  # reviewer never ran
+
 
 class TestRelayRendering:
     def test_role_banners_and_summary(self, sample_project):
@@ -383,6 +430,40 @@ class TestRelayRendering:
         out = console.file.getvalue()
         assert "review_exhausted" in out
         assert "revision limit" in out     # the note is surfaced
+
+    def test_streamed_report_not_reprinted_on_exhaustion(self, sample_project):
+        # The coder's report streams live; the summary must not print it again.
+        llm = ScriptedLLM([
+            _resp(text="plan"), _resp(text="UNIQUE-CODER-REPORT"),
+            _resp(text="VERDICT: revise\n1. x"),
+        ])
+        console = _console()
+        relay = Relay(
+            _settings(model="base/model", permission_mode=PermissionMode.full_auto,
+                      max_review_cycles=0),
+            console=console, project=ProjectContext(sample_project),
+            permissions=PermissionManager(PermissionMode.full_auto, console=console),
+            llm=llm,
+        )
+        result = relay.run("req", observer=RelayRichObserver(console))
+        render_relay_summary(console, result)
+        out = console.file.getvalue()
+        assert out.count("UNIQUE-CODER-REPORT") == 1
+
+    def test_error_text_still_printed_once(self, sample_project):
+        # Constructed (never-streamed) error text must still appear.
+        llm = ScriptedLLM([LLMError("planner exploded")])
+        console = _console()
+        relay = Relay(
+            _settings(model="base/model", permission_mode=PermissionMode.full_auto),
+            console=console, project=ProjectContext(sample_project),
+            permissions=PermissionManager(PermissionMode.full_auto, console=console),
+            llm=llm,
+        )
+        result = relay.run("req", observer=RelayRichObserver(console))
+        render_relay_summary(console, result)
+        out = console.file.getvalue()
+        assert out.count("planner exploded") == 1
 
 
 class TestCliRelayFlag:
@@ -434,6 +515,36 @@ class TestCliRelayFlag:
         assert "relay" in result.output
         assert "strong/c" in result.output
 
+    def test_no_relay_flag_overrides_enabled_config(self, sample_project, monkeypatch):
+        monkeypatch.chdir(sample_project)
+
+        class BoomRelay:
+            def __init__(self, *a, **kw):
+                raise AssertionError("Relay must not run with --no-relay")
+
+        class FakeAgent:
+            def __init__(self, *a, **kw):
+                pass
+
+            def run(self, request, *, reporter=None):
+                from relaycli.agent import AgentResult
+                return AgentResult(final_text="ok", iterations=1, tool_calls=0,
+                                   usage=Usage(), stopped_reason="done")
+
+        monkeypatch.setattr(cli_module, "get_settings",
+                            lambda: _settings(model="fake/m", relay_enabled=True))
+        monkeypatch.setattr("relaycli.relay.Relay", BoomRelay)
+        monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
+        result = CliRunner().invoke(cli_module.app, ["-p", "do it", "--no-relay", "-y"])
+        assert result.exit_code == 0, result.output
+
+    def test_config_escapes_model_markup(self, monkeypatch):
+        monkeypatch.setattr(cli_module, "get_settings",
+                            lambda: _settings(model="[i]m[/i]"))
+        result = CliRunner().invoke(cli_module.app, ["config"])
+        assert result.exit_code == 0
+        assert "[i]m" in result.output  # shown literally, not eaten as markup
+
 
 class TestReplRelayCommand:
     def _repl(self) -> Repl:
@@ -458,7 +569,16 @@ class TestReplRelayCommand:
         repl = self._repl()
         repl._handle_slash("/relay sideways")
         assert repl.settings.relay_enabled is False
-        assert "Usage" in repl.console.file.getvalue()
+        out = repl.console.file.getvalue()
+        assert "Usage" in out
+        assert "[on|off]" in out  # not swallowed as Rich markup
+
+    def test_routing_banner_escapes_model_markup(self):
+        settings = _settings(model="[red]evil[/red]")
+        repl = Repl(settings, console=_console())
+        repl._handle_slash("/relay on")
+        out = repl.console.file.getvalue()
+        assert "[red]evil[/red]" in out  # literal, not interpreted markup
 
     def test_run_dispatches_to_relay_when_enabled(self, monkeypatch):
         repl = self._repl()

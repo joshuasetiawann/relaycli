@@ -16,6 +16,7 @@ from rich.syntax import Syntax
 
 if TYPE_CHECKING:  # avoid an import cycle (agent -> tools -> render -> agent)
     from relaycli.agent import AgentResult
+    from relaycli.config import Settings
     from relaycli.llm import ToolCall
     from relaycli.relay import RelayResult
     from relaycli.router import Role
@@ -163,12 +164,22 @@ class RelayRichObserver:
         return reporter
 
 
+def render_routing_banner(console: Console, settings: "Settings") -> None:
+    """Print the role → model routing line (model ids are untrusted: escape)."""
+    from relaycli.router import routing_table
+
+    routes = " · ".join(f"{role}:{m}" for role, m in routing_table(settings).items())
+    console.print(f"[dim]relay[/dim] [cyan]on[/cyan]  [dim]{escape(routes)}[/dim]")
+
+
 def render_relay_summary(console: Console, result: "RelayResult") -> None:
     """Print the end-of-relay summary: notes, per-role lines, and totals."""
     style = _STOP_STYLE.get(result.stopped_reason, "white")
 
-    # On non-done outcomes the final text was constructed, never streamed.
-    if result.stopped_reason != "done" and result.final_text:
+    # error/max_iterations texts are constructed, never streamed. Anything
+    # else (done, review_exhausted) was already streamed live by its role —
+    # re-printing would duplicate the coder's report.
+    if result.stopped_reason in ("error", "max_iterations") and result.final_text:
         console.print()
         console.print(f"[{style}]{escape(result.final_text)}[/{style}]")
 

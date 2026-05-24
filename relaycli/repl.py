@@ -16,6 +16,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
+from rich.markup import escape
 from rich.syntax import Syntax
 
 from relaycli.agent import Agent
@@ -27,7 +28,7 @@ from relaycli.render import RichReporter, render_task_summary
 _HELP = """[bold]Slash commands[/bold]
   [cyan]/model[/cyan] <name>                switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)
   [cyan]/mode[/cyan]  <suggest|auto-edit|full-auto>   switch permission mode
-  [cyan]/relay[/cyan] [on|off]              toggle the Planner → Coder → Reviewer pipeline
+  [cyan]/relay[/cyan] \\[on|off]             toggle the Planner → Coder → Reviewer pipeline
   [cyan]/diff[/cyan]                        show changes in the working tree (git diff)
   [cyan]/clear[/cyan]                       reset the conversation
   [cyan]/help[/cyan]                        show this help
@@ -115,7 +116,7 @@ class Repl:
         self.console.print(
             f"[bold cyan]RelayCLI[/bold cyan]  "
             f"[dim]cwd[/dim] {self.project.root}  "
-            f"[dim]model[/dim] [green]{self.settings.model}[/green]  "
+            f"[dim]model[/dim] [green]{escape(self.settings.model)}[/green]  "
             f"[dim]mode[/dim] [yellow]{self.settings.permission_mode}[/yellow]"
         )
         if self.settings.relay_enabled:
@@ -131,12 +132,9 @@ class Repl:
         )
 
     def _print_routing(self) -> None:
-        from relaycli.router import routing_table
+        from relaycli.render import render_routing_banner
 
-        routes = " · ".join(
-            f"{role}:{m}" for role, m in routing_table(self.settings).items()
-        )
-        self.console.print(f"[dim]relay[/dim] [cyan]on[/cyan]  [dim]{routes}[/dim]")
+        render_routing_banner(self.console, self.settings)
 
     # -- running a task --------------------------------------------------
     def _run_agent(self, request: str) -> None:
@@ -197,11 +195,11 @@ class Repl:
 
     def _cmd_model(self, name: str) -> None:
         if not name:
-            self.console.print(f"model: [green]{self.settings.model}[/green]")
+            self.console.print(f"model: [green]{escape(self.settings.model)}[/green]")
             return
         self.settings.model = name
         self.agent.refresh_system_prompt()  # keeps token counting + prompt in sync
-        self.console.print(f"model → [green]{name}[/green]")
+        self.console.print(f"model → [green]{escape(name)}[/green]")
 
     def _cmd_mode(self, value: str) -> None:
         if not value:
@@ -227,7 +225,7 @@ class Repl:
                 self._print_routing()
             return
         if value not in ("on", "off"):
-            self.console.print("[red]Usage:[/red] /relay [on|off]")
+            self.console.print("[red]Usage:[/red] /relay \\[on|off]")
             return
         self.settings.relay_enabled = value == "on"
         self.console.print(f"relay → [cyan]{value}[/cyan]")

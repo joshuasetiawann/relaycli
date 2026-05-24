@@ -151,7 +151,10 @@ class Settings(BaseSettings):
     max_review_cycles: int = Field(
         default=2,
         ge=0,
-        description="Revision cycles allowed after a 'revise' verdict (0 = review is advisory).",
+        description=(
+            "Revision cycles allowed after a 'revise' verdict "
+            "(0 = no retries; an unresolved 'revise' ends the run as review_exhausted)."
+        ),
     )
 
     # --- Provider credentials (standard env var names) ------------------
