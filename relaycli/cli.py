@@ -84,19 +84,26 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     """Execute one agent loop and exit (the -p path)."""
     from relaycli.agent import Agent
     from relaycli.context import ProjectContext
+    from relaycli.llm import key_status, preflight_settings
     from relaycli.permissions import PermissionManager
-    from relaycli.render import RichReporter, render_task_summary
+    from relaycli.render import (
+        RichReporter,
+        render_setup_panel,
+        render_status_line,
+        render_task_summary,
+    )
+
+    problem = preflight_settings(settings)
+    if problem:
+        render_setup_panel(console, problem, settings.detected_providers())
+        raise typer.Exit(code=2)
 
     project = ProjectContext(Path(os.getcwd()))
     permissions = PermissionManager(
         settings.permission_mode, console=console, assume_yes=assume_yes
     )
 
-    console.print(
-        f"[dim]model[/dim] [green]{escape(settings.model)}[/green]  "
-        f"[dim]mode[/dim] [yellow]{settings.permission_mode}[/yellow]  "
-        f"[dim]cwd[/dim] {project.root}"
-    )
+    render_status_line(console, settings, project.root, key_status(settings))
     if settings.permission_mode is PermissionMode.full_auto:
         console.print(
             "[bold yellow]⚠ full-auto:[/bold yellow] edits and commands run without asking."

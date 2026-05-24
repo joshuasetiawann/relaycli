@@ -50,6 +50,54 @@ class LLMError(RuntimeError):
     """A configuration or provider error, carrying a user-facing message."""
 
 
+def _missing_key_message(provider: str, model: str, attr: str) -> str:
+    return (
+        f"No API key configured for provider '{provider}' (model '{model}'). "
+        f"Set {attr.upper()} in your environment / .env, or add it to "
+        f"~/.relaycli/config.toml."
+    )
+
+
+def preflight_settings(settings: Settings) -> str | None:
+    """Preflight every model a session with ``settings`` would use.
+
+    Checks the base model plus, when the relay pipeline is enabled, each
+    routed role model. Returns the first problem found, or None.
+    """
+    llm = LLM(settings)
+    models = [settings.model]
+    if settings.relay_enabled:
+        from relaycli.router import routing_table  # local: keep layering flat
+
+        models.extend(routing_table(settings).values())
+    for model in dict.fromkeys(models):
+        problem = llm.preflight(model)
+        if problem:
+            return problem
+    return None
+
+
+def key_status(settings: Settings, model: str | None = None) -> str | None:
+    """Classify the credential state for ``model``.
+
+    Returns ``"detected"`` / ``"missing"`` / ``"not needed"``, or None when
+    this module doesn't manage the provider's key (unknown/custom providers
+    may be configured through LiteLLM's own env) — callers should then make
+    no claim about credentials.
+    """
+    model = model or settings.model
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model)
+    except Exception:
+        return None
+    if provider in _KEYLESS_PROVIDERS:
+        return "not needed"
+    attr = _PROVIDER_KEY_ATTR.get(provider)
+    if attr is None:
+        return None
+    return "detected" if getattr(settings, attr) else "missing"
+
+
 @dataclass
 class ToolCall:
     """A single tool/function call requested by the model."""
@@ -217,15 +265,32 @@ class LLM:
         if attr is not None:
             key = getattr(self.settings, attr)
             if not key:
-                raise LLMError(
-                    f"No API key configured for provider '{provider}' (model '{model}'). "
-                    f"Set {attr.upper()} in your environment / .env, or add it to "
-                    f"~/.relaycli/config.toml."
-                )
+                raise LLMError(_missing_key_message(provider, model, attr))
             return {"api_key": key}
 
         # Provider we don't special-case: let LiteLLM read its own env var.
         return {}
+
+    def preflight(self, model: str | None = None) -> str | None:
+        """Return the credential problem for ``model``, or None if runnable.
+
+        A no-network check so UIs can warn at startup instead of failing on
+        the first request. Only providers this module manages keys for are
+        judged: unknown/custom providers pass (LiteLLM may resolve their own
+        env), and so does an unrecognizable model id (the real call surfaces
+        that error with full context).
+        """
+        model = model or self.settings.model
+        try:
+            _, provider, _, _ = litellm.get_llm_provider(model)
+        except Exception:
+            return None
+        if provider in _KEYLESS_PROVIDERS:
+            return None
+        attr = _PROVIDER_KEY_ATTR.get(provider)
+        if attr is not None and not getattr(self.settings, attr):
+            return _missing_key_message(provider, model, attr)
+        return None
 
     def _complete_blocking(self, call_args: dict[str, Any], model: str) -> LLMResponse:
         try:

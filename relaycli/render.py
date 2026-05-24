@@ -8,13 +8,18 @@ Stage 5; this module is the home for all of it.
 from __future__ import annotations
 
 import difflib
+import re
 from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.markup import escape
+from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 
 if TYPE_CHECKING:  # avoid an import cycle (agent -> tools -> render -> agent)
+    from pathlib import Path
+
     from relaycli.agent import AgentResult
     from relaycli.config import Settings
     from relaycli.llm import ToolCall
@@ -162,6 +167,135 @@ class RelayRichObserver:
         reporter = RichReporter(self.console)
         self.reporters.append((str(role), reporter))
         return reporter
+
+
+def render_setup_panel(console: Console, problem: str, detected: dict[str, bool]) -> None:
+    """Actionable guidance when the configured model has no usable credential."""
+    lines = [f"[yellow]⚠ {escape(problem)}[/yellow]", ""]
+    lines.append("Fix any ONE of these, then retry (or switch with /model):")
+    # Anchor on our own "Set <VAR> ..." sentence and take the LAST match: the
+    # problem string also embeds the model id, which is config-controlled and
+    # could be crafted to smuggle a fake *_API_KEY name in front of it.
+    hinted = re.findall(r"\bSet ([A-Z][A-Z0-9_]*_API_KEY)\b", problem)
+    if hinted:
+        lines.append(f"  • export {hinted[-1]}=...     (for the current model)")
+    lines.append("  • relaycli -m ollama_chat/llama3.1   (local via Ollama, no key — needs `ollama serve`)")
+    lines.append("  • add the key to ~/.relaycli/config.toml or a project .env (names in .env.example)")
+    have = [name for name, ok in detected.items() if ok and name != "ollama"]
+    if have:
+        lines.append("")
+        lines.append(f"Keys already detected: {escape(', '.join(have))} — pick one of their models with /model.")
+    console.print(Panel("\n".join(lines), title="setup needed", title_align="left",
+                        border_style="yellow", expand=False))
+
+
+def short_model_name(model: str) -> str:
+    """Compact display name: the last path segment of a LiteLLM model id."""
+    return model.rsplit("/", 1)[-1] or model
+
+
+# key_status (relaycli.llm.key_status) -> how the banner shows it.
+_KEY_NOTE = {
+    "detected": "[green]key detected[/green]",
+    "missing": "[bold yellow]key missing ⚠[/bold yellow]",
+    "not needed": "[blue]no key needed[/blue]",
+}
+
+# PermissionMode value -> what it means for the user, in one clause.
+_MODE_MEANING = {
+    "suggest": "asks before every edit & command",
+    "auto-edit": "applies edits, asks before commands",
+    "full-auto": "runs edits & commands without asking",
+}
+
+
+def render_welcome(
+    console: Console, settings: "Settings", root: "Path", key_status: str | None
+) -> None:
+    """The REPL welcome panel: version, cwd, model/key, mode, relay, hints.
+
+    ``key_status`` comes from :func:`relaycli.llm.key_status`; None means
+    "unknown provider" and the banner makes no claim about credentials.
+    """
+    from relaycli import __version__
+
+    model_cell = f"[green]{escape(settings.model)}[/green]"
+    note = _KEY_NOTE.get(key_status or "")
+    if note:
+        model_cell += f"  {note}"
+
+    mode = str(settings.permission_mode)
+    mode_cell = f"[yellow]{mode}[/yellow]"
+    meaning = _MODE_MEANING.get(mode)
+    if meaning:
+        mode_cell += f" [dim]— {meaning}[/dim]"
+
+    if settings.relay_enabled:
+        from relaycli.router import routing_table
+
+        routes = " · ".join(
+            f"{role}:{escape(short_model_name(m))}"
+            for role, m in routing_table(settings).items()
+        )
+        relay_cell = f"[cyan]on[/cyan]  [dim]{routes}[/dim]"
+    else:
+        relay_cell = "[dim]off — /relay on for planner → coder → reviewer[/dim]"
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="dim", no_wrap=True)
+    # fold: long values (deep cwd paths) wrap instead of being ellipsized —
+    # truncating the very info the banner exists to show helps no one.
+    grid.add_column(overflow="fold")
+    grid.add_row("cwd", escape(str(root)))
+    grid.add_row("model", model_cell)
+    grid.add_row("mode", mode_cell)
+    grid.add_row("relay", relay_cell)
+    grid.add_row("", "")
+    grid.add_row("", '[dim]Type a request in plain words — e.g. "explain this repo".[/dim]')
+    grid.add_row("", "[dim]/help commands · !cmd shell · Ctrl-D quit[/dim]")
+    console.print(
+        Panel(
+            grid,
+            title=f"[bold cyan]RelayCLI[/bold cyan] [dim]v{__version__}[/dim]",
+            title_align="left",
+            border_style="cyan",
+            expand=False,
+        )
+    )
+
+
+def render_status_line(
+    console: Console, settings: "Settings", root: "Path", key_status: str | None = None
+) -> None:
+    """One-line session status (the one-shot header; same fields as the banner)."""
+    parts = [f"[dim]model[/dim] [green]{escape(settings.model)}[/green]"]
+    note = _KEY_NOTE.get(key_status or "")
+    if note:
+        parts.append(note)
+    parts.append(f"[dim]mode[/dim] [yellow]{settings.permission_mode}[/yellow]")
+    parts.append(f"[dim]cwd[/dim] {escape(str(root))}")
+    console.print("  ".join(parts))
+
+
+def render_help(console: Console) -> None:
+    """The REPL /help screen: every accepted input form, aligned."""
+    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+    table.add_column("input", style="cyan", no_wrap=True)
+    table.add_column("action")
+    table.add_row("<plain text>", "send a request to the agent")
+    table.add_row("/model \\[name]", "show or switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)")
+    table.add_row("/mode \\[m]", "permission mode: suggest | auto-edit | full-auto")
+    table.add_row("/relay \\[on|off]", "toggle the Planner → Coder → Reviewer pipeline")
+    table.add_row("/diff", "show uncommitted changes (git diff)")
+    table.add_row("/clear", "reset the conversation")
+    table.add_row("/help", "show this help  (aliases: help, ?)")
+    table.add_row("/exit", "quit  (aliases: exit, quit, Ctrl-D)")
+    table.add_row("!<cmd>", "run a shell command in the project root (e.g. !git status)")
+    console.print(table)
+    console.print(
+        "[dim]Enter submits · Alt+Enter inserts a newline · "
+        "Ctrl-C clears the line · Ctrl-D quits[/dim]"
+    )
 
 
 def render_routing_banner(console: Console, settings: "Settings") -> None:

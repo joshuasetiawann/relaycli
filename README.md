@@ -89,18 +89,24 @@ permission_mode = "suggest"
 
 `relaycli` (no arguments) opens the REPL: type a request, watch the streamed
 answer and tool activity, approve diffs/commands per your permission mode.
+The welcome panel shows the model and whether its API key was found; if it
+wasn't, a setup panel lists the exact fixes (it doesn't block the session).
 
-| command | effect |
+| input | effect |
 |---|---|
-| `/model <name>` | switch model (e.g. `gpt-4o-mini`, `ollama_chat/llama3.1`) |
-| `/mode <suggest\|auto-edit\|full-auto>` | switch permission mode |
+| plain text | send a request to the agent |
+| `/model [name]` | show or switch model (e.g. `gpt-4o-mini`, `ollama_chat/llama3.1`) |
+| `/mode [suggest\|auto-edit\|full-auto]` | show or switch permission mode |
 | `/relay [on\|off]` | toggle the Planner → Coder → Reviewer pipeline |
 | `/diff` | show working-tree changes (`git diff`) |
 | `/clear` | reset the conversation |
-| `/help` | show help |
-| `/exit` | quit (also Ctrl-D) |
+| `/help` | show help (also `help`, `?`) |
+| `/exit` | quit (also `exit`, `quit`, Ctrl-D) |
+| `!<cmd>` | run a shell command in the project root (e.g. `!git status`) |
 
-Enter submits; Alt+Enter inserts a newline.
+Enter submits; Alt+Enter inserts a newline; Ctrl-C clears the line. Typing a
+`-flag` in the REPL prints a hint instead of sending it to the model — flags
+belong on the `relaycli` command line.
 
 ### One-shot and flags
 

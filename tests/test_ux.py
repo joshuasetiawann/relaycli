@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import io
+import os
+import re
 
+import pytest
 from rich.console import Console
 
 from relaycli.config import PermissionMode, Settings
@@ -11,6 +14,21 @@ from relaycli.llm import ToolCall, Usage
 from relaycli.render import RichReporter, make_unified_diff, render_task_summary
 from relaycli.repl import Repl
 from relaycli.tools.base import ToolResult
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_config(monkeypatch, tmp_path):
+    """Keep this module's tests hermetic on configured machines.
+
+    Ambient RELAYCLI_* env vars and a real ~/.relaycli/config.toml would
+    otherwise leak into Settings (relay_enabled, permission_mode, role
+    models, ...) and break exact-value assertions. Local to this module on
+    purpose: the opt-in live-E2E flow depends on RELAYCLI_* env vars.
+    """
+    for var in list(os.environ):
+        if var.startswith("RELAYCLI_"):
+            monkeypatch.delenv(var, raising=False)
+    monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no-config.toml"))
 
 
 def _repl(mode=PermissionMode.suggest, model="gpt-4o-mini"):
@@ -159,3 +177,316 @@ def test_render_task_summary_does_not_repeat_streamed_text():
     console = Console(file=io.StringIO(), force_terminal=False, width=120)
     render_task_summary(console, _Result("done", "All finished, everything works."))
     assert "All finished" not in _out(console)
+
+
+# --- credential preflight (no network) ----------------------------------
+# Provider-key fields carry a validation_alias, so init kwargs must use the
+# alias name (OPENAI_API_KEY=...) — the snake_case field name is silently
+# ignored (extra="ignore"). Explicit None wins over the process env, which
+# is what makes these tests hermetic on machines with real keys set.
+_PROVIDER_KEY_ALIASES = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "OPENROUTER_API_KEY",
+)
+
+
+def _hermetic(**kw) -> Settings:
+    for alias in _PROVIDER_KEY_ALIASES:
+        kw.setdefault(alias, None)
+    # Pin behavior fields too: init kwargs outrank every other source, so
+    # these cannot be overridden by anything ambient the autouse fixture
+    # may have missed.
+    kw.setdefault("relay_enabled", False)
+    kw.setdefault("permission_mode", PermissionMode.suggest)
+    kw.setdefault("planner_model", None)
+    kw.setdefault("coder_model", None)
+    kw.setdefault("reviewer_model", None)
+    return Settings(_env_file=None, **kw)
+
+
+def test_hermetic_helper_actually_isolates(monkeypatch, tmp_path):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-real-machine-key")
+    assert _hermetic().openai_api_key is None
+    assert _hermetic(OPENAI_API_KEY="sk-test").openai_api_key == "sk-test"
+    # Non-key fields must not leak in from env or a user config.toml either.
+    monkeypatch.setenv("RELAYCLI_RELAY_ENABLED", "true")
+    monkeypatch.setenv("RELAYCLI_PERMISSION_MODE", "full-auto")
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('planner_model = "gpt-4o"\n', encoding="utf-8")
+    monkeypatch.setitem(Settings.model_config, "toml_file", str(cfg))
+    s = _hermetic()
+    assert s.relay_enabled is False
+    assert s.permission_mode is PermissionMode.suggest
+    assert s.planner_model is None
+
+
+def test_preflight_missing_key_names_env_var():
+    from relaycli.llm import LLM
+
+    s = _hermetic(model="gpt-4o-mini")
+    problem = LLM(s).preflight()
+    assert problem is not None and "OPENAI_API_KEY" in problem
+
+
+def test_preflight_ok_with_key():
+    from relaycli.llm import LLM
+
+    s = _hermetic(model="gpt-4o-mini", OPENAI_API_KEY="sk-test")
+    assert LLM(s).preflight() is None
+
+
+def test_preflight_ollama_needs_no_key():
+    from relaycli.llm import LLM
+
+    s = _hermetic(model="ollama_chat/llama3.1")
+    assert LLM(s).preflight() is None
+
+
+def test_preflight_unknown_provider_is_permissive():
+    from relaycli.llm import LLM
+
+    s = _hermetic(model="fake/model")
+    assert LLM(s).preflight() is None
+
+
+def test_preflight_settings_covers_relay_role_models():
+    from relaycli.llm import preflight_settings
+
+    s = _hermetic(model="ollama_chat/llama3.1", relay_enabled=True,
+                  planner_model="gpt-4o-mini")
+    problem = preflight_settings(s)
+    assert problem is not None and "OPENAI_API_KEY" in problem
+    s2 = _hermetic(model="ollama_chat/llama3.1")
+    assert preflight_settings(s2) is None
+
+
+def test_setup_panel_contents():
+    from relaycli.render import render_setup_panel
+
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    render_setup_panel(
+        console,
+        "No API key configured for provider 'openai' (model 'gpt-4o-mini'). "
+        "Set OPENAI_API_KEY in your environment / .env, or add it to "
+        "~/.relaycli/config.toml.",
+        {"openai": False, "anthropic": True, "ollama": True},
+    )
+    out = _out(console)
+    assert "export OPENAI_API_KEY=" in out       # exact fix for current model
+    assert "ollama" in out                        # keyless alternative offered
+    assert "anthropic" in out                     # already-detected key suggested
+
+
+def test_setup_panel_export_hint_ignores_spoofed_model_id():
+    from relaycli.render import render_setup_panel
+
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    render_setup_panel(
+        console,
+        "No API key configured for provider 'openai' (model 'openai/EVIL_API_KEY'). "
+        "Set OPENAI_API_KEY in your environment / .env, or add it to "
+        "~/.relaycli/config.toml.",
+        {"ollama": True},
+    )
+    out = _out(console)
+    assert "export OPENAI_API_KEY=" in out
+    assert "export EVIL_API_KEY=" not in out
+
+
+def test_one_shot_missing_key_fails_fast(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import relaycli.cli as cli_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module, "get_settings",
+        lambda: _hermetic(model="gpt-4o-mini"),
+    )
+    result = CliRunner().invoke(cli_module.app, ["-p", "hi"])
+    assert result.exit_code == 2
+    assert "OPENAI_API_KEY" in result.output
+
+
+def test_one_shot_relay_preflights_role_models(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import relaycli.cli as cli_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module, "get_settings",
+        lambda: _hermetic(model="ollama_chat/llama3.1", relay_enabled=True,
+                          coder_model="gpt-4o-mini"),
+    )
+    result = CliRunner().invoke(cli_module.app, ["-p", "hi"])
+    assert result.exit_code == 2
+    assert "OPENAI_API_KEY" in result.output
+
+
+# --- REPL input dispatch -------------------------------------------------
+def _hermetic_repl(**settings_kw):
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    return Repl(_hermetic(**settings_kw), console=console), console
+
+
+def test_dispatch_flag_input_is_hinted_not_sent(monkeypatch):
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    called = []
+    monkeypatch.setattr(repl, "_run_agent", lambda req: called.append(req))
+    for flagged in ("-h", "--help", '-p "do a thing"'):
+        assert repl._handle_line(flagged) is False
+    assert called == []
+    assert "/help" in _out(console)
+
+
+def test_dispatch_help_aliases(monkeypatch):
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    monkeypatch.setattr(
+        repl, "_run_agent",
+        lambda req: (_ for _ in ()).throw(AssertionError("help must not hit the agent")),
+    )
+    assert repl._handle_line("help") is False
+    assert repl._handle_line("?") is False
+    out = _out(console)
+    assert "/model" in out and "!<cmd>" in out
+
+
+def test_dispatch_exit_aliases():
+    repl, _ = _hermetic_repl(model="gpt-4o-mini")
+    assert repl._handle_line("exit") is True
+    assert repl._handle_line("quit") is True
+    assert repl._handle_line("EXIT") is True
+
+
+def test_dispatch_plain_text_goes_to_agent(monkeypatch):
+    repl, _ = _hermetic_repl(model="gpt-4o-mini")
+    called = []
+    monkeypatch.setattr(repl, "_run_agent", lambda req: called.append(req))
+    assert repl._handle_line("explain this repo") is False
+    assert called == ["explain this repo"]
+
+
+def test_dispatch_bang_runs_shell_not_permission_gated():
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+
+    class _Boom:
+        def __getattr__(self, name):
+            raise AssertionError("!cmd must not consult the permission manager")
+
+    repl.permissions = _Boom()
+    assert repl._handle_line("!echo hi-from-shell") is False
+    out = _out(console)
+    assert "hi-from-shell" in out
+    assert "exit 0" in out
+
+
+def test_bang_shows_stderr_and_nonzero_exit():
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    repl._handle_line("!echo oops >&2; exit 3")
+    out = _out(console)
+    assert "oops" in out and "exit 3" in out
+
+
+def test_bang_empty_shows_usage():
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    repl._handle_line("!")
+    assert "usage" in _out(console)
+
+
+def test_bang_binary_output_does_not_crash_repl():
+    # A strict UTF-8 decode of !cmd output would raise UnicodeDecodeError
+    # out of the REPL loop, killing the session.
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    assert repl._handle_line("!printf '\\xff\\xfebinary\\n'") is False
+    assert "exit 0" in _out(console)
+
+
+def test_bang_multiline_is_refused(tmp_path):
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    marker = tmp_path / "should-not-exist"
+    repl._handle_line(f"!git status\ntouch {marker}")
+    out = _out(console)
+    assert "Multiline" in out
+    assert not marker.exists()
+
+
+def test_setup_panel_reshown_after_missing_key_error():
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    repl._maybe_setup_hint(_Result(
+        "error",
+        "LLM error: No API key configured for provider 'openai' (model 'gpt-4o-mini'). "
+        "Set OPENAI_API_KEY in your environment / .env, or add it to ~/.relaycli/config.toml.",
+    ))
+    assert "setup needed" in _out(console)
+
+
+def test_setup_panel_not_reshown_for_other_errors():
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    repl._maybe_setup_hint(_Result("error", "LLM error: rate limited (429)"))
+    repl._maybe_setup_hint(_Result("done", "all good"))
+    assert "setup needed" not in _out(console)
+
+
+# --- welcome banner + prompt ---------------------------------------------
+def test_banner_shows_version_cwd_model_mode_and_key_warning():
+    from relaycli import __version__
+
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    repl._print_banner()
+    out = _out(console)
+    assert __version__ in out
+    assert repl.project.root.name in out
+    assert "gpt-4o-mini" in out
+    assert "suggest" in out
+    assert "key missing" in out
+    # Preflight failed -> the setup panel appears right away (non-blocking).
+    assert "setup needed" in out
+    assert "export OPENAI_API_KEY=" in out
+
+
+def test_banner_keyless_model_no_warning():
+    repl, console = _hermetic_repl(model="ollama_chat/llama3.1")
+    repl._print_banner()
+    out = _out(console)
+    assert "no key needed" in out
+    assert "setup needed" not in out
+
+
+def test_banner_key_detected():
+    repl, console = _hermetic_repl(model="gpt-4o-mini", OPENAI_API_KEY="sk-test")
+    repl._print_banner()
+    out = _out(console)
+    assert "key detected" in out
+    assert "setup needed" not in out
+
+
+def test_banner_relay_routing_shown():
+    repl, console = _hermetic_repl(model="ollama_chat/llama3.1", relay_enabled=True)
+    repl._print_banner()
+    out = _out(console)
+    assert "planner" in out and "coder" in out and "reviewer" in out
+
+
+def test_banner_long_cwd_is_folded_not_truncated(monkeypatch, tmp_path):
+    deep = tmp_path / ("a" * 40) / ("b" * 40) / "project-checkout-dir"
+    deep.mkdir(parents=True)
+    monkeypatch.chdir(deep)
+    repl, console = _hermetic_repl(model="ollama_chat/llama3.1")
+    repl._print_banner()
+    # The cwd cell folds across lines rather than ellipsizing; normalize away
+    # panel borders/whitespace so a mid-word fold can't hide the substring.
+    flat = re.sub(r"[│\s]+", "", _out(console))
+    assert "project-checkout-dir" in flat
+
+
+def test_prompt_text_shows_model_and_mode():
+    repl, _ = _hermetic_repl(model="gpt-4o-mini")
+    assert repl._prompt_text() == "gpt-4o-mini · suggest › "
+    repl.settings.relay_enabled = True
+    repl.settings.model = "ollama_chat/llama3.1"
+    assert repl._prompt_text() == "llama3.1 · suggest · relay › "

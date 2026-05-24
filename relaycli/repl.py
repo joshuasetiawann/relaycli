@@ -22,18 +22,16 @@ from rich.syntax import Syntax
 from relaycli.agent import Agent
 from relaycli.config import CONFIG_DIR, PermissionMode, Settings, ensure_config_dir
 from relaycli.context import ProjectContext
+from relaycli.llm import key_status, preflight_settings
 from relaycli.permissions import PermissionManager
-from relaycli.render import RichReporter, render_task_summary
-
-_HELP = """[bold]Slash commands[/bold]
-  [cyan]/model[/cyan] <name>                switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)
-  [cyan]/mode[/cyan]  <suggest|auto-edit|full-auto>   switch permission mode
-  [cyan]/relay[/cyan] \\[on|off]             toggle the Planner → Coder → Reviewer pipeline
-  [cyan]/diff[/cyan]                        show changes in the working tree (git diff)
-  [cyan]/clear[/cyan]                       reset the conversation
-  [cyan]/help[/cyan]                        show this help
-  [cyan]/exit[/cyan]                        quit
-[dim]Enter submits · Alt+Enter inserts a newline · Ctrl-D exits[/dim]"""
+from relaycli.render import (
+    RichReporter,
+    render_help,
+    render_setup_panel,
+    render_task_summary,
+    render_welcome,
+    short_model_name,
+)
 
 
 class Repl:
@@ -75,12 +73,8 @@ class Repl:
             if not line:
                 continue
 
-            if line.startswith("/"):
-                if self._handle_slash(line):
-                    break
-                continue
-
-            self._run_agent(line)
+            if self._handle_line(line):
+                break
 
         self.console.print("[dim]bye.[/dim]")
 
@@ -110,20 +104,23 @@ class Repl:
         return PromptSession(history=history, key_bindings=kb, multiline=True)
 
     def _prompt_text(self) -> str:
-        return f"relaycli ({self.settings.permission_mode})› "
+        parts = [short_model_name(self.settings.model), str(self.settings.permission_mode)]
+        if self.settings.relay_enabled:
+            parts.append("relay")
+        return " · ".join(parts) + " › "
 
     def _print_banner(self) -> None:
-        self.console.print(
-            f"[bold cyan]RelayCLI[/bold cyan]  "
-            f"[dim]cwd[/dim] {self.project.root}  "
-            f"[dim]model[/dim] [green]{escape(self.settings.model)}[/green]  "
-            f"[dim]mode[/dim] [yellow]{self.settings.permission_mode}[/yellow]"
+        render_welcome(
+            self.console, self.settings, self.project.root, key_status(self.settings)
         )
-        if self.settings.relay_enabled:
-            self._print_routing()
+        # Non-blocking by design: the user can still /model or !cmd their way
+        # out; only a real request would fail.
+        problem = preflight_settings(self.settings)
+        if problem:
+            render_setup_panel(self.console, problem, self.settings.detected_providers())
         if self.settings.permission_mode is PermissionMode.full_auto:
             self._full_auto_banner()
-        self.console.print("[dim]Type a request, or /help for commands.[/dim]\n")
+        self.console.print()
 
     def _full_auto_banner(self) -> None:
         self.console.print(
@@ -135,6 +132,75 @@ class Repl:
         from relaycli.render import render_routing_banner
 
         render_routing_banner(self.console, self.settings)
+
+    # -- input dispatch ----------------------------------------------------
+    def _handle_line(self, line: str) -> bool:
+        """Dispatch one stripped, non-empty input line.
+
+        Returns True when the REPL should exit. Order matters: command-ish
+        shapes (slash, bang, leading dash, bare aliases) are intercepted so
+        they are never sent to the model by accident.
+        """
+        if line.startswith("/"):
+            return self._handle_slash(line)
+        if line.startswith("!"):
+            self._run_user_shell(line[1:].strip())
+            return False
+        if line.startswith("-"):
+            flag = escape(line.split()[0])
+            self.console.print(
+                f"[yellow]Flags like [bold]{flag}[/bold] belong on the relaycli "
+                f"command line, not inside the session.[/yellow] "
+                f"[dim]Try [cyan]/help[/cyan] for session commands, or rephrase "
+                f"without the leading dash to send it to the model.[/dim]"
+            )
+            return False
+        lowered = line.lower()
+        if lowered in ("help", "?"):
+            render_help(self.console)
+            return False
+        if lowered in ("exit", "quit"):
+            return True
+        self._run_agent(line)
+        return False
+
+    def _run_user_shell(self, cmd: str) -> None:
+        """Run a user-typed ``!cmd`` in the project root.
+
+        Not permission-gated on purpose: the user typed it in their own
+        terminal, so it is exactly as trusted as their shell. Output is
+        captured (not streamed) so the Rich console stays consistent.
+        """
+        if not cmd:
+            self.console.print("[dim]usage: !<command>   e.g. !git status[/dim]")
+            return
+        if "\n" in cmd:
+            # A multiline buffer here is almost always a stray paste; running
+            # every embedded line through the shell ungated is too surprising.
+            self.console.print(
+                "[yellow]Multiline !command not run (pasted text?).[/yellow] "
+                "[dim]Run shell commands one line at a time.[/dim]"
+            )
+            return
+        try:
+            # errors="replace": commands may emit non-UTF-8 bytes (binaries,
+            # odd encodings) and a strict decode would crash the whole REPL.
+            proc = subprocess.run(
+                cmd, shell=True, cwd=self.project.root, capture_output=True,
+                text=True, errors="replace",
+            )
+        except KeyboardInterrupt:
+            self.console.print("\n[yellow]Interrupted — back to prompt.[/yellow]")
+            return
+        except (OSError, ValueError) as exc:
+            self.console.print(f"[red]shell failed:[/red] {escape(str(exc))}")
+            return
+        if proc.stdout:
+            self.console.print(escape(proc.stdout.rstrip("\n")))
+        if proc.stderr:
+            self.console.print(f"[red]{escape(proc.stderr.rstrip('\n'))}[/red]")
+        style = "dim" if proc.returncode == 0 else "red"
+        self.console.print(f"[{style}]↳ exit {proc.returncode}[/{style}]")
 
     # -- running a task --------------------------------------------------
     def _run_agent(self, request: str) -> None:
@@ -148,6 +214,7 @@ class Repl:
             self.console.print("\n[yellow]Interrupted — back to prompt.[/yellow]")
             return
         render_task_summary(self.console, result, reporter.tools_used)
+        self._maybe_setup_hint(result)
 
     def _run_relay(self, request: str) -> None:
         from relaycli.relay import Relay
@@ -166,6 +233,21 @@ class Repl:
             self.console.print("\n[yellow]Interrupted — back to prompt.[/yellow]")
             return
         render_relay_summary(self.console, result)
+        self._maybe_setup_hint(result)
+
+    def _maybe_setup_hint(self, result) -> None:
+        """Re-show setup guidance after a run failed on a missing credential.
+
+        Startup preflight can't catch this case: the model (or a relay role
+        model) may have been switched mid-session with /model or /relay.
+        """
+        if result.stopped_reason != "error":
+            return
+        text = result.final_text or ""
+        if "No API key configured" not in text:
+            return
+        problem = preflight_settings(self.settings) or text
+        render_setup_panel(self.console, problem, self.settings.detected_providers())
 
     # -- slash commands --------------------------------------------------
     def _handle_slash(self, line: str) -> bool:
@@ -177,7 +259,7 @@ class Repl:
         if cmd in ("exit", "quit"):
             return True
         if cmd == "help":
-            self.console.print(_HELP)
+            render_help(self.console)
         elif cmd == "model":
             self._cmd_model(arg)
         elif cmd == "mode":
