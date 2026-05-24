@@ -27,6 +27,7 @@ from relaycli.render import RichReporter, render_task_summary
 _HELP = """[bold]Slash commands[/bold]
   [cyan]/model[/cyan] <name>                switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)
   [cyan]/mode[/cyan]  <suggest|auto-edit|full-auto>   switch permission mode
+  [cyan]/relay[/cyan] [on|off]              toggle the Planner → Coder → Reviewer pipeline
   [cyan]/diff[/cyan]                        show changes in the working tree (git diff)
   [cyan]/clear[/cyan]                       reset the conversation
   [cyan]/help[/cyan]                        show this help
@@ -117,6 +118,8 @@ class Repl:
             f"[dim]model[/dim] [green]{self.settings.model}[/green]  "
             f"[dim]mode[/dim] [yellow]{self.settings.permission_mode}[/yellow]"
         )
+        if self.settings.relay_enabled:
+            self._print_routing()
         if self.settings.permission_mode is PermissionMode.full_auto:
             self._full_auto_banner()
         self.console.print("[dim]Type a request, or /help for commands.[/dim]\n")
@@ -127,8 +130,19 @@ class Repl:
             "without asking."
         )
 
+    def _print_routing(self) -> None:
+        from relaycli.router import routing_table
+
+        routes = " · ".join(
+            f"{role}:{m}" for role, m in routing_table(self.settings).items()
+        )
+        self.console.print(f"[dim]relay[/dim] [cyan]on[/cyan]  [dim]{routes}[/dim]")
+
     # -- running a task --------------------------------------------------
     def _run_agent(self, request: str) -> None:
+        if self.settings.relay_enabled:
+            self._run_relay(request)
+            return
         reporter = RichReporter(self.console)
         try:
             result = self.agent.run(request, reporter=reporter)
@@ -136,6 +150,24 @@ class Repl:
             self.console.print("\n[yellow]Interrupted — back to prompt.[/yellow]")
             return
         render_task_summary(self.console, result, reporter.tools_used)
+
+    def _run_relay(self, request: str) -> None:
+        from relaycli.relay import Relay
+        from relaycli.render import RelayRichObserver, render_relay_summary
+
+        # A fresh Relay per request is by design: each request is a fresh
+        # pipeline (the constructor is cheap; roles are built per run).
+        relay = Relay(
+            self.settings, console=self.console, project=self.project,
+            permissions=self.permissions,
+        )
+        observer = RelayRichObserver(self.console)
+        try:
+            result = relay.run(request, observer=observer)
+        except KeyboardInterrupt:
+            self.console.print("\n[yellow]Interrupted — back to prompt.[/yellow]")
+            return
+        render_relay_summary(self.console, result)
 
     # -- slash commands --------------------------------------------------
     def _handle_slash(self, line: str) -> bool:
@@ -152,6 +184,8 @@ class Repl:
             self._cmd_model(arg)
         elif cmd == "mode":
             self._cmd_mode(arg)
+        elif cmd == "relay":
+            self._cmd_relay(arg)
         elif cmd == "diff":
             self._cmd_diff()
         elif cmd == "clear":
@@ -184,6 +218,21 @@ class Repl:
         self.console.print(f"mode → [yellow]{mode}[/yellow]")
         if mode is PermissionMode.full_auto:
             self._full_auto_banner()
+
+    def _cmd_relay(self, value: str) -> None:
+        if not value:
+            state = "on" if self.settings.relay_enabled else "off"
+            self.console.print(f"relay: [cyan]{state}[/cyan]")
+            if self.settings.relay_enabled:
+                self._print_routing()
+            return
+        if value not in ("on", "off"):
+            self.console.print("[red]Usage:[/red] /relay [on|off]")
+            return
+        self.settings.relay_enabled = value == "on"
+        self.console.print(f"relay → [cyan]{value}[/cyan]")
+        if self.settings.relay_enabled:
+            self._print_routing()
 
     def _cmd_diff(self) -> None:
         if not (self.project.root / ".git").exists():

@@ -156,6 +156,37 @@ def default_registry() -> ToolRegistry:
     return reg
 
 
+def planner_registry() -> ToolRegistry:
+    """Read-only subset for the relay Planner (cannot edit or run anything).
+
+    Enforcement is by construction: the write/run tools are simply not
+    registered, so the model cannot call them no matter what it emits.
+    """
+    from relaycli.tools import read_file as _read_file, search as _search
+
+    reg = ToolRegistry()
+    for module in (_read_file, _search):
+        module.register(reg)
+    return reg
+
+
+def reviewer_registry() -> ToolRegistry:
+    """Reviewer subset: read + search + run_command (to run tests); no writes.
+
+    run_command still goes through the PermissionManager like everywhere else.
+    """
+    from relaycli.tools import (
+        read_file as _read_file,
+        run_command as _run_command,
+        search as _search,
+    )
+
+    reg = ToolRegistry()
+    for module in (_read_file, _search, _run_command):
+        module.register(reg)
+    return reg
+
+
 # A process-wide registry (kept for ad-hoc use; sessions build their own).
 registry = ToolRegistry()
 
@@ -166,4 +197,6 @@ __all__ = [
     "ToolFunc",
     "registry",
     "default_registry",
+    "planner_registry",
+    "reviewer_registry",
 ]

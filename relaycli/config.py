@@ -131,6 +131,29 @@ class Settings(BaseSettings):
         description="Approximate token budget before the session trims history.",
     )
 
+    # --- Relay pipeline (Planner → Coder → Reviewer) ---------------------
+    relay_enabled: bool = Field(
+        default=False,
+        description="Run requests through the Planner → Coder → Reviewer relay pipeline.",
+    )
+    planner_model: str | None = Field(
+        default=None,
+        description="Model for the relay Planner role (falls back to 'model').",
+    )
+    coder_model: str | None = Field(
+        default=None,
+        description="Model for the relay Coder role (falls back to 'model').",
+    )
+    reviewer_model: str | None = Field(
+        default=None,
+        description="Model for the relay Reviewer role (falls back to 'model').",
+    )
+    max_review_cycles: int = Field(
+        default=2,
+        ge=0,
+        description="Revision cycles allowed after a 'revise' verdict (0 = review is advisory).",
+    )
+
     # --- Provider credentials (standard env var names) ------------------
     openai_api_key: str | None = Field(
         default=None,

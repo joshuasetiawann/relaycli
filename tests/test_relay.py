@@ -1,0 +1,493 @@
+"""Relay layer tests: router, config, and the Planner→Coder→Reviewer pipeline.
+
+The LLM is always scripted/mocked — no network calls.
+"""
+
+from __future__ import annotations
+
+import io
+
+from rich.console import Console
+from typer.testing import CliRunner
+
+import relaycli.cli as cli_module
+from relaycli.agent import Agent
+from relaycli.config import PermissionMode, Settings
+from relaycli.context import ProjectContext
+from relaycli.llm import LLMError, LLMResponse, Usage
+from relaycli.permissions import PermissionManager
+from relaycli.relay import Relay, RelayObserver, RelayResult, parse_verdict
+from relaycli.render import RelayRichObserver, render_relay_summary
+from relaycli.repl import Repl
+from relaycli.router import Role, resolve_model, routing_table
+from relaycli.tools import default_registry, planner_registry, reviewer_registry
+
+
+def _settings(**kw) -> Settings:
+    # _env_file=None: ignore any local .env so tests are hermetic.
+    return Settings(_env_file=None, **kw)
+
+
+class ScriptedLLM:
+    """Scripted fake LLM. Entries are LLMResponse or Exception (raised)."""
+
+    def __init__(self, responses) -> None:
+        self._responses = list(responses)
+        self.calls: list[list[dict]] = []
+        self.models: list[str | None] = []
+
+    def complete(self, messages, *, tools=None, model=None, temperature=None,
+                 stream=False, on_token=None):
+        self.calls.append(list(messages))
+        self.models.append(model)
+        if not self._responses:
+            raise AssertionError("ScriptedLLM ran out of scripted responses")
+        resp = self._responses.pop(0)
+        if isinstance(resp, Exception):
+            raise resp
+        if on_token and resp.text:
+            on_token(resp.text)
+        return resp
+
+
+def _usage() -> Usage:
+    return Usage(prompt_tokens=5, completion_tokens=3, total_tokens=8)
+
+
+def _resp(text="", tool_calls=None) -> LLMResponse:
+    return LLMResponse(text=text, tool_calls=tool_calls or [], usage=_usage())
+
+
+def _console() -> Console:
+    return Console(file=io.StringIO(), force_terminal=False, width=100)
+
+
+class TestRouter:
+    def test_roles(self):
+        assert [r.value for r in Role] == ["planner", "coder", "reviewer"]
+
+    def test_fallback_to_base_model(self):
+        s = _settings(model="base/model")
+        assert resolve_model(s, Role.planner) == "base/model"
+        assert resolve_model(s, Role.coder) == "base/model"
+        assert resolve_model(s, Role.reviewer) == "base/model"
+
+    def test_role_overrides_win(self):
+        s = _settings(model="base/model", planner_model="cheap/planner",
+                      coder_model="strong/coder")
+        assert resolve_model(s, Role.planner) == "cheap/planner"
+        assert resolve_model(s, Role.coder) == "strong/coder"
+        assert resolve_model(s, Role.reviewer) == "base/model"  # fallback
+
+    def test_routing_table(self):
+        s = _settings(model="base/model", reviewer_model="cheap/reviewer")
+        table = routing_table(s)
+        assert table == {
+            Role.planner: "base/model",
+            Role.coder: "base/model",
+            Role.reviewer: "cheap/reviewer",
+        }
+
+
+class TestRelayConfig:
+    def test_defaults(self):
+        s = _settings()
+        assert s.relay_enabled is False
+        assert s.planner_model is None
+        assert s.coder_model is None
+        assert s.reviewer_model is None
+        assert s.max_review_cycles == 2
+
+    def test_env_loading(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)  # dodge any repo-local .env
+        monkeypatch.setenv("RELAYCLI_RELAY_ENABLED", "true")
+        monkeypatch.setenv("RELAYCLI_PLANNER_MODEL", "cheap/p")
+        monkeypatch.setenv("RELAYCLI_MAX_REVIEW_CYCLES", "5")
+        s = Settings()
+        assert s.relay_enabled is True
+        assert s.planner_model == "cheap/p"
+        assert s.max_review_cycles == 5
+
+
+class TestAgentExtensions:
+    def test_prompt_template_override(self, sample_project):
+        llm = ScriptedLLM([_resp(text="hi")])
+        settings = _settings(model="fake/model", permission_mode=PermissionMode.full_auto)
+        console = _console()
+        agent = Agent(
+            settings, console=console, project=ProjectContext(sample_project),
+            permissions=PermissionManager(PermissionMode.full_auto, console=console),
+            llm=llm,
+            prompt_template="CUSTOM ROLE in {cwd} mode {mode} tools:\n{tool_list}",
+        )
+        system = agent.session.to_messages()[0]["content"]
+        assert system.startswith("CUSTOM ROLE in")
+        assert str(sample_project.resolve()) in system
+        assert "read_file" in system
+
+    def test_model_override_pins_model(self, sample_project):
+        llm = ScriptedLLM([_resp(text="hi")])
+        settings = _settings(model="base/model", permission_mode=PermissionMode.full_auto)
+        console = _console()
+        agent = Agent(
+            settings, console=console, project=ProjectContext(sample_project),
+            permissions=PermissionManager(PermissionMode.full_auto, console=console),
+            llm=llm, model="pinned/model",
+        )
+        agent.run("hello")
+        assert agent.model == "pinned/model"
+        assert llm.models == ["pinned/model"]
+        settings.model = "changed/model"
+        assert agent.model == "pinned/model"  # override wins
+
+    def test_no_override_follows_settings(self, sample_project):
+        llm = ScriptedLLM([_resp(text="hi"), _resp(text="again")])
+        settings = _settings(model="base/model", permission_mode=PermissionMode.full_auto)
+        console = _console()
+        agent = Agent(
+            settings, console=console, project=ProjectContext(sample_project),
+            permissions=PermissionManager(PermissionMode.full_auto, console=console),
+            llm=llm,
+        )
+        agent.run("one")
+        settings.model = "switched/model"  # what /model does
+        agent.refresh_system_prompt()
+        agent.run("two")
+        assert llm.models == ["base/model", "switched/model"]
+        assert agent.session.model == "switched/model"
+
+
+def _relay(project_root, llm, **settings_kw) -> Relay:
+    console = _console()
+    settings = _settings(model="base/model", permission_mode=PermissionMode.full_auto,
+                         **settings_kw)
+    return Relay(
+        settings, console=console, project=ProjectContext(project_root),
+        permissions=PermissionManager(PermissionMode.full_auto, console=console),
+        llm=llm,
+    )
+
+
+class TestParseVerdict:
+    def test_approve(self):
+        assert parse_verdict("Looks good.\nVERDICT: approve") == "approve"
+
+    def test_revise_case_insensitive(self):
+        assert parse_verdict("verdict: REVISE\n- fix x") == "revise"
+
+    def test_last_match_wins(self):
+        text = "If broken I'd say VERDICT: revise. But all is well.\nVERDICT: approve"
+        assert parse_verdict(text) == "approve"
+
+    def test_no_verdict(self):
+        assert parse_verdict("great work, ship it") is None
+        assert parse_verdict("") is None
+
+
+class TestRelayHappyPath:
+    def test_plan_code_review_approve(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="1. Edit app.py\n2. Run tests"),        # planner
+            _resp(text="Done: edited app.py as planned."),      # coder
+            _resp(text="Verified.\nVERDICT: approve"),           # reviewer
+        ])
+        relay = _relay(sample_project, llm,
+                       planner_model="cheap/p", reviewer_model="cheap/r")
+        result = relay.run("improve app.py")
+
+        assert result.stopped_reason == "done"
+        assert result.verdict == "approve"
+        assert result.cycles == 0
+        assert result.final_text == "Done: edited app.py as planned."
+        assert [str(r.role) for r in result.role_runs] == ["planner", "coder", "reviewer"]
+        # Router applied per role; coder falls back to the base model.
+        assert llm.models == ["cheap/p", "base/model", "cheap/r"]
+        assert result.usage.total_tokens == 24  # 3 calls * 8
+        assert result.notes == []
+        assert result.elapsed > 0
+
+    def test_role_prompts_and_artifacts(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="THE-PLAN"),
+            _resp(text="THE-REPORT"),
+            _resp(text="VERDICT: approve"),
+        ])
+        relay = _relay(sample_project, llm)
+        relay.run("THE-REQUEST")
+
+        planner_system = llm.calls[0][0]["content"]
+        coder_system = llm.calls[1][0]["content"]
+        reviewer_system = llm.calls[2][0]["content"]
+        assert "Planner" in planner_system and "read_file" in planner_system
+        assert "write_file" not in planner_system      # read-only tool list
+        assert "Coder" in coder_system and "edit_file" in coder_system
+        assert "Reviewer" in reviewer_system and "VERDICT" in reviewer_system
+        assert "edit_file" not in reviewer_system      # no write tools offered
+        # Untrusted-content boundary present in every role prompt.
+        for system in (planner_system, coder_system, reviewer_system):
+            assert "UNTRUSTED" in system
+
+        # Handoff artifacts flow as user messages.
+        coder_user = llm.calls[1][-1]["content"]
+        assert "THE-REQUEST" in coder_user and "THE-PLAN" in coder_user
+        reviewer_user = llm.calls[2][-1]["content"]
+        assert "THE-REQUEST" in reviewer_user and "THE-PLAN" in reviewer_user
+        assert "THE-REPORT" in reviewer_user
+
+    def test_observer_hooks_called(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"), _resp(text="report"), _resp(text="VERDICT: approve"),
+        ])
+        seen: list[tuple[str, str, int]] = []
+
+        class Spy(RelayObserver):
+            def role_start(self, role, model, cycle):
+                seen.append((str(role), model, cycle))
+
+        _relay(sample_project, llm).run("req", observer=Spy())
+        assert seen == [("planner", "base/model", 0), ("coder", "base/model", 0),
+                        ("reviewer", "base/model", 0)]
+
+
+class TestRelayReflection:
+    def test_revise_then_approve(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"),                                  # planner
+            _resp(text="v1 report"),                             # coder cycle 0
+            _resp(text="VERDICT: revise\n1. fix the name"),      # reviewer cycle 0
+            _resp(text="v2 report"),                             # coder cycle 1
+            _resp(text="VERDICT: approve"),                      # reviewer cycle 1
+        ])
+        relay = _relay(sample_project, llm)
+        result = relay.run("req")
+
+        assert result.stopped_reason == "done"
+        assert result.verdict == "approve"
+        assert result.cycles == 1
+        assert result.final_text == "v2 report"
+        assert [str(r.role) for r in result.role_runs] == [
+            "planner", "coder", "reviewer", "coder", "reviewer"]
+        # The coder session persists: its second call still contains cycle-0
+        # history, and the new user message carries the reviewer feedback.
+        second_coder_call = llm.calls[3]
+        assert any("v1 report" in (m.get("content") or "") for m in second_coder_call)
+        assert "fix the name" in second_coder_call[-1]["content"]
+
+    def test_review_exhausted(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"),
+            _resp(text="v1"), _resp(text="VERDICT: revise\n1. x"),
+            _resp(text="v2"), _resp(text="VERDICT: revise\n1. still x"),
+        ])
+        relay = _relay(sample_project, llm, max_review_cycles=1)
+        result = relay.run("req")
+
+        assert result.stopped_reason == "review_exhausted"
+        assert result.verdict == "revise"
+        assert result.cycles == 1
+        assert result.final_text == "v2"
+        assert any("revision limit" in n for n in result.notes)
+
+    def test_zero_cycles_review_is_advisory(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"), _resp(text="v1"),
+            _resp(text="VERDICT: revise\n1. x"),
+        ])
+        relay = _relay(sample_project, llm, max_review_cycles=0)
+        result = relay.run("req")
+        assert result.stopped_reason == "review_exhausted"
+        assert result.cycles == 0
+        assert len(result.role_runs) == 3  # no retry happened
+
+    def test_malformed_verdict_treated_as_approve(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"), _resp(text="report"),
+            _resp(text="all looks great to me"),  # no VERDICT line
+        ])
+        result = _relay(sample_project, llm).run("req")
+        assert result.stopped_reason == "done"
+        assert result.verdict == "approve"
+        assert any("VERDICT" in n for n in result.notes)
+
+
+class TestRelayFailureModes:
+    def test_planner_error_aborts_before_coder(self, sample_project):
+        llm = ScriptedLLM([LLMError("planner exploded")])
+        result = _relay(sample_project, llm).run("req")
+        assert result.stopped_reason == "error"
+        assert "planner exploded" in result.final_text
+        assert len(llm.calls) == 1  # coder never ran
+        assert result.elapsed > 0
+
+    def test_empty_plan_aborts(self, sample_project):
+        llm = ScriptedLLM([_resp(text="   ")])
+        result = _relay(sample_project, llm).run("req")
+        assert result.stopped_reason == "error"
+        assert "no plan" in result.final_text.lower()
+        assert len(llm.calls) == 1
+
+    def test_coder_error_aborts_before_review(self, sample_project):
+        llm = ScriptedLLM([_resp(text="plan"), LLMError("coder exploded")])
+        result = _relay(sample_project, llm).run("req")
+        assert result.stopped_reason == "error"
+        assert "coder exploded" in result.final_text
+        assert len(llm.calls) == 2  # reviewer never ran
+
+    def test_reviewer_error_keeps_coder_result(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"), _resp(text="the work"), LLMError("reviewer exploded"),
+        ])
+        result = _relay(sample_project, llm).run("req")
+        assert result.stopped_reason == "done"
+        assert result.final_text == "the work"
+        assert any("unreviewed" in n for n in result.notes)
+        assert result.role_runs[-1].result.stopped_reason == "error"
+
+
+class TestRelayRendering:
+    def test_role_banners_and_summary(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"), _resp(text="report"), _resp(text="VERDICT: approve"),
+        ])
+        console = _console()
+        relay = Relay(
+            _settings(model="base/model", permission_mode=PermissionMode.full_auto,
+                      planner_model="cheap/p"),
+            console=console, project=ProjectContext(sample_project),
+            permissions=PermissionManager(PermissionMode.full_auto, console=console),
+            llm=llm,
+        )
+        result = relay.run("req", observer=RelayRichObserver(console))
+        render_relay_summary(console, result)
+        out = console.file.getvalue()
+        assert "planner" in out and "coder" in out and "reviewer" in out
+        assert "cheap/p" in out            # routed model shown in the banner
+        assert "done" in out
+        assert "approve" in out
+
+    def test_summary_shows_notes_and_exhaustion(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"), _resp(text="v1"),
+            _resp(text="VERDICT: revise\n1. x"),
+        ])
+        console = _console()
+        relay = Relay(
+            _settings(model="base/model", permission_mode=PermissionMode.full_auto,
+                      max_review_cycles=0),
+            console=console, project=ProjectContext(sample_project),
+            permissions=PermissionManager(PermissionMode.full_auto, console=console),
+            llm=llm,
+        )
+        result = relay.run("req", observer=RelayRichObserver(console))
+        render_relay_summary(console, result)
+        out = console.file.getvalue()
+        assert "review_exhausted" in out
+        assert "revision limit" in out     # the note is surfaced
+
+
+class TestCliRelayFlag:
+    def test_one_shot_uses_relay_when_flagged(self, sample_project, monkeypatch):
+        monkeypatch.chdir(sample_project)
+        calls: dict = {}
+
+        class FakeRelay:
+            def __init__(self, settings, **kw):
+                calls["enabled"] = settings.relay_enabled
+
+            def run(self, request, *, observer=None):
+                calls["request"] = request
+                return RelayResult(final_text="ok", stopped_reason="done", cycles=0)
+
+        monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
+        monkeypatch.setattr("relaycli.relay.Relay", FakeRelay)
+        result = CliRunner().invoke(cli_module.app, ["-p", "do it", "--relay", "-y"])
+        assert result.exit_code == 0, result.output
+        assert calls == {"enabled": True, "request": "do it"}
+
+    def test_one_shot_without_flag_uses_single_agent(self, sample_project, monkeypatch):
+        monkeypatch.chdir(sample_project)
+
+        class BoomRelay:
+            def __init__(self, *a, **kw):
+                raise AssertionError("Relay must not be constructed when off")
+
+        class FakeAgent:
+            def __init__(self, *a, **kw):
+                pass
+
+            def run(self, request, *, reporter=None):
+                from relaycli.agent import AgentResult
+                return AgentResult(final_text="ok", iterations=1, tool_calls=0,
+                                   usage=Usage(), stopped_reason="done")
+
+        monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
+        monkeypatch.setattr("relaycli.relay.Relay", BoomRelay)
+        monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
+        result = CliRunner().invoke(cli_module.app, ["-p", "do it", "-y"])
+        assert result.exit_code == 0, result.output
+
+    def test_config_shows_routing(self, monkeypatch):
+        monkeypatch.setattr(cli_module, "get_settings",
+                            lambda: _settings(model="base/m", coder_model="strong/c"))
+        result = CliRunner().invoke(cli_module.app, ["config"])
+        assert result.exit_code == 0
+        assert "relay" in result.output
+        assert "strong/c" in result.output
+
+
+class TestReplRelayCommand:
+    def _repl(self) -> Repl:
+        settings = _settings(model="fake/m")
+        return Repl(settings, console=_console())
+
+    def test_toggle_on_off(self):
+        repl = self._repl()
+        assert repl.settings.relay_enabled is False
+        repl._handle_slash("/relay on")
+        assert repl.settings.relay_enabled is True
+        repl._handle_slash("/relay off")
+        assert repl.settings.relay_enabled is False
+
+    def test_bare_relay_prints_status(self):
+        repl = self._repl()
+        repl._handle_slash("/relay")
+        out = repl.console.file.getvalue()
+        assert "off" in out
+
+    def test_invalid_arg(self):
+        repl = self._repl()
+        repl._handle_slash("/relay sideways")
+        assert repl.settings.relay_enabled is False
+        assert "Usage" in repl.console.file.getvalue()
+
+    def test_run_dispatches_to_relay_when_enabled(self, monkeypatch):
+        repl = self._repl()
+        repl.settings.relay_enabled = True
+        seen: dict = {}
+
+        class FakeRelay:
+            def __init__(self, *a, **kw): ...
+
+            def run(self, request, *, observer=None):
+                seen["request"] = request
+                return RelayResult(final_text="ok", stopped_reason="done", cycles=0)
+
+        monkeypatch.setattr("relaycli.relay.Relay", FakeRelay)
+        repl._run_agent("build the thing")
+        assert seen == {"request": "build the thing"}
+
+
+class TestRegistrySubsets:
+    def test_planner_is_read_only(self):
+        names = set(planner_registry().names())
+        assert names == {"read_file", "search"}
+
+    def test_reviewer_reads_and_runs_but_never_writes(self):
+        names = set(reviewer_registry().names())
+        assert names == {"read_file", "search", "run_command"}
+
+    def test_subset_schemas_match_default(self):
+        # The subset must reuse the same tool definitions, not redefine them.
+        default_schemas = {s["function"]["name"]: s for s in default_registry().schemas()}
+        for schema in planner_registry().schemas() + reviewer_registry().schemas():
+            assert schema == default_schemas[schema["function"]["name"]]

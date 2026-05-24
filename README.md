@@ -6,8 +6,10 @@ once, run `relaycli` in any project directory: it reads and edits the real
 files there, runs shell commands, and works through your request in an
 interactive terminal session.
 
-> Status: built in stages. Stage 1 ships the scaffold + config + a runnable
-> banner. The LLM layer, tools, agent loop, and REPL land in later stages.
+> Status: the single-agent MVP is complete (LLM gateway, coding tools,
+> permission system, agent loop, REPL) and hardened by a security audit and a
+> full pytest suite. The optional multi-agent relay pipeline is available via
+> `--relay` / `/relay on`.
 
 ## Install
 
@@ -67,6 +69,34 @@ relaycli --help
 | `suggest`   | ask before any edit or command (default, safest)     |
 | `auto-edit` | auto-apply edits, still ask before running commands  |
 | `full-auto` | never prompt (a banner is shown while active)        |
+
+## Relay pipeline (multi-agent)
+
+The relay pipeline is what makes RelayCLI *RelayCLI*: instead of one agent,
+each request flows through three specialized roles —
+
+1. **Planner** (read-only tools) explores the project and writes a short
+   numbered plan.
+2. **Coder** (full tools, honors your permission mode) carries out the plan
+   and reports what changed.
+3. **Reviewer** (read + run tests, no writes) verifies the working tree and
+   answers `VERDICT: approve` or `VERDICT: revise`. On revise, its feedback
+   goes back to the Coder — bounded by `max_review_cycles` (default 2).
+
+Each role can run on a different model ("smart routing"): a cheap model for
+planning/review, a strong one for coding.
+
+```toml
+# ~/.relaycli/config.toml
+relay_enabled = true
+planner_model = "gpt-4o-mini"
+coder_model = "claude-3-5-sonnet-latest"
+reviewer_model = "gpt-4o-mini"
+```
+
+Enable per-session with `relaycli --relay` (works with `-p` one-shots too) or
+`/relay on` in the REPL. `relaycli config` shows the active role → model
+routing. The single-agent mode remains the default and is unchanged.
 
 ## Development
 

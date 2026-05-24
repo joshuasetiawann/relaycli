@@ -54,6 +54,11 @@ def main(
     yes: bool = typer.Option(
         False, "-y", "--yes", help="Auto-approve prompts (non-interactive one-shot runs)."
     ),
+    relay: bool = typer.Option(
+        None,
+        "--relay/--no-relay",
+        help="Run requests through the Planner → Coder → Reviewer relay pipeline.",
+    ),
 ) -> None:
     """Launch the REPL, or run a one-shot request with -p."""
     if ctx.invoked_subcommand is not None:
@@ -61,6 +66,8 @@ def main(
 
     settings = get_settings()
     _apply_overrides(settings, model, mode)
+    if relay is not None:
+        settings.relay_enabled = relay
 
     if prompt is not None:
         _run_once(settings, prompt, assume_yes=yes)
@@ -95,6 +102,27 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         )
     console.print()
 
+    if settings.relay_enabled:
+        from relaycli.relay import Relay
+        from relaycli.render import RelayRichObserver, render_relay_summary
+        from relaycli.router import routing_table
+
+        routes = " · ".join(f"{role}:{m}" for role, m in routing_table(settings).items())
+        console.print(f"[dim]relay[/dim] [cyan]on[/cyan]  [dim]{routes}[/dim]\n")
+        relay_pipeline = Relay(
+            settings, console=console, project=project, permissions=permissions
+        )
+        observer = RelayRichObserver(console)
+        try:
+            relay_result = relay_pipeline.run(request, observer=observer)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted.[/yellow]")
+            raise typer.Exit(code=130)
+        render_relay_summary(console, relay_result)
+        if relay_result.stopped_reason == "error":
+            raise typer.Exit(code=1)
+        return
+
     agent = Agent(settings, console=console, project=project, permissions=permissions)
     reporter = RichReporter(console)
 
@@ -121,10 +149,23 @@ def config() -> None:
     table.add_row("permission_mode", str(settings.permission_mode))
     table.add_row("max_iterations", str(settings.max_iterations))
     table.add_row("token_budget", str(settings.token_budget))
+    table.add_row("relay_enabled", str(settings.relay_enabled))
+    table.add_row("max_review_cycles", str(settings.max_review_cycles))
     table.add_row(
         "config file", str(CONFIG_FILE) + ("" if CONFIG_FILE.exists() else "  (not present)")
     )
     console.print(table)
+
+    from relaycli.router import routing_table
+
+    rtable = Table(title="Relay routing", show_header=True, header_style="bold")
+    rtable.add_column("role", style="cyan", no_wrap=True)
+    rtable.add_column("model")
+    for role, resolved in routing_table(settings).items():
+        override = getattr(settings, f"{role.value}_model")
+        note = "" if override else "  [dim](= model)[/dim]"
+        rtable.add_row(str(role), f"{resolved}{note}")
+    console.print(rtable)
 
     ptable = Table(title="Providers", show_header=True, header_style="bold")
     ptable.add_column("provider", style="cyan", no_wrap=True)

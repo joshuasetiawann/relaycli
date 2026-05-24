@@ -123,6 +123,8 @@ class Agent:
         permissions: PermissionManager | None = None,
         registry: ToolRegistry | None = None,
         llm: LLM | None = None,
+        prompt_template: str | None = None,
+        model: str | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.console = console or Console()
@@ -132,18 +134,25 @@ class Agent:
         )
         self.registry = registry or default_registry()
         self.llm = llm or LLM(self.settings)
+        self._prompt_template = prompt_template or _SYSTEM_TEMPLATE
+        self._model_override = model
         self.tool_ctx = ToolContext(self.project, self.permissions, self.console)
         self._schemas = self.registry.schemas()
         self.session = Session(
             self._build_system_prompt(),
             token_budget=self.settings.token_budget,
-            model=self.settings.model,
+            model=self.model,
         )
+
+    @property
+    def model(self) -> str:
+        """The model this agent calls: its pinned override, else the live setting."""
+        return self._model_override or self.settings.model
 
     def _build_system_prompt(self) -> str:
         tools = "\n".join(f"- {t.name}: {t.description}" for t in self.registry.tools())
         mode = self.permissions.mode
-        return _SYSTEM_TEMPLATE.format(
+        return self._prompt_template.format(
             cwd=self.project.root,
             mode=mode,
             mode_desc=_MODE_DESCRIPTIONS.get(mode, ""),
@@ -153,7 +162,7 @@ class Agent:
     def refresh_system_prompt(self) -> None:
         """Rebuild the system prompt (e.g. after /mode or /model changes)."""
         self.session.system_prompt = self._build_system_prompt()
-        self.session.model = self.settings.model
+        self.session.model = self.model
 
     def run(self, request: str, *, reporter: Reporter | None = None) -> AgentResult:
         reporter = reporter or Reporter()
@@ -170,7 +179,7 @@ class Agent:
                 response = self.llm.complete(
                     self.session.to_messages(),
                     tools=self._schemas,
-                    model=self.settings.model,
+                    model=self.model,
                     on_token=reporter.assistant_token,
                 )
             except LLMError as exc:

@@ -17,6 +17,8 @@ from rich.syntax import Syntax
 if TYPE_CHECKING:  # avoid an import cycle (agent -> tools -> render -> agent)
     from relaycli.agent import AgentResult
     from relaycli.llm import ToolCall
+    from relaycli.relay import RelayResult
+    from relaycli.router import Role
     from relaycli.tools.base import ToolResult
 
 
@@ -58,7 +60,8 @@ def render_diff(console: Console, old: str, new: str, path: str) -> tuple[int, i
     return (added, removed)
 
 
-_STOP_STYLE = {"done": "green", "max_iterations": "yellow", "error": "red"}
+_STOP_STYLE = {"done": "green", "max_iterations": "yellow", "error": "red",
+               "review_exhausted": "yellow"}
 
 
 class RichReporter:
@@ -130,5 +133,61 @@ def render_task_summary(
         f"[dim]{result.iterations} steps · {result.tool_calls} tool calls"
         f"{tools_note} · {result.usage.total_tokens} tokens · "
         f"${result.usage.cost_usd:.6f} · {result.elapsed:.1f}s[/dim]"
+    )
+
+
+_ROLE_STYLE = {"planner": "cyan", "coder": "magenta", "reviewer": "yellow"}
+
+
+class RelayRichObserver:
+    """Rich presentation of a relay run: role banners + a reporter per role.
+
+    Implements the duck-typed RelayObserver protocol used by
+    :meth:`relaycli.relay.Relay.run` (role_start / reporter_for).
+    """
+
+    def __init__(self, console: Console) -> None:
+        self.console = console
+        self.reporters: list[tuple[str, RichReporter]] = []
+
+    def role_start(self, role: "Role", model: str, cycle: int) -> None:
+        style = _ROLE_STYLE.get(str(role), "white")
+        cycle_note = f" · cycle {cycle + 1}" if cycle else ""
+        self.console.print(
+            f"\n[bold {style}]◆ {role}[/bold {style}] [dim]{escape(model)}{cycle_note}[/dim]"
+        )
+
+    def reporter_for(self, role: "Role") -> RichReporter:
+        reporter = RichReporter(self.console)
+        self.reporters.append((str(role), reporter))
+        return reporter
+
+
+def render_relay_summary(console: Console, result: "RelayResult") -> None:
+    """Print the end-of-relay summary: notes, per-role lines, and totals."""
+    style = _STOP_STYLE.get(result.stopped_reason, "white")
+
+    # On non-done outcomes the final text was constructed, never streamed.
+    if result.stopped_reason != "done" and result.final_text:
+        console.print()
+        console.print(f"[{style}]{escape(result.final_text)}[/{style}]")
+
+    for note in result.notes:
+        console.print(f"[yellow]⚠ {escape(note)}[/yellow]")
+
+    console.print()
+    for run in result.role_runs:
+        r = run.result
+        role = str(run.role)
+        console.print(
+            f"[dim]{role:<9} {escape(run.model)} · {r.iterations} steps · "
+            f"{r.usage.total_tokens} tokens · ${r.usage.cost_usd:.6f}[/dim]"
+        )
+    verdict_note = f" · verdict {result.verdict}" if result.verdict else ""
+    console.print(
+        f"[{style}]■ {result.stopped_reason}[/{style}]  "
+        f"[dim]{result.cycles + 1} cycle(s){verdict_note} · "
+        f"{result.usage.total_tokens} tokens · ${result.usage.cost_usd:.6f} · "
+        f"{result.elapsed:.1f}s[/dim]"
     )
 
