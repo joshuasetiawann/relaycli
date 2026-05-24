@@ -154,6 +154,11 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("MISTRAL_API_KEY", "RELAYCLI_MISTRAL_API_KEY"),
     )
+    openrouter_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("OPENROUTER_API_KEY", "RELAYCLI_OPENROUTER_API_KEY"),
+        description="OpenRouter key; use with models like 'openrouter/anthropic/claude-3.5-sonnet'.",
+    )
     ollama_base_url: str = Field(
         default="http://localhost:11434",
         validation_alias=AliasChoices(
@@ -175,6 +180,7 @@ class Settings(BaseSettings):
             "gemini": bool(self.gemini_api_key),
             "groq": bool(self.groq_api_key),
             "mistral": bool(self.mistral_api_key),
+            "openrouter": bool(self.openrouter_api_key),
             "ollama": True,
         }
 

@@ -100,6 +100,15 @@ def test_credential_kwargs_missing_key(monkeypatch):
         llm._credential_kwargs("gpt-4o-mini")
 
 
+def test_credential_kwargs_openrouter(monkeypatch):
+    from relaycli.config import Settings
+
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
+    llm = LLM(Settings())
+    kwargs = llm._credential_kwargs("openrouter/openai/gpt-4o-mini")
+    assert kwargs == {"api_key": "sk-or-test"}
+
+
 def test_credential_kwargs_ollama_uses_base_url():
     from relaycli.config import Settings
 

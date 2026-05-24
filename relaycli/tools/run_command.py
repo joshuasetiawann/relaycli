@@ -34,11 +34,13 @@ _SENSITIVE_ENV: frozenset[str] = frozenset(
         "GOOGLE_API_KEY",
         "GROQ_API_KEY",
         "MISTRAL_API_KEY",
+        "OPENROUTER_API_KEY",
         "RELAYCLI_OPENAI_API_KEY",
         "RELAYCLI_ANTHROPIC_API_KEY",
         "RELAYCLI_GEMINI_API_KEY",
         "RELAYCLI_GROQ_API_KEY",
         "RELAYCLI_MISTRAL_API_KEY",
+        "RELAYCLI_OPENROUTER_API_KEY",
     }
 )
 

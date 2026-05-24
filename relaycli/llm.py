@@ -41,6 +41,7 @@ _PROVIDER_KEY_ATTR: dict[str, str] = {
     "gemini": "gemini_api_key",
     "groq": "groq_api_key",
     "mistral": "mistral_api_key",
+    "openrouter": "openrouter_api_key",
 }
 _KEYLESS_PROVIDERS = {"ollama", "ollama_chat"}
 

@@ -128,3 +128,34 @@ def test_render_task_summary():
 def test_make_unified_diff_no_trailing_newline():
     diff = make_unified_diff("a", "b", "f.txt")
     assert "-a" in diff and "+b" in diff
+
+
+class _Result:
+    def __init__(self, stopped_reason, final_text):
+        self.stopped_reason = stopped_reason
+        self.final_text = final_text
+        self.iterations = 1
+        self.tool_calls = 0
+        self.usage = Usage()
+        self.elapsed = 0.1
+
+
+def test_render_task_summary_shows_error_text():
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    render_task_summary(console, _Result("error", "LLM error: rate limited (429)"))
+    out = _out(console)
+    assert "LLM error: rate limited (429)" in out
+
+
+def test_render_task_summary_shows_max_iterations_text():
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    render_task_summary(console, _Result("max_iterations", "Stopped after the maximum of 25 iterations."))
+    assert "Stopped after the maximum" in _out(console)
+
+
+def test_render_task_summary_does_not_repeat_streamed_text():
+    # For a normal "done" run the final text was already streamed live;
+    # the summary must not print it a second time.
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    render_task_summary(console, _Result("done", "All finished, everything works."))
+    assert "All finished" not in _out(console)

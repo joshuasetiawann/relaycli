@@ -173,6 +173,18 @@ def test_run_command_scrubs_provider_keys(sample_project, monkeypatch):
     assert "ghp-should-remain" in res.output      # unrelated token preserved
 
 
+def test_run_command_scrubs_openrouter_keys(sample_project, monkeypatch):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-must-not-leak")
+    monkeypatch.setenv("RELAYCLI_OPENROUTER_API_KEY", "sk-or-alias-must-not-leak")
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    res = run_command(
+        RunCommandArgs(command='echo "A=$OPENROUTER_API_KEY B=$RELAYCLI_OPENROUTER_API_KEY"'), ctx
+    )
+    assert res.ok
+    assert "sk-or-must-not-leak" not in res.output
+    assert "sk-or-alias-must-not-leak" not in res.output
+
+
 # === M5: Ctrl-C mid-tool never leaves a dangling tool_call ===================
 class _BoomArgs(BaseModel):
     pass

@@ -109,6 +109,14 @@ def render_task_summary(
 ) -> None:
     """Print a clean end-of-task summary line."""
     style = _STOP_STYLE.get(result.stopped_reason, "white")
+
+    # On "done" the final text was already streamed token-by-token. On error /
+    # max_iterations it was only constructed, never shown — print it or the
+    # user gets a silent failure.
+    if result.stopped_reason != "done" and getattr(result, "final_text", ""):
+        console.print()
+        console.print(f"[{style}]{escape(result.final_text)}[/{style}]")
+
     tools_note = ""
     if tools_used:
         from collections import Counter
