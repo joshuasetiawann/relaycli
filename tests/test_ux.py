@@ -490,3 +490,159 @@ def test_prompt_text_shows_model_and_mode():
     repl.settings.relay_enabled = True
     repl.settings.model = "ollama_chat/llama3.1"
     assert repl._prompt_text() == "llama3.1 · suggest · relay › "
+
+
+# --- slash-command menu ------------------------------------------------
+def _completions(text: str):
+    from prompt_toolkit.document import Document
+
+    from relaycli.repl import SlashCompleter
+
+    doc = Document(text, cursor_position=len(text))
+    return list(SlashCompleter().get_completions(doc, None))
+
+
+def test_completer_slash_lists_every_command_with_meta():
+    comps = _completions("/")
+    texts = [c.text for c in comps]
+    for cmd in ("/model", "/mode", "/relay", "/diff", "/clear", "/help", "/exit"):
+        assert cmd in texts
+    # every entry carries a one-line description for the popup
+    assert all(c.display_meta for c in comps)
+
+
+def test_completer_prefix_filters():
+    assert [c.text for c in _completions("/mo")] == ["/model", "/mode"]
+    assert [c.text for c in _completions("/rel")] == ["/relay"]
+    assert _completions("/zzz") == []
+
+
+def test_completer_replaces_the_whole_token():
+    # Accepting /model from "/mo" must replace "/mo", not append to it.
+    (model, _mode) = _completions("/mo")
+    assert model.start_position == -len("/mo")
+
+
+def test_completer_mode_arguments():
+    assert [c.text for c in _completions("/mode ")] == [
+        "suggest", "auto-edit", "full-auto",
+    ]
+    assert [c.text for c in _completions("/mode a")] == ["auto-edit"]
+
+
+def test_completer_relay_arguments():
+    assert [c.text for c in _completions("/relay ")] == ["on", "off"]
+    assert [c.text for c in _completions("/relay o")] == ["on", "off"]
+
+
+def test_completer_model_arguments_are_curated_ids():
+    texts = [c.text for c in _completions("/model ")]
+    assert "gpt-4o-mini" in texts
+    assert "ollama_chat/llama3.1" in texts
+    # prefix-filtering works on the argument too
+    claude = [c.text for c in _completions("/model claude")]
+    assert claude and all(t.startswith("claude") for t in claude)
+
+
+def test_completer_only_first_argument_is_completed():
+    assert _completions("/mode suggest ") == []
+    assert _completions("/diff ") == []  # no arguments to offer
+
+
+def test_completer_plain_text_and_multiline_yield_nothing():
+    assert _completions("explain this repo") == []
+    assert _completions("") == []
+    assert _completions("hello /model") == []
+    # a pasted multiline buffer must never pop the menu
+    assert _completions("/model gpt-4o\nsecond line") == []
+
+
+def test_enter_applies_highlighted_completion_else_submits():
+    from types import SimpleNamespace
+
+    calls = []
+    completion = object()
+    buf_menu_open = SimpleNamespace(
+        complete_state=SimpleNamespace(current_completion=completion),
+        apply_completion=lambda c: calls.append(("apply", c)),
+        validate_and_handle=lambda: calls.append(("submit", None)),
+    )
+    Repl._submit_or_complete(buf_menu_open)
+    assert calls == [("apply", completion)]
+
+    calls.clear()
+    # menu open but nothing highlighted yet -> Enter submits
+    buf_no_highlight = SimpleNamespace(
+        complete_state=SimpleNamespace(current_completion=None),
+        apply_completion=lambda c: calls.append(("apply", c)),
+        validate_and_handle=lambda: calls.append(("submit", None)),
+    )
+    Repl._submit_or_complete(buf_no_highlight)
+    assert calls == [("submit", None)]
+
+    calls.clear()
+    buf_no_menu = SimpleNamespace(
+        complete_state=None,
+        apply_completion=lambda c: calls.append(("apply", c)),
+        validate_and_handle=lambda: calls.append(("submit", None)),
+    )
+    Repl._submit_or_complete(buf_no_menu)
+    assert calls == [("submit", None)]
+
+
+def test_toolbar_shows_live_session_status():
+    repl, _ = _hermetic_repl(model="gpt-4o-mini")
+    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help "
+    repl.settings.relay_enabled = True
+    repl.settings.permission_mode = PermissionMode.full_auto
+    assert repl._toolbar() == " gpt-4o-mini · full-auto · relay on · /help "
+
+
+# --- instant startup (lazy LiteLLM) ----------------------------------------
+def test_startup_does_not_import_litellm():
+    # The whole point of the lazy import: banner/preflight/config must not
+    # pay the litellm import cost. Fresh interpreter, so sys.modules is clean.
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; import relaycli.cli, relaycli.repl, relaycli.llm; "
+        "from relaycli.llm import preflight_settings, key_status; "
+        "from relaycli.config import Settings; "
+        "s = Settings(_env_file=None, OPENAI_API_KEY=None); "
+        "preflight_settings(s); key_status(s); "
+        "assert 'litellm' not in sys.modules, 'litellm imported at startup'"
+    )
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stderr
+
+
+def test_fast_resolver_matches_managed_providers():
+    from relaycli.llm import _resolve_provider
+
+    assert _resolve_provider("gpt-4o-mini") == "openai"
+    assert _resolve_provider("o3-mini") == "openai"
+    assert _resolve_provider("claude-3-5-sonnet-latest") == "anthropic"
+    assert _resolve_provider("gemini-1.5-pro") == "gemini"
+    assert _resolve_provider("mistral-large-latest") == "mistral"
+    assert _resolve_provider("groq/llama-3.3-70b-versatile") == "groq"
+    assert _resolve_provider("openrouter/meta-llama/llama-3-70b") == "openrouter"
+    assert _resolve_provider("ollama_chat/llama3.1") == "ollama_chat"
+    assert _resolve_provider("some-unknown-model") is None
+    assert _resolve_provider("fake/model") is None
+
+
+def test_preflight_openrouter_prefix_named_var():
+    from relaycli.llm import LLM
+
+    s = _hermetic(model="openrouter/meta-llama/llama-3-70b")
+    problem = LLM(s).preflight()
+    assert problem is not None and "OPENROUTER_API_KEY" in problem
+
+
+def test_key_status_bare_claude_model():
+    from relaycli.llm import key_status
+
+    assert key_status(_hermetic(model="claude-3-5-sonnet-latest")) == "missing"
+    assert key_status(_hermetic(model="claude-3-5-sonnet-latest",
+                                ANTHROPIC_API_KEY="sk-ant")) == "detected"

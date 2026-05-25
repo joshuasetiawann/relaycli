@@ -320,8 +320,13 @@ def test_ensure_config_dir_is_private(tmp_path, monkeypatch):
 def test_normalize_empty_choices_raises_llmerror(monkeypatch):
     import relaycli.llm as llm_mod
 
+    # Patch the lazy-import seam: litellm is no longer a module attribute.
     monkeypatch.setattr(
-        llm_mod.litellm, "completion", lambda **kw: SimpleNamespace(choices=[], usage=None)
+        llm_mod, "_litellm",
+        SimpleNamespace(
+            completion=lambda **kw: SimpleNamespace(choices=[], usage=None),
+            get_llm_provider=lambda model: (model, "ollama_chat", None, None),
+        ),
     )
     llm = LLM(Settings(model="ollama_chat/llama3"))
     with pytest.raises(LLMError):
@@ -337,7 +342,14 @@ def test_streaming_requests_include_usage(monkeypatch):
         captured.update(kwargs)
         return iter([SimpleNamespace(choices=None, usage=None)])
 
-    monkeypatch.setattr(llm_mod.litellm, "completion", fake_completion)
+    # Patch the lazy-import seam: litellm is no longer a module attribute.
+    monkeypatch.setattr(
+        llm_mod, "_litellm",
+        SimpleNamespace(
+            completion=fake_completion,
+            get_llm_provider=lambda model: (model, "ollama_chat", None, None),
+        ),
+    )
     llm = LLM(Settings(model="ollama_chat/llama3"))
     llm.complete([{"role": "user", "content": "hi"}], stream=True)
     assert captured.get("stream") is True

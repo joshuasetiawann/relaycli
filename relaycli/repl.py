@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
@@ -22,7 +23,7 @@ from rich.syntax import Syntax
 from relaycli.agent import Agent
 from relaycli.config import CONFIG_DIR, PermissionMode, Settings, ensure_config_dir
 from relaycli.context import ProjectContext
-from relaycli.llm import key_status, preflight_settings
+from relaycli.llm import is_warm, key_status, preflight_settings
 from relaycli.permissions import PermissionManager
 from relaycli.render import (
     RichReporter,
@@ -32,6 +33,72 @@ from relaycli.render import (
     render_welcome,
     short_model_name,
 )
+
+
+# The slash menu's source of truth: command -> (argument hint, description).
+# Keep descriptions in step with render_help() — same commands, shorter text
+# (the popup gives each entry one line).
+SLASH_COMMANDS: dict[str, tuple[str, str]] = {
+    "model": ("[name]", "show or switch the model"),
+    "mode": ("[m]", "permission mode: suggest | auto-edit | full-auto"),
+    "relay": ("[on|off]", "toggle the Planner → Coder → Reviewer pipeline"),
+    "diff": ("", "show uncommitted changes (git diff)"),
+    "clear": ("", "reset the conversation"),
+    "help": ("", "show all commands and keys"),
+    "exit": ("", "quit (aliases: exit, quit, Ctrl-D)"),
+    "quit": ("", "quit (alias of /exit)"),
+}
+
+# First-argument suggestions. /model offers curated common ids — completion
+# candidates only, not a whitelist: any id can still be typed in full.
+_ARG_COMPLETIONS: dict[str, tuple[str, ...]] = {
+    "mode": ("suggest", "auto-edit", "full-auto"),
+    "relay": ("on", "off"),
+    "model": (
+        "gpt-4o",
+        "gpt-4o-mini",
+        "o3-mini",
+        "claude-3-5-sonnet-latest",
+        "claude-3-5-haiku-latest",
+        "gemini-1.5-pro",
+        "gemini-1.5-flash",
+        "groq/llama-3.3-70b-versatile",
+        "mistral-large-latest",
+        "openrouter/anthropic/claude-3.5-sonnet",
+        "ollama_chat/llama3.1",
+    ),
+}
+
+
+class SlashCompleter(Completer):
+    """Claude Code-style popup: type ``/`` and the commands appear.
+
+    Completes only two shapes — a command name being typed at the start of
+    the line, and that command's first argument. Plain text and multiline
+    buffers (pastes) yield nothing, so the menu never pops mid-request.
+    """
+
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if "\n" in document.text or not text.startswith("/"):
+            return
+        head, sep, arg = text[1:].partition(" ")
+        if not sep:  # still typing the command name: filter by prefix
+            for name, (hint, desc) in SLASH_COMMANDS.items():
+                if name.startswith(head.lower()):
+                    display = f"/{name} {hint}".rstrip()
+                    yield Completion(
+                        "/" + name,
+                        start_position=-len(text),
+                        display=display,
+                        display_meta=desc,
+                    )
+            return
+        if " " in arg:  # only the first argument is completable
+            return
+        for option in _ARG_COMPLETIONS.get(head.lower(), ()):
+            if option.startswith(arg):
+                yield Completion(option, start_position=-len(arg))
 
 
 class Repl:
@@ -95,13 +162,47 @@ class Repl:
 
         @kb.add("enter")
         def _submit(event) -> None:
-            event.current_buffer.validate_and_handle()
+            self._submit_or_complete(event.current_buffer)
 
         @kb.add("escape", "enter")
         def _newline(event) -> None:
             event.current_buffer.insert_text("\n")
 
-        return PromptSession(history=history, key_bindings=kb, multiline=True)
+        return PromptSession(
+            history=history,
+            key_bindings=kb,
+            multiline=True,
+            completer=SlashCompleter(),
+            complete_while_typing=True,
+            bottom_toolbar=self._toolbar,
+        )
+
+    @staticmethod
+    def _submit_or_complete(buffer) -> None:
+        """Enter accepts the highlighted completion when the menu is open,
+        and submits otherwise — matches Claude Code muscle memory. A menu
+        that is open but has no highlighted entry does not swallow Enter.
+        """
+        state = buffer.complete_state
+        if state and state.current_completion:
+            buffer.apply_completion(state.current_completion)
+            return
+        buffer.validate_and_handle()
+
+    def _toolbar(self) -> str:
+        """Live status line at the bottom of the terminal.
+
+        Rendered by prompt_toolkit per keystroke, so /model, /mode and
+        /relay changes show up on the very next prompt.
+        """
+        relay = "relay on" if self.settings.relay_enabled else "relay off"
+        parts = (
+            short_model_name(self.settings.model),
+            str(self.settings.permission_mode),
+            relay,
+            "/help",
+        )
+        return " " + " · ".join(parts) + " "
 
     def _prompt_text(self) -> str:
         parts = [short_model_name(self.settings.model), str(self.settings.permission_mode)]
@@ -203,10 +304,19 @@ class Repl:
         self.console.print(f"[{style}]↳ exit {proc.returncode}[/{style}]")
 
     # -- running a task --------------------------------------------------
+    def _warm_note(self) -> None:
+        # LiteLLM is imported lazily on the first model call and that import
+        # can take a long time from a cold disk; say so or it reads as a hang.
+        if not is_warm():
+            self.console.print(
+                "[dim]loading provider libraries — the first call can take a while…[/dim]"
+            )
+
     def _run_agent(self, request: str) -> None:
         if self.settings.relay_enabled:
             self._run_relay(request)
             return
+        self._warm_note()
         reporter = RichReporter(self.console)
         try:
             result = self.agent.run(request, reporter=reporter)
@@ -219,6 +329,8 @@ class Repl:
     def _run_relay(self, request: str) -> None:
         from relaycli.relay import Relay
         from relaycli.render import RelayRichObserver, render_relay_summary
+
+        self._warm_note()
 
         # A fresh Relay per request is by design: each request is a fresh
         # pipeline (the constructor is cheap; roles are built per run).

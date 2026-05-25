@@ -104,7 +104,11 @@ wasn't, a setup panel lists the exact fixes (it doesn't block the session).
 | `/exit` | quit (also `exit`, `quit`, Ctrl-D) |
 | `!<cmd>` | run a shell command in the project root (e.g. `!git status`) |
 
-Enter submits; Alt+Enter inserts a newline; Ctrl-C clears the line. Typing a
+Typing `/` pops a menu of every command with its description — keep typing to
+filter (`/mo` → `/model`, `/mode`), and `/mode `, `/relay `, `/model ` suggest
+their arguments. Enter accepts the highlighted entry when the menu is open and
+submits otherwise; Alt+Enter inserts a newline; Ctrl-C clears the line. A
+status bar at the bottom shows the live `model · mode · relay` state. Typing a
 `-flag` in the REPL prints a hint instead of sending it to the model — flags
 belong on the `relaycli` command line.
 

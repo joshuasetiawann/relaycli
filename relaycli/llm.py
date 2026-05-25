@@ -23,16 +23,35 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Sequence
 
-import litellm
-
 from relaycli.config import Settings, get_settings
 
-# Keep LiteLLM quiet and well-behaved:
-# - drop_params: silently drop params a given provider doesn't support
-# - telemetry off: never phone home (privacy / no surprise network calls)
-litellm.drop_params = True
-litellm.telemetry = False
-litellm.suppress_debug_info = True
+_litellm: Any = None
+
+
+def _lazy_litellm() -> Any:
+    """Import LiteLLM on first real use, configured once.
+
+    The import pulls in the whole litellm/openai module tree — tens of
+    seconds from a cold disk — so it must never run at startup: the banner,
+    preflight, and `relaycli config` all stay import-free. Configuration:
+    drop_params silently drops params a provider doesn't support; telemetry
+    off means never phone home.
+    """
+    global _litellm
+    if _litellm is None:
+        import litellm
+
+        litellm.drop_params = True
+        litellm.telemetry = False
+        litellm.suppress_debug_info = True
+        _litellm = litellm
+    return _litellm
+
+
+def is_warm() -> bool:
+    """True once LiteLLM has been imported (i.e. a model call has started)."""
+    return _litellm is not None
+
 
 # LiteLLM provider id -> the Settings attribute holding that provider's key.
 _PROVIDER_KEY_ATTR: dict[str, str] = {
@@ -44,6 +63,39 @@ _PROVIDER_KEY_ATTR: dict[str, str] = {
     "openrouter": "openrouter_api_key",
 }
 _KEYLESS_PROVIDERS = {"ollama", "ollama_chat"}
+
+# Model-id -> provider fast path for the no-network checks (preflight,
+# key_status). Deliberately tiny and permissive: anything unrecognized
+# returns None ("make no claim") and the real call path — which uses
+# LiteLLM's full resolver — stays authoritative. Kept in sync with
+# _PROVIDER_KEY_ATTR/_KEYLESS_PROVIDERS above.
+_PREFIX_PROVIDERS = {
+    "openai", "anthropic", "gemini", "groq", "mistral", "openrouter",
+    "ollama", "ollama_chat",
+}
+_BARE_NAME_HINTS = (
+    ("gpt-", "openai"),
+    ("chatgpt-", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("o4", "openai"),
+    ("claude-", "anthropic"),
+    ("gemini-", "gemini"),
+    ("mistral-", "mistral"),
+    ("ministral-", "mistral"),
+    ("codestral-", "mistral"),
+)
+
+
+def _resolve_provider(model: str) -> str | None:
+    """Cheap model-id -> provider mapping; None when we can't tell."""
+    head, sep, _ = model.partition("/")
+    if sep and head in _PREFIX_PROVIDERS:
+        return head
+    for prefix, provider in _BARE_NAME_HINTS:
+        if model.startswith(prefix):
+            return provider
+    return None
 
 
 class LLMError(RuntimeError):
@@ -83,12 +135,12 @@ def key_status(settings: Settings, model: str | None = None) -> str | None:
     Returns ``"detected"`` / ``"missing"`` / ``"not needed"``, or None when
     this module doesn't manage the provider's key (unknown/custom providers
     may be configured through LiteLLM's own env) — callers should then make
-    no claim about credentials.
+    no claim about credentials. Uses the no-import fast resolver so banners
+    stay instant; the real call path is the authority.
     """
     model = model or settings.model
-    try:
-        _, provider, _, _ = litellm.get_llm_provider(model)
-    except Exception:
+    provider = _resolve_provider(model)
+    if provider is None:
         return None
     if provider in _KEYLESS_PROVIDERS:
         return "not needed"
@@ -250,7 +302,7 @@ class LLM:
         Raises :class:`LLMError` for an unknown model or a missing key.
         """
         try:
-            _, provider, _, _ = litellm.get_llm_provider(model)
+            _, provider, _, _ = _lazy_litellm().get_llm_provider(model)
         except Exception as exc:  # unknown/malformed model id
             raise LLMError(
                 f"Could not determine a provider for model '{model}'. "
@@ -274,16 +326,15 @@ class LLM:
     def preflight(self, model: str | None = None) -> str | None:
         """Return the credential problem for ``model``, or None if runnable.
 
-        A no-network check so UIs can warn at startup instead of failing on
-        the first request. Only providers this module manages keys for are
-        judged: unknown/custom providers pass (LiteLLM may resolve their own
-        env), and so does an unrecognizable model id (the real call surfaces
-        that error with full context).
+        A no-network, no-import check so UIs can warn at startup instead of
+        failing on the first request. Only providers this module manages keys
+        for are judged: unknown/custom providers pass (LiteLLM may resolve
+        their own env), and so does an unrecognizable model id (the real call
+        surfaces that error with full context).
         """
         model = model or self.settings.model
-        try:
-            _, provider, _, _ = litellm.get_llm_provider(model)
-        except Exception:
+        provider = _resolve_provider(model)
+        if provider is None:
             return None
         if provider in _KEYLESS_PROVIDERS:
             return None
@@ -294,7 +345,7 @@ class LLM:
 
     def _complete_blocking(self, call_args: dict[str, Any], model: str) -> LLMResponse:
         try:
-            resp = litellm.completion(**call_args)
+            resp = _lazy_litellm().completion(**call_args)
             # Normalize inside the try so a malformed/empty response is surfaced
             # as a clean LLMError, not a raw traceback (the module's contract).
             return self._normalize(resp, model)
@@ -314,7 +365,7 @@ class LLM:
         call_args = {**call_args, "stream": True, "stream_options": {"include_usage": True}}
         chunks: list[Any] = []
         try:
-            for chunk in litellm.completion(**call_args):
+            for chunk in _lazy_litellm().completion(**call_args):
                 chunks.append(chunk)
                 content = _chunk_text(chunk)
                 if content and on_token is not None:
@@ -413,15 +464,15 @@ class LLM:
             )
             pt = ct = tt = 0
             try:
-                pt = int(litellm.token_counter(model=model, messages=messages) or 0)
-                ct = int(litellm.token_counter(model=model, text=completion) or 0) if completion else 0
+                pt = int(_lazy_litellm().token_counter(model=model, messages=messages) or 0)
+                ct = int(_lazy_litellm().token_counter(model=model, text=completion) or 0) if completion else 0
                 tt = pt + ct
             except Exception:
                 pass
         cost = 0.0
         if tt:
             try:
-                pc, cc = litellm.cost_per_token(
+                pc, cc = _lazy_litellm().cost_per_token(
                     model=model, prompt_tokens=pt, completion_tokens=ct
                 )
                 cost = float((pc or 0.0) + (cc or 0.0))
@@ -461,7 +512,7 @@ class LLM:
         tt = int(getattr(u, "total_tokens", 0) or (pt + ct))
         cost = 0.0
         try:
-            cost = float(litellm.completion_cost(completion_response=resp) or 0.0)
+            cost = float(_lazy_litellm().completion_cost(completion_response=resp) or 0.0)
         except Exception:
             cost = 0.0  # local/unknown-priced models have no cost data
         return Usage(prompt_tokens=pt, completion_tokens=ct, total_tokens=tt, cost_usd=cost)
@@ -496,7 +547,7 @@ def count_tokens(messages: Sequence[dict[str, Any]], model: str) -> int:
     unavailable.
     """
     try:
-        return int(litellm.token_counter(model=model, messages=list(messages)) or 0)
+        return int(_lazy_litellm().token_counter(model=model, messages=list(messages)) or 0)
     except Exception:
         chars = 0
         for m in messages:
