@@ -103,6 +103,68 @@ def test_slash_diff_no_crash():
 
 
 # --- rendering ---------------------------------------------------------
+def test_rich_reporter_tool_lines_have_claude_shape():
+    # Two-line outcome: "⏺ tool_name" then an indented "⎿  summary".
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    reporter = RichReporter(console)
+    call = ToolCall(id="c1", name="edit_file", arguments="{}")
+    reporter.tool_end(call, ToolResult(ok=True, output="ok", summary="edit app.py (+2 -1)"))
+    reporter.tool_end(
+        ToolCall(id="c2", name="run_command", arguments="{}"),
+        ToolResult(ok=False, output="boom", summary="run pytest → exit 1"),
+    )
+    out = _out(console)
+    assert "⏺ edit_file" in out
+    assert "⏺ run_command" in out
+    assert out.count("⎿") == 2
+    # the summary sits on the ⎿ line, not glued to the tool name
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    assert any(l.startswith("⎿") and "edit app.py (+2 -1)" in l for l in lines)
+
+
+def test_rich_reporter_tool_error_shape():
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    reporter = RichReporter(console)
+    reporter.tool_end(ToolCall(id="c1", name="read_file", arguments="{}"), None)
+    out = _out(console)
+    assert "⏺ read_file" in out and "error" in out
+
+
+def test_assistant_blocks_get_one_bullet_each():
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    reporter = RichReporter(console)
+    reporter.assistant_token("Hello ")
+    reporter.assistant_token("world")
+    reporter.assistant_end()
+    reporter.assistant_token("Again")
+    reporter.assistant_end()
+    out = _out(console)
+    assert "⏺ Hello world" in out
+    assert "⏺ Again" in out
+    assert out.count("⏺") == 2
+
+
+def test_reporter_no_spinner_frames_on_non_terminal():
+    # StringIO consoles (tests, pipes) must get plain output only — the
+    # working spinner is strictly terminal-only.
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    reporter = RichReporter(console)
+    reporter.iteration(1)
+    reporter.assistant_token("hi")
+    reporter.assistant_end()
+    reporter.close()
+    out = _out(console)
+    assert "working" not in out
+    assert "⏺ hi" in out
+
+
+def test_reporter_close_is_idempotent():
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    reporter = RichReporter(console)
+    reporter.close()
+    reporter.close()
+
+
 def test_rich_reporter_activity_lines():
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     reporter = RichReporter(console)
@@ -484,12 +546,22 @@ def test_banner_long_cwd_is_folded_not_truncated(monkeypatch, tmp_path):
     assert "project-checkout-dir" in flat
 
 
-def test_prompt_text_shows_model_and_mode():
+def test_prompt_is_minimal_caret():
+    # Claude Code-style: the prompt is a bare accent caret; the session
+    # status (model · mode · relay) lives in the bottom toolbar instead.
     repl, _ = _hermetic_repl(model="gpt-4o-mini")
-    assert repl._prompt_text() == "gpt-4o-mini · suggest › "
+    assert repl._prompt_text() == [("class:prompt", "❯ ")]
+    # ... and stays static when the session state changes
     repl.settings.relay_enabled = True
     repl.settings.model = "ollama_chat/llama3.1"
-    assert repl._prompt_text() == "llama3.1 · suggest · relay › "
+    assert repl._prompt_text() == [("class:prompt", "❯ ")]
+
+
+def test_banner_has_claude_style_welcome():
+    repl, console = _hermetic_repl(model="ollama_chat/llama3.1")
+    repl._print_banner()
+    out = _out(console)
+    assert "✻ Welcome to RelayCLI" in out
 
 
 # --- slash-command menu ------------------------------------------------
@@ -542,6 +614,20 @@ def test_completer_model_arguments_are_curated_ids():
     # prefix-filtering works on the argument too
     claude = [c.text for c in _completions("/model claude")]
     assert claude and all(t.startswith("claude") for t in claude)
+
+
+def test_completer_openrouter_suggestions_are_open_source_only():
+    # Per the 2026-07-03 spec: everything suggested behind the openrouter/
+    # prefix must be an open-weights model (verified against the live API),
+    # and at least one :free variant is offered for keyless-budget users.
+    openrouter = [
+        c.text for c in _completions("/model ") if c.text.startswith("openrouter/")
+    ]
+    assert openrouter, "curated list must keep openrouter entries"
+    closed = ("openrouter/anthropic/", "openrouter/openai/gpt-4", "openrouter/openai/o")
+    assert not [t for t in openrouter if t.startswith(closed)]
+    assert any(t.endswith(":free") for t in openrouter)
+    assert "openrouter/qwen/qwen3-coder:free" in openrouter
 
 
 def test_completer_only_first_argument_is_completed():

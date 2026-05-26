@@ -66,25 +66,61 @@ def render_diff(console: Console, old: str, new: str, path: str) -> tuple[int, i
     return (added, removed)
 
 
+# Claude Code's brand accent — used for the welcome chrome and the prompt.
+CLAUDE_ACCENT = "#D97757"
+
 _STOP_STYLE = {"done": "green", "max_iterations": "yellow", "error": "red",
                "review_exhausted": "yellow"}
 
 
 class RichReporter:
-    """Rich presentation of an agent run.
+    """Rich presentation of an agent run, in Claude Code's visual language.
 
     Implements the duck-typed Reporter protocol used by :meth:`Agent.run`
     (assistant_token / assistant_end / tool_start / tool_end / iteration). The
     agent and tool logic are untouched; this only renders.
+
+    A dim "working…" spinner runs while waiting on the model: started at each
+    loop iteration (right before the LLM call) and stopped before any output —
+    first streamed token or first tool event — so it is never live while a
+    tool executes (tools print diffs and permission prompts). Terminal-only;
+    non-tty consoles get plain output. Callers should ``close()`` in a
+    ``finally`` so an LLM error or Ctrl-C never leaves the spinner running.
     """
 
     def __init__(self, console: Console) -> None:
         self.console = console
         self._streaming = False
         self.tools_used: list[str] = []
+        self._status = None
+
+    # -- working spinner ---------------------------------------------------
+    def _spin(self) -> None:
+        if self._status is not None or not self.console.is_terminal:
+            return
+        self._status = self.console.status(
+            "[dim]working… (ctrl-c to interrupt)[/dim]", spinner="dots"
+        )
+        self._status.start()
+
+    def _unspin(self) -> None:
+        if self._status is not None:
+            self._status.stop()
+            self._status = None
+
+    def close(self) -> None:
+        """Idempotent cleanup: make sure no live spinner outlives the run."""
+        self._unspin()
+
+    # -- reporter protocol ---------------------------------------------------
+    def iteration(self, n: int) -> None:
+        self._spin()
 
     def assistant_token(self, text: str) -> None:
         # Write raw so model text containing brackets isn't parsed as markup.
+        if not self._streaming:
+            self._unspin()
+            self.console.file.write("⏺ ")  # one bullet per assistant block
         self.console.file.write(text)
         self.console.file.flush()
         self._streaming = True
@@ -97,20 +133,18 @@ class RichReporter:
 
     def tool_start(self, call: "ToolCall") -> None:
         # The tool itself shows diffs / the command line; the compact outcome
-        # line is printed at tool_end once the result is known.
-        pass
+        # lines are printed at tool_end once the result is known.
+        self._unspin()
 
     def tool_end(self, call: "ToolCall", result: "ToolResult | None") -> None:
         self.tools_used.append(call.name)
-        if result is None:
-            self.console.print(f"[red]●[/red] {escape(call.name)} [red](error)[/red]")
-            return
-        icon = "[green]●[/green]" if result.ok else "[red]●[/red]"
+        self._unspin()
+        ok = result is not None and result.ok
+        dot = "[green]⏺[/green]" if ok else "[red]⏺[/red]"
         # Escape: summaries can embed model-controlled text (commands, paths).
-        self.console.print(f"{icon} {escape(result.summary or call.name)}")
-
-    def iteration(self, n: int) -> None:
-        pass
+        self.console.print(f"{dot} [bold]{escape(call.name)}[/bold]")
+        outcome = "error" if result is None else (result.summary or call.name)
+        self.console.print(f"  [dim]⎿  {escape(outcome)}[/dim]")
 
 
 def render_task_summary(
@@ -168,6 +202,11 @@ class RelayRichObserver:
         self.reporters.append((str(role), reporter))
         return reporter
 
+    def close(self) -> None:
+        """Stop any spinner a role's reporter may have left live (idempotent)."""
+        for _, reporter in self.reporters:
+            reporter.close()
+
 
 def render_setup_panel(console: Console, problem: str, detected: dict[str, bool]) -> None:
     """Actionable guidance when the configured model has no usable credential."""
@@ -185,8 +224,10 @@ def render_setup_panel(console: Console, problem: str, detected: dict[str, bool]
     if have:
         lines.append("")
         lines.append(f"Keys already detected: {escape(', '.join(have))} — pick one of their models with /model.")
+    # Quiet chrome: the ⚠ problem line inside is already yellow — a loud
+    # yellow border on top of it reads as two warnings.
     console.print(Panel("\n".join(lines), title="setup needed", title_align="left",
-                        border_style="yellow", expand=False))
+                        border_style="dim", expand=False))
 
 
 def short_model_name(model: str) -> str:
@@ -246,6 +287,11 @@ def render_welcome(
     # fold: long values (deep cwd paths) wrap instead of being ellipsized —
     # truncating the very info the banner exists to show helps no one.
     grid.add_column(overflow="fold")
+    grid.add_row(
+        "", f"[bold {CLAUDE_ACCENT}]✻[/bold {CLAUDE_ACCENT}] Welcome to "
+            f"[bold]RelayCLI[/bold] [dim]v{__version__}[/dim]!"
+    )
+    grid.add_row("", "")
     grid.add_row("cwd", escape(str(root)))
     grid.add_row("model", model_cell)
     grid.add_row("mode", mode_cell)
@@ -253,15 +299,7 @@ def render_welcome(
     grid.add_row("", "")
     grid.add_row("", '[dim]Type a request in plain words — e.g. "explain this repo".[/dim]')
     grid.add_row("", "[dim]/help commands · !cmd shell · Ctrl-D quit[/dim]")
-    console.print(
-        Panel(
-            grid,
-            title=f"[bold cyan]RelayCLI[/bold cyan] [dim]v{__version__}[/dim]",
-            title_align="left",
-            border_style="cyan",
-            expand=False,
-        )
-    )
+    console.print(Panel(grid, border_style=CLAUDE_ACCENT, expand=False))
 
 
 def render_status_line(

@@ -183,7 +183,7 @@ class Settings(BaseSettings):
     openrouter_api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("OPENROUTER_API_KEY", "RELAYCLI_OPENROUTER_API_KEY"),
-        description="OpenRouter key; use with models like 'openrouter/anthropic/claude-3.5-sonnet'.",
+        description="OpenRouter key; use with models like 'openrouter/qwen/qwen3-coder:free'.",
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434",

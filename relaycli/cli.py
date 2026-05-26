@@ -129,6 +129,8 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted.[/yellow]")
             raise typer.Exit(code=130)
+        finally:
+            observer.close()  # an error/Ctrl-C must not leave a spinner live
         render_relay_summary(console, relay_result)
         if relay_result.stopped_reason == "error":
             raise typer.Exit(code=1)
@@ -142,6 +144,8 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     except KeyboardInterrupt:
         console.print("\n[yellow]Interrupted.[/yellow]")
         raise typer.Exit(code=130)
+    finally:
+        reporter.close()  # an error/Ctrl-C must not leave the spinner live
 
     render_task_summary(console, result, reporter.tools_used)
     if result.stopped_reason == "error":

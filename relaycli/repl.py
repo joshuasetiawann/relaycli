@@ -16,6 +16,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style
 from rich.console import Console
 from rich.markup import escape
 from rich.syntax import Syntax
@@ -64,10 +65,36 @@ _ARG_COMPLETIONS: dict[str, tuple[str, ...]] = {
         "gemini-1.5-flash",
         "groq/llama-3.3-70b-versatile",
         "mistral-large-latest",
-        "openrouter/anthropic/claude-3.5-sonnet",
+        # OpenRouter suggestions are open-weights only (user preference;
+        # verified against the live /models API 2026-07-03 — all have public
+        # HF weights + tool support). :free variants cost nothing but share
+        # capacity and can be rate-limited.
+        "openrouter/cohere/north-mini-code:free",
+        "openrouter/qwen/qwen3-coder:free",
+        "openrouter/qwen/qwen3-coder-next",
+        "openrouter/deepseek/deepseek-v4-flash",
+        "openrouter/z-ai/glm-4.7",
+        "openrouter/moonshotai/kimi-k2.6",
+        "openrouter/openai/gpt-oss-120b:free",
         "ollama_chat/llama3.1",
     ),
 }
+
+
+# Claude Code-ish chrome: orange caret, quiet gray toolbar (no reverse
+# video), dark completion menu with a subtle selection highlight.
+_PT_STYLE = Style.from_dict(
+    {
+        "prompt": "#D97757 bold",
+        "bottom-toolbar": "noreverse fg:#808080 bg:default",
+        "completion-menu": "bg:#1c1c1c fg:#b8b8b8",
+        "completion-menu.completion.current": "bg:#3a3a3a fg:#ffffff",
+        "completion-menu.meta.completion": "bg:#1c1c1c fg:#6a6a6a",
+        "completion-menu.meta.completion.current": "bg:#3a3a3a fg:#b8b8b8",
+        "scrollbar.background": "bg:#1c1c1c",
+        "scrollbar.button": "bg:#3a3a3a",
+    }
+)
 
 
 class SlashCompleter(Completer):
@@ -175,6 +202,7 @@ class Repl:
             completer=SlashCompleter(),
             complete_while_typing=True,
             bottom_toolbar=self._toolbar,
+            style=_PT_STYLE,
         )
 
     @staticmethod
@@ -204,11 +232,10 @@ class Repl:
         )
         return " " + " · ".join(parts) + " "
 
-    def _prompt_text(self) -> str:
-        parts = [short_model_name(self.settings.model), str(self.settings.permission_mode)]
-        if self.settings.relay_enabled:
-            parts.append("relay")
-        return " · ".join(parts) + " › "
+    def _prompt_text(self) -> list[tuple[str, str]]:
+        # A bare Claude-style caret: the session status (model · mode ·
+        # relay) lives in the bottom toolbar, so the prompt stays minimal.
+        return [("class:prompt", "❯ ")]
 
     def _print_banner(self) -> None:
         render_welcome(
@@ -323,6 +350,8 @@ class Repl:
         except KeyboardInterrupt:
             self.console.print("\n[yellow]Interrupted — back to prompt.[/yellow]")
             return
+        finally:
+            reporter.close()  # an error/Ctrl-C must not leave the spinner live
         render_task_summary(self.console, result, reporter.tools_used)
         self._maybe_setup_hint(result)
 
@@ -344,6 +373,8 @@ class Repl:
         except KeyboardInterrupt:
             self.console.print("\n[yellow]Interrupted — back to prompt.[/yellow]")
             return
+        finally:
+            observer.close()  # an error/Ctrl-C must not leave a spinner live
         render_relay_summary(self.console, result)
         self._maybe_setup_hint(result)
 
