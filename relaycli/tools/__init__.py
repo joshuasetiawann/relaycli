@@ -143,7 +143,10 @@ class ToolRegistry:
 def default_registry() -> ToolRegistry:
     """Build a fresh registry containing all real RelayCLI coding tools."""
     from relaycli.tools import (  # local import avoids import cycles
+        background as _background,
         edit_file as _edit_file,
+        find_files as _find_files,
+        list_dir as _list_dir,
         read_file as _read_file,
         run_command as _run_command,
         search as _search,
@@ -151,7 +154,8 @@ def default_registry() -> ToolRegistry:
     )
 
     reg = ToolRegistry()
-    for module in (_read_file, _search, _write_file, _edit_file, _run_command):
+    for module in (_list_dir, _find_files, _read_file, _search, _write_file,
+                   _edit_file, _run_command, _background):
         module.register(reg)
     return reg
 
@@ -162,10 +166,15 @@ def planner_registry() -> ToolRegistry:
     Enforcement is by construction: the write/run tools are simply not
     registered, so the model cannot call them no matter what it emits.
     """
-    from relaycli.tools import read_file as _read_file, search as _search
+    from relaycli.tools import (
+        find_files as _find_files,
+        list_dir as _list_dir,
+        read_file as _read_file,
+        search as _search,
+    )
 
     reg = ToolRegistry()
-    for module in (_read_file, _search):
+    for module in (_list_dir, _find_files, _read_file, _search):
         module.register(reg)
     return reg
 
@@ -176,14 +185,19 @@ def reviewer_registry() -> ToolRegistry:
     run_command still goes through the PermissionManager like everywhere else.
     """
     from relaycli.tools import (
+        find_files as _find_files,
+        list_dir as _list_dir,
         read_file as _read_file,
         run_command as _run_command,
         search as _search,
     )
 
     reg = ToolRegistry()
-    for module in (_read_file, _search, _run_command):
+    for module in (_list_dir, _find_files, _read_file, _search, _run_command):
         module.register(reg)
+    from relaycli.tools import background as _background
+
+    _background.register_check_only(reg)
     return reg
 
 

@@ -75,6 +75,8 @@ How to work:
 - Inspect before changing: use read_file / search to understand the code first.
 - Use edit_file for targeted changes and write_file to create or fully replace
   a file. Use run_command to run tests or builds.
+- Use run_background for anything that does not exit on its own (dev servers,
+  watchers) — run_command kills it at its timeout.
 - Make the smallest correct change. Do not invent files, APIs, or tools.
 - If you receive Reviewer feedback, address every point.
 - When done, reply with a brief report of what changed and STOP — do not call

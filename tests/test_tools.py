@@ -193,7 +193,9 @@ def test_run_command_runs_in_project_root(sample_project):
 # --- registry wiring ---------------------------------------------------
 def test_default_registry_has_all_tools():
     reg = default_registry()
-    assert set(reg.names()) == {"read_file", "search", "write_file", "edit_file", "run_command"}
+    assert set(reg.names()) == {"list_dir", "find_files", "read_file", "search",
+                                "write_file", "edit_file", "run_command",
+                                "run_background", "check_process", "stop_process"}
     # the throwaway get_time tool is gone
     assert "get_time" not in reg.names()
 
@@ -212,3 +214,175 @@ def test_null_optional_args_use_defaults(sample_project):
     res = reg.run("search", {"query": "TODO", "path": None, "max_results": None}, ctx)
     assert res.ok
     assert "app.py" in res.output
+
+
+# --- list_dir -----------------------------------------------------------
+def test_list_dir_root_listing(sample_project):
+    from relaycli.tools.list_dir import ListDirArgs, list_dir
+
+    ctx = make_context(sample_project)
+    res = list_dir(ListDirArgs(), ctx)
+    assert res.ok
+    assert "build/" in res.output          # dirs marked with a trailing slash
+    assert "app.py" in res.output
+    assert "README.md" in res.output
+
+
+def test_list_dir_subdir_and_missing(sample_project):
+    from relaycli.tools.list_dir import ListDirArgs, list_dir
+
+    ctx = make_context(sample_project)
+    res = list_dir(ListDirArgs(path="build"), ctx)
+    assert res.ok and "out.txt" in res.output
+    res2 = list_dir(ListDirArgs(path="nope"), ctx)
+    assert not res2.ok
+
+
+def test_list_dir_blocks_escape(sample_project):
+    from relaycli.tools.list_dir import ListDirArgs, list_dir
+
+    ctx = make_context(sample_project)
+    res = list_dir(ListDirArgs(path=".."), ctx)
+    assert not res.ok
+    assert "outside the project root" in res.output
+
+
+def test_list_dir_caps_entries(sample_project):
+    from relaycli.tools.list_dir import _MAX_ENTRIES, ListDirArgs, list_dir
+
+    many = sample_project / "many"
+    many.mkdir()
+    for i in range(_MAX_ENTRIES + 5):
+        (many / f"f{i:04d}.txt").write_text("x", encoding="utf-8")
+    ctx = make_context(sample_project)
+    res = list_dir(ListDirArgs(path="many"), ctx)
+    assert res.ok
+    assert "more entries" in res.output
+
+
+def test_read_file_directory_hints_list_dir(sample_project):
+    ctx = make_context(sample_project)
+    res = read_file(ReadFileArgs(path="build"), ctx)
+    assert not res.ok
+    assert "list_dir" in res.output
+
+
+# --- find_files ---------------------------------------------------------
+def test_find_files_glob(sample_project):
+    from relaycli.tools.find_files import FindFilesArgs, find_files
+
+    ctx = make_context(sample_project)
+    res = find_files(FindFilesArgs(pattern="**/*.py"), ctx)
+    assert res.ok
+    assert "app.py" in res.output
+
+
+def test_find_files_skips_heavy_dirs(sample_project):
+    from relaycli.tools.find_files import FindFilesArgs, find_files
+
+    nm = sample_project / "node_modules" / "pkg"
+    nm.mkdir(parents=True)
+    (nm / "index.js").write_text("x", encoding="utf-8")
+    (sample_project / "main.js").write_text("x", encoding="utf-8")
+    ctx = make_context(sample_project)
+    res = find_files(FindFilesArgs(pattern="**/*.js"), ctx)
+    assert res.ok
+    assert "main.js" in res.output
+    assert "node_modules" not in res.output
+
+
+def test_find_files_no_match_and_cap(sample_project):
+    from relaycli.tools.find_files import _MAX_RESULTS, FindFilesArgs, find_files
+
+    ctx = make_context(sample_project)
+    res = find_files(FindFilesArgs(pattern="**/*.zig"), ctx)
+    assert res.ok and "No files match" in res.output
+    for i in range(_MAX_RESULTS + 3):
+        (sample_project / f"g{i:04d}.go").write_text("x", encoding="utf-8")
+    res2 = find_files(FindFilesArgs(pattern="*.go"), ctx)
+    assert "more matches" in res2.output
+
+
+def test_navigation_tools_registered_for_all_roles():
+    from relaycli.tools import planner_registry, reviewer_registry
+
+    for reg in (default_registry(), planner_registry(), reviewer_registry()):
+        names = {t.name for t in reg.tools()}
+        assert {"list_dir", "find_files"} <= names
+
+
+# --- background processes -------------------------------------------------
+def _bg_ctx(root, mode=PermissionMode.full_auto):
+    return make_context(root, mode)
+
+
+def test_run_background_starts_and_logs(sample_project, tmp_path):
+    import time
+
+    from relaycli.tools.background import (
+        BgArgs, CheckArgs, StopArgs, check_process, run_background, stop_process,
+    )
+
+    ctx = _bg_ctx(sample_project)
+    res = run_background(BgArgs(command="echo hello-bg; sleep 30"), ctx)
+    assert res.ok
+    bg_id = res.meta["id"]
+    assert bg_id.startswith("bg")
+
+    # give the shell a moment to write the first line
+    for _ in range(50):
+        chk = check_process(CheckArgs(id=bg_id), ctx)
+        if "hello-bg" in chk.output:
+            break
+        time.sleep(0.1)
+    assert "hello-bg" in chk.output
+    assert "running" in chk.output
+
+    stop = stop_process(StopArgs(id=bg_id), ctx)
+    assert stop.ok
+    chk2 = check_process(CheckArgs(id=bg_id), ctx)
+    assert "running" not in chk2.output
+
+
+def test_run_background_reports_exit(sample_project):
+    import time
+
+    from relaycli.tools.background import BgArgs, CheckArgs, check_process, run_background
+
+    ctx = _bg_ctx(sample_project)
+    res = run_background(BgArgs(command="exit 7"), ctx)
+    assert res.ok
+    bg_id = res.meta["id"]
+    for _ in range(50):
+        chk = check_process(CheckArgs(id=bg_id), ctx)
+        if "exited" in chk.output:
+            break
+        time.sleep(0.1)
+    assert "exited" in chk.output and "7" in chk.output
+
+
+def test_run_background_gated_in_suggest(sample_project):
+    from relaycli.tools.background import BgArgs, run_background
+
+    ctx = _bg_ctx(sample_project, PermissionMode.suggest)  # no prompter -> declined
+    res = run_background(BgArgs(command="sleep 5"), ctx)
+    assert not res.ok
+    assert "not approved" in res.output
+
+
+def test_check_and_stop_unknown_id(sample_project):
+    from relaycli.tools.background import CheckArgs, StopArgs, check_process, stop_process
+
+    ctx = _bg_ctx(sample_project)
+    assert not check_process(CheckArgs(id="bg999"), ctx).ok
+    assert not stop_process(StopArgs(id="bg999"), ctx).ok
+
+
+def test_background_tools_registered():
+    from relaycli.tools import reviewer_registry
+
+    names = set(default_registry().names())
+    assert {"run_background", "check_process", "stop_process"} <= names
+    reviewer = set(reviewer_registry().names())
+    assert "check_process" in reviewer
+    assert "run_background" not in reviewer and "stop_process" not in reviewer

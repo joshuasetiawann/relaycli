@@ -710,11 +710,12 @@ class TestReplRelayCommand:
 class TestRegistrySubsets:
     def test_planner_is_read_only(self):
         names = set(planner_registry().names())
-        assert names == {"read_file", "search"}
+        assert names == {"list_dir", "find_files", "read_file", "search"}
 
     def test_reviewer_reads_and_runs_but_never_writes(self):
         names = set(reviewer_registry().names())
-        assert names == {"read_file", "search", "run_command"}
+        assert names == {"list_dir", "find_files", "read_file", "search",
+                         "run_command", "check_process"}
 
     def test_subset_schemas_match_default(self):
         # The subset must reuse the same tool definitions, not redefine them.

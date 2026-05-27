@@ -48,6 +48,8 @@ How to work:
 - Inspect before changing: use read_file / search to understand the code first.
 - Use edit_file for targeted changes and write_file to create or fully replace a file.
 - Use run_command to run tests, builds, or commands. Output is returned to you.
+- Use run_background for anything that does not exit on its own (dev servers,
+  watchers) — run_command kills it at its timeout. Check with check_process.
 - Create new files inside the working directory using relative paths.
 - Make the smallest correct change. Do not invent files, APIs, or tools.
 - When the task is complete, reply with a brief summary and STOP — do not call

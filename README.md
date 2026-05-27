@@ -11,8 +11,10 @@ interactive terminal session.
 - **Provider-agnostic** (via LiteLLM): OpenAI, Anthropic, Gemini, Groq,
   Mistral, OpenRouter, or a local Ollama — no key needed for Ollama. Switch
   models live with `/model`.
-- **Real coding tools**: `read_file`, `search` (ripgrep with Python fallback),
-  `edit_file`, `write_file`, `run_command` — every file change is shown as a
+- **Real coding tools**: `list_dir`, `find_files`, `read_file`, `search`
+  (ripgrep with Python fallback), `edit_file`, `write_file`, `run_command`,
+  plus `run_background` / `check_process` / `stop_process` for dev servers
+  and watchers — every file change is shown as a
   colored diff before it is applied.
 - **Permission modes** — `suggest` / `auto-edit` / `full-auto` — gate every
   edit and every command.

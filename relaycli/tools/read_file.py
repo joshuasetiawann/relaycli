@@ -40,8 +40,10 @@ def read_file(args: ReadFileArgs, ctx: ToolContext) -> ToolResult:
         return ToolResult.error(str(exc), summary=f"read {args.path} (refused)")
 
     if not path.is_file():
+        hint = " Use list_dir to list a directory." if path.is_dir() else ""
         return ToolResult.error(
-            f"'{args.path}' is not a regular file.", summary=f"read {args.path} (refused)"
+            f"'{args.path}' is not a regular file.{hint}",
+            summary=f"read {args.path} (refused)",
         )
 
     rel = proj.relative(path)
