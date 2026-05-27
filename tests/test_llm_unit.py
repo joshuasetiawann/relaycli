@@ -83,6 +83,38 @@ def test_to_assistant_message_roundtrip():
     assert tmsg == {"role": "tool", "tool_call_id": "c1", "name": "get_time", "content": "2026-01-01"}
 
 
+def test_to_assistant_message_sanitizes_malformed_arguments():
+    # A provider abort mid-stream (finish_reason 'error') can truncate the
+    # argument JSON. Strict providers (Cohere via OpenRouter) then 400 the
+    # WHOLE conversation on every later request — "tool arguments must be a
+    # stringified JSON object" — bricking the session. History must always
+    # carry a valid JSON object; the model still sees the ERROR tool result.
+    truncated = '{"path": "index.html", "content": "<!DOCTYPE ht'
+    resp = LLMResponse(
+        text="",
+        tool_calls=[ToolCall(id="c1", name="write_file", arguments=truncated)],
+    )
+    msg = resp.to_assistant_message()
+    assert json.loads(msg["tool_calls"][0]["function"]["arguments"]) == {}
+    # the in-memory call keeps the raw string (tool error reporting uses it)
+    assert resp.tool_calls[0].arguments == truncated
+
+
+def test_to_assistant_message_sanitizes_non_object_arguments():
+    for bad in ("[1, 2]", '"just a string"', "42", "", "   "):
+        resp = LLMResponse(
+            text="", tool_calls=[ToolCall(id="c1", name="t", arguments=bad)]
+        )
+        args = resp.to_assistant_message()["tool_calls"][0]["function"]["arguments"]
+        assert json.loads(args) == {}, f"arguments {bad!r} must serialize as an object"
+
+
+def test_to_assistant_message_keeps_valid_arguments_verbatim():
+    raw = '{"timezone": "utc", "n": 3}'
+    resp = LLMResponse(text="", tool_calls=[ToolCall(id="c1", name="t", arguments=raw)])
+    assert resp.to_assistant_message()["tool_calls"][0]["function"]["arguments"] == raw
+
+
 def test_usage_add():
     a = Usage(prompt_tokens=1, completion_tokens=2, total_tokens=3, cost_usd=0.5)
     b = Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30, cost_usd=0.25)

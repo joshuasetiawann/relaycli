@@ -199,6 +199,15 @@ class LLMResponse:
 
         Used to append the model's turn (including its tool calls) back into
         the conversation before sending tool results.
+
+        Arguments are sanitized on the way into history: a provider abort
+        mid-stream (finish_reason 'error') can truncate the argument JSON,
+        and strict providers (e.g. Cohere via OpenRouter) then reject the
+        whole conversation on every later request — "tool arguments must be
+        a stringified JSON object" — bricking the session. The raw string
+        stays on the ToolCall for local error reporting; history always gets
+        a valid JSON object, and the model learns the call failed from the
+        ERROR tool-result message.
         """
         msg: dict[str, Any] = {"role": "assistant", "content": self.text or None}
         if self.tool_calls:
@@ -206,11 +215,25 @@ class LLMResponse:
                 {
                     "id": tc.id,
                     "type": "function",
-                    "function": {"name": tc.name, "arguments": tc.arguments},
+                    "function": {
+                        "name": tc.name,
+                        "arguments": _sanitize_arguments(tc.arguments),
+                    },
                 }
                 for tc in self.tool_calls
             ]
         return msg
+
+
+def _sanitize_arguments(arguments: str) -> str:
+    """Return ``arguments`` if it is a stringified JSON object, else ``"{}"``."""
+    if not (arguments or "").strip():
+        return "{}"
+    try:
+        parsed = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        return "{}"
+    return arguments if isinstance(parsed, dict) else "{}"
 
 
 def make_tool_result_message(tool_call: ToolCall, content: str) -> dict[str, Any]:

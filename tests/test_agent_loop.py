@@ -100,6 +100,33 @@ def test_tool_error_recovery(sample_project):
     assert any("ERROR" in (m.get("content") or "") for m in tool_msgs)
 
 
+def test_malformed_tool_args_do_not_poison_history(sample_project):
+    # Regression: a provider abort mid-stream can truncate argument JSON
+    # (observed live: Cohere via OpenRouter, finish_reason 'error'). The
+    # truncated string used to be replayed verbatim in every later request,
+    # which strict providers 400 ("tool arguments must be a stringified JSON
+    # object") — bricking the session. History must stay replayable.
+    truncated = ToolCall(
+        id="c1", name="write_file",
+        arguments='{"path": "index.html", "content": "<!DOCTYPE ht',
+    )
+    llm = FakeLLM([
+        _resp(tool_calls=[truncated]),
+        _resp(text="Recovered."),
+    ])
+    agent = _build_agent(sample_project, llm)
+    result = agent.run("buatkan web sederhana")
+
+    assert result.stopped_reason == "done"
+    # Every assistant tool_call replayed to the provider parses as a JSON object.
+    for message in llm.calls[-1]:
+        for tc in message.get("tool_calls") or []:
+            assert isinstance(json.loads(tc["function"]["arguments"]), dict)
+    # ... and the model was told the call failed, so it can retry.
+    tool_msgs = [m for m in llm.calls[-1] if m.get("role") == "tool"]
+    assert any("ERROR" in (m.get("content") or "") for m in tool_msgs)
+
+
 def test_permission_gating_in_loop(sample_project):
     # Suggest mode + a prompter that always declines: the write must not happen.
     llm = FakeLLM([
