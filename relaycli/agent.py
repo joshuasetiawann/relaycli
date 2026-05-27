@@ -48,6 +48,7 @@ How to work:
 - Inspect before changing: use read_file / search to understand the code first.
 - Use edit_file for targeted changes and write_file to create or fully replace a file.
 - Use run_command to run tests, builds, or commands. Output is returned to you.
+- Create new files inside the working directory using relative paths.
 - Make the smallest correct change. Do not invent files, APIs, or tools.
 - When the task is complete, reply with a brief summary and STOP — do not call
   more tools.
@@ -125,6 +126,7 @@ class Agent:
         llm: LLM | None = None,
         prompt_template: str | None = None,
         model: str | None = None,
+        skills_block: str = "",
     ) -> None:
         self.settings = settings or get_settings()
         self.console = console or Console()
@@ -136,6 +138,7 @@ class Agent:
         self.llm = llm or LLM(self.settings)
         self._prompt_template = prompt_template or _SYSTEM_TEMPLATE
         self._model_override = model
+        self._skills_block = skills_block
         self.tool_ctx = ToolContext(self.project, self.permissions, self.console)
         self._schemas = self.registry.schemas()
         self.session = Session(
@@ -152,17 +155,25 @@ class Agent:
     def _build_system_prompt(self) -> str:
         tools = "\n".join(f"- {t.name}: {t.description}" for t in self.registry.tools())
         mode = self.permissions.mode
-        return self._prompt_template.format(
+        prompt = self._prompt_template.format(
             cwd=self.project.root,
             mode=mode,
             mode_desc=_MODE_DESCRIPTIONS.get(mode, ""),
             tool_list=tools,
         )
+        # Appended AFTER .format(): skill bodies are user/markdown text that
+        # may legitimately contain braces.
+        return prompt + self._skills_block
 
     def refresh_system_prompt(self) -> None:
         """Rebuild the system prompt (e.g. after /mode or /model changes)."""
         self.session.system_prompt = self._build_system_prompt()
         self.session.model = self.model
+
+    def set_skills_block(self, block: str) -> None:
+        """Swap the ACTIVE SKILLS section (from /skill toggles) and rebuild."""
+        self._skills_block = block
+        self.refresh_system_prompt()
 
     def run(self, request: str, *, reporter: Reporter | None = None) -> AgentResult:
         reporter = reporter or Reporter()

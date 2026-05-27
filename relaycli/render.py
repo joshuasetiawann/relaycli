@@ -176,7 +176,8 @@ def render_task_summary(
     )
 
 
-_ROLE_STYLE = {"planner": "cyan", "coder": "magenta", "reviewer": "yellow"}
+_ROLE_STYLE = {"explorer": "blue", "planner": "cyan", "coder": "magenta",
+               "tester": "green", "reviewer": "yellow"}
 
 
 class RelayRichObserver:
@@ -299,6 +300,17 @@ def render_welcome(
     grid.add_row("", "")
     grid.add_row("", '[dim]Type a request in plain words — e.g. "explain this repo".[/dim]')
     grid.add_row("", "[dim]/help commands · !cmd shell · Ctrl-D quit[/dim]")
+
+    from pathlib import Path as _Path
+
+    if root in (_Path.home(), _Path(_Path.home().anchor)):
+        grid.add_row("", "")
+        grid.add_row(
+            "", "[yellow]⚠ This is your whole home directory — the agent can read "
+                "and change anything under it.[/yellow]\n[dim]Better: cd into a "
+                "project folder (e.g. mkdir ~/proyek/app && cd ~/proyek/app) and "
+                "run relaycli there.[/dim]"
+        )
     console.print(Panel(grid, border_style=CLAUDE_ACCENT, expand=False))
 
 
@@ -324,6 +336,9 @@ def render_help(console: Console) -> None:
     table.add_row("/model \\[name]", "show or switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)")
     table.add_row("/mode \\[m]", "permission mode: suggest | auto-edit | full-auto")
     table.add_row("/relay \\[on|off]", "toggle the Planner → Coder → Reviewer pipeline")
+    table.add_row("/agents \\[r on|off]", "show relay agents; toggle explorer/tester")
+    table.add_row("/skill \\[name]", "toggle a skill for this session (tdd, debug, ponytail, …)")
+    table.add_row("/skills", "list available skills and where they come from")
     table.add_row("/diff", "show uncommitted changes (git diff)")
     table.add_row("/clear", "reset the conversation")
     table.add_row("/help", "show this help  (aliases: help, ?)")
@@ -331,8 +346,8 @@ def render_help(console: Console) -> None:
     table.add_row("!<cmd>", "run a shell command in the project root (e.g. !git status)")
     console.print(table)
     console.print(
-        "[dim]Enter submits · Alt+Enter inserts a newline · "
-        "Ctrl-C clears the line · Ctrl-D quits[/dim]"
+        "[dim]Enter submits · Alt+Enter inserts a newline · Ctrl-R searches "
+        "history · Ctrl-C clears the line · Ctrl-D quits[/dim]"
     )
 
 

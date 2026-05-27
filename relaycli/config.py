@@ -156,6 +156,23 @@ class Settings(BaseSettings):
             "(0 = no retries; an unresolved 'revise' ends the run as review_exhausted)."
         ),
     )
+    # Optional extra roles (opt-in: each adds a full agent run per request).
+    relay_explorer: bool = Field(
+        default=False,
+        description="Add a read-only Explorer before the Planner (compact context brief).",
+    )
+    relay_tester: bool = Field(
+        default=False,
+        description="Add a Tester after the Coder (runs the plan's verification step).",
+    )
+    explorer_model: str | None = Field(
+        default=None,
+        description="Model for the relay Explorer role (falls back to 'model').",
+    )
+    tester_model: str | None = Field(
+        default=None,
+        description="Model for the relay Tester role (falls back to 'model').",
+    )
 
     # --- Provider credentials (standard env var names) ------------------
     openai_api_key: str | None = Field(

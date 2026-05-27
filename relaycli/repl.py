@@ -43,6 +43,9 @@ SLASH_COMMANDS: dict[str, tuple[str, str]] = {
     "model": ("[name]", "show or switch the model"),
     "mode": ("[m]", "permission mode: suggest | auto-edit | full-auto"),
     "relay": ("[on|off]", "toggle the Planner → Coder → Reviewer pipeline"),
+    "agents": ("[r on|off]", "show relay agents; toggle explorer/tester"),
+    "skill": ("[name]", "toggle a skill on/off for this session"),
+    "skills": ("", "list available skills (● = active)"),
     "diff": ("", "show uncommitted changes (git diff)"),
     "clear": ("", "reset the conversation"),
     "help": ("", "show all commands and keys"),
@@ -55,6 +58,7 @@ SLASH_COMMANDS: dict[str, tuple[str, str]] = {
 _ARG_COMPLETIONS: dict[str, tuple[str, ...]] = {
     "mode": ("suggest", "auto-edit", "full-auto"),
     "relay": ("on", "off"),
+    "agents": ("explorer", "tester"),
     "model": (
         "gpt-4o",
         "gpt-4o-mini",
@@ -103,7 +107,14 @@ class SlashCompleter(Completer):
     Completes only two shapes — a command name being typed at the start of
     the line, and that command's first argument. Plain text and multiline
     buffers (pastes) yield nothing, so the menu never pops mid-request.
+
+    ``arg_providers`` maps a command to a callable returning its live
+    argument candidates (e.g. discovered skill names), layered over the
+    static ``_ARG_COMPLETIONS``.
     """
+
+    def __init__(self, arg_providers: dict | None = None) -> None:
+        self._arg_providers = arg_providers or {}
 
     def get_completions(self, document, complete_event):
         text = document.text_before_cursor
@@ -123,7 +134,10 @@ class SlashCompleter(Completer):
             return
         if " " in arg:  # only the first argument is completable
             return
-        for option in _ARG_COMPLETIONS.get(head.lower(), ()):
+        cmd = head.lower()
+        provider = self._arg_providers.get(cmd)
+        options = tuple(provider()) if provider else _ARG_COMPLETIONS.get(cmd, ())
+        for option in options:
             if option.startswith(arg):
                 yield Completion(option, start_position=-len(arg))
 
@@ -142,6 +156,10 @@ class Repl:
             project=self.project,
             permissions=self.permissions,
         )
+        from relaycli.skills import discover_skills
+
+        self.skills = discover_skills(self.project.root)
+        self.active_skills: list[str] = []  # activation order = prompt order
 
     # -- entry -----------------------------------------------------------
     def run(self) -> None:
@@ -199,7 +217,9 @@ class Repl:
             history=history,
             key_bindings=kb,
             multiline=True,
-            completer=SlashCompleter(),
+            completer=SlashCompleter(
+                arg_providers={"skill": lambda: sorted(self.skills)}
+            ),
             complete_while_typing=True,
             bottom_toolbar=self._toolbar,
             style=_PT_STYLE,
@@ -365,7 +385,7 @@ class Repl:
         # pipeline (the constructor is cheap; roles are built per run).
         relay = Relay(
             self.settings, console=self.console, project=self.project,
-            permissions=self.permissions,
+            permissions=self.permissions, skills_block=self._skills_block(),
         )
         observer = RelayRichObserver(self.console)
         try:
@@ -409,6 +429,12 @@ class Repl:
             self._cmd_mode(arg)
         elif cmd == "relay":
             self._cmd_relay(arg)
+        elif cmd == "agents":
+            self._cmd_agents(arg)
+        elif cmd == "skill":
+            self._cmd_skill(arg)
+        elif cmd == "skills":
+            self._cmd_skills()
         elif cmd == "diff":
             self._cmd_diff()
         elif cmd == "clear":
@@ -456,6 +482,100 @@ class Repl:
         self.console.print(f"relay → [cyan]{value}[/cyan]")
         if self.settings.relay_enabled:
             self._print_routing()
+
+    _ROLE_PURPOSE = {
+        "explorer": "scouts the codebase before planning (read-only, optional)",
+        "planner": "writes the implementation plan (read-only)",
+        "coder": "does the work — edits files, runs commands",
+        "tester": "runs the plan's verification step (optional)",
+        "reviewer": "verifies the result; issues approve/revise",
+    }
+
+    def _cmd_agents(self, arg: str) -> None:
+        from relaycli.router import Role, resolve_model, role_enabled
+
+        if arg:
+            parts = arg.split()
+            if (len(parts) == 2 and parts[0] in ("explorer", "tester")
+                    and parts[1] in ("on", "off")):
+                setattr(self.settings, f"relay_{parts[0]}", parts[1] == "on")
+                self.console.print(f"agent {parts[0]} → [cyan]{parts[1]}[/cyan]")
+                if parts[1] == "on" and not self.settings.relay_enabled:
+                    self.console.print(
+                        "[dim]note: agents run inside the relay pipeline — "
+                        "/relay on to use them.[/dim]"
+                    )
+                return
+            self.console.print("[red]Usage:[/red] /agents \\[explorer|tester on|off]")
+            return
+
+        from rich.table import Table
+
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("agent", no_wrap=True)
+        table.add_column("model", no_wrap=True)
+        table.add_column("purpose")
+        for role in Role:
+            on = role_enabled(self.settings, role)
+            dot = "[green]●[/green]" if on else "[dim]○[/dim]"
+            model = short_model_name(resolve_model(self.settings, role))
+            style = "" if on else "[dim]"
+            end = "" if on else "[/dim]"
+            table.add_row(
+                f"{dot} {role}",
+                f"{style}{escape(model)}{end}",
+                f"{style}{self._ROLE_PURPOSE[str(role)]}{end}",
+            )
+        self.console.print(table)
+        relay_state = "on" if self.settings.relay_enabled else "off"
+        self.console.print(
+            f"[dim]relay {relay_state} · /agents explorer|tester on|off · "
+            f"models via RELAYCLI_<ROLE>_MODEL[/dim]"
+        )
+
+    def _skills_block(self) -> str:
+        from relaycli.skills import skills_prompt_block
+
+        return skills_prompt_block([self.skills[n] for n in self.active_skills])
+
+    def _cmd_skill(self, name: str) -> None:
+        if not name:
+            self._cmd_skills()
+            return
+        skill = self.skills.get(name)
+        if skill is None:
+            self.console.print(
+                f"[red]Unknown skill:[/red] {escape(name)}  (see /skills)"
+            )
+            return
+        if name in self.active_skills:
+            self.active_skills.remove(name)
+            state = "[dim]off[/dim]"
+        else:
+            self.active_skills.append(name)
+            state = "[green]on[/green]"
+        self.agent.set_skills_block(self._skills_block())
+        self.console.print(f"skill {escape(name)} → {state}")
+
+    def _cmd_skills(self) -> None:
+        from rich.table import Table
+
+        if not self.skills:
+            self.console.print("[dim]no skills found.[/dim]")
+            return
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("skill", no_wrap=True)
+        table.add_column("source", style="dim", no_wrap=True)
+        table.add_column("description")
+        for name in sorted(self.skills):
+            skill = self.skills[name]
+            dot = "[green]●[/green]" if name in self.active_skills else "[dim]○[/dim]"
+            table.add_row(f"{dot} {escape(name)}", skill.source, escape(skill.description))
+        self.console.print(table)
+        self.console.print(
+            "[dim]/skill <name> toggles · active skills steer the agent (and the "
+            "relay coder) · drop your own .md in ~/.relaycli/skills/[/dim]"
+        )
 
     def _cmd_diff(self) -> None:
         if not (self.project.root / ".git").exists():

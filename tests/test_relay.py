@@ -63,8 +63,10 @@ def _console() -> Console:
 
 
 class TestRouter:
-    def test_roles(self):
-        assert [r.value for r in Role] == ["planner", "coder", "reviewer"]
+    def test_roles_in_pipeline_order(self):
+        assert [r.value for r in Role] == [
+            "explorer", "planner", "coder", "tester", "reviewer",
+        ]
 
     def test_fallback_to_base_model(self):
         s = _settings(model="base/model")
@@ -82,11 +84,22 @@ class TestRouter:
     def test_routing_table(self):
         s = _settings(model="base/model", reviewer_model="cheap/reviewer")
         table = routing_table(s)
+        # Optional roles are hidden while disabled.
         assert table == {
             Role.planner: "base/model",
             Role.coder: "base/model",
             Role.reviewer: "cheap/reviewer",
         }
+
+    def test_routing_table_includes_enabled_optional_roles(self):
+        s = _settings(model="base/model", relay_explorer=True, relay_tester=True,
+                      tester_model="cheap/tester")
+        table = routing_table(s)
+        assert list(table) == [
+            Role.explorer, Role.planner, Role.coder, Role.tester, Role.reviewer,
+        ]
+        assert table[Role.explorer] == "base/model"   # fallback
+        assert table[Role.tester] == "cheap/tester"   # override
 
 
 class TestRelayConfig:
@@ -166,6 +179,103 @@ def _relay(project_root, llm, **settings_kw) -> Relay:
         permissions=PermissionManager(PermissionMode.full_auto, console=console),
         llm=llm,
     )
+
+
+class TestOptionalRoles:
+    def test_explorer_and_tester_run_in_pipeline_order(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="THE-BRIEF: app.py is the entry point"),   # explorer
+            _resp(text="THE-PLAN"),                                # planner
+            _resp(text="THE-REPORT"),                              # coder
+            _resp(text="TESTS: pass\nran pytest, all green"),      # tester
+            _resp(text="VERDICT: approve"),                        # reviewer
+        ])
+        relay = _relay(sample_project, llm, relay_explorer=True, relay_tester=True,
+                       explorer_model="cheap/e", tester_model="cheap/t")
+        result = relay.run("THE-REQUEST")
+
+        assert result.stopped_reason == "done"
+        assert [str(r.role) for r in result.role_runs] == [
+            "explorer", "planner", "coder", "tester", "reviewer",
+        ]
+        assert llm.models == ["cheap/e", "base/model", "base/model", "cheap/t", "base/model"]
+        # The Explorer's brief reaches the Planner...
+        planner_user = llm.calls[1][-1]["content"]
+        assert "THE-REQUEST" in planner_user and "THE-BRIEF" in planner_user
+        # ...and the Tester's evidence reaches the Reviewer.
+        reviewer_user = llm.calls[4][-1]["content"]
+        assert "TESTS: pass" in reviewer_user and "THE-REPORT" in reviewer_user
+        assert result.notes == []
+
+    def test_disabled_roles_do_not_run(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="THE-PLAN"),
+            _resp(text="THE-REPORT"),
+            _resp(text="VERDICT: approve"),
+        ])
+        result = _relay(sample_project, llm).run("r")
+        assert [str(r.role) for r in result.role_runs] == ["planner", "coder", "reviewer"]
+
+    def test_explorer_failure_is_advisory(self, sample_project):
+        llm = ScriptedLLM([
+            LLMError("explorer model unreachable"),   # explorer dies
+            _resp(text="THE-PLAN"),
+            _resp(text="THE-REPORT"),
+            _resp(text="VERDICT: approve"),
+        ])
+        result = _relay(sample_project, llm, relay_explorer=True).run("r")
+        assert result.stopped_reason == "done"
+        assert result.verdict == "approve"
+        assert any("Explorer failed" in n for n in result.notes)
+
+    def test_tester_failure_is_advisory(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="THE-PLAN"),
+            _resp(text="THE-REPORT"),
+            LLMError("tester model unreachable"),     # tester dies
+            _resp(text="VERDICT: approve"),
+        ])
+        result = _relay(sample_project, llm, relay_tester=True).run("r")
+        assert result.stopped_reason == "done"
+        assert any("Tester failed" in n for n in result.notes)
+        # Reviewer still ran, without a tester report.
+        reviewer_user = llm.calls[-1][-1]["content"]
+        assert "Tester report" not in reviewer_user
+
+
+class TestAgentsCommand:
+    def _repl(self) -> Repl:
+        settings = _settings(model="fake/m")
+        return Repl(settings, console=_console())
+
+    def test_agents_table_lists_all_roles(self):
+        repl = self._repl()
+        repl._handle_slash("/agents")
+        out = repl.console.file.getvalue()
+        for role in ("explorer", "planner", "coder", "tester", "reviewer"):
+            assert role in out
+        assert "●" in out and "○" in out  # backbone on, optional off
+
+    def test_agents_toggle(self):
+        repl = self._repl()
+        repl._handle_slash("/agents explorer on")
+        assert repl.settings.relay_explorer is True
+        repl._handle_slash("/agents tester on")
+        assert repl.settings.relay_tester is True
+        repl._handle_slash("/agents explorer off")
+        assert repl.settings.relay_explorer is False
+
+    def test_agents_hints_relay_when_off(self):
+        repl = self._repl()
+        repl._handle_slash("/agents tester on")
+        assert "/relay on" in repl.console.file.getvalue()
+
+    def test_agents_invalid_usage(self):
+        repl = self._repl()
+        repl._handle_slash("/agents banana on")
+        assert "Usage" in repl.console.file.getvalue()
+        repl._handle_slash("/agents explorer maybe")
+        assert repl.settings.relay_explorer is False
 
 
 class TestParseVerdict:

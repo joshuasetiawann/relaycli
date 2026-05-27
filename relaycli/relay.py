@@ -84,6 +84,49 @@ How to work:
     + _SECURITY_BLOCK
 )
 
+EXPLORER_TEMPLATE = (
+    """You are the Explorer in RelayCLI's relay pipeline, working inside a user's project.
+
+Working directory: {cwd}
+Permission mode: {mode} ({mode_desc})
+
+Available tools (read-only — you cannot edit files or run commands):
+{tool_list}
+
+How to work:
+- Scout the parts of the codebase the request touches: entry points, the
+  relevant files, existing patterns and conventions, test locations.
+- Then reply with a COMPACT context brief (at most ~15 lines): the relevant
+  files with one-line notes, the conventions to follow, and any constraint
+  the Planner must know. No plan, no code dumps, no recommendations.
+- Your final reply must be the brief itself and nothing else.
+
+"""
+    + _SECURITY_BLOCK
+)
+
+TESTER_TEMPLATE = (
+    """You are the Tester in RelayCLI's relay pipeline, working inside a user's project.
+
+Working directory: {cwd}
+Permission mode: {mode} ({mode_desc})
+
+Available tools (you cannot edit files):
+{tool_list}
+
+How to work:
+- You will receive the user's request, the plan, and the Coder's report.
+- Run the plan's verification step via run_command (or the project's test
+  suite if the plan names none; if neither exists, read the changed files
+  and check them against the plan).
+- Reply with a short report: exactly what you ran, the outcome, and every
+  failure verbatim. Start the report with one line: 'TESTS: pass' or
+  'TESTS: fail'. Do not judge style; report evidence only.
+
+"""
+    + _SECURITY_BLOCK
+)
+
 REVIEWER_TEMPLATE = (
     """You are the Reviewer in RelayCLI's relay pipeline, working inside a user's project.
 
@@ -172,6 +215,7 @@ class Relay:
         project: ProjectContext | None = None,
         permissions: PermissionManager | None = None,
         llm: LLM | None = None,
+        skills_block: str = "",
     ) -> None:
         self.settings = settings or get_settings()
         self.console = console or Console()
@@ -180,6 +224,9 @@ class Relay:
             self.settings.permission_mode, console=self.console
         )
         self.llm = llm or LLM(self.settings)
+        # Skills shape HOW work is done, so they apply to the role that does
+        # the work; advisory roles keep their tightly-scoped prompts.
+        self.skills_block = skills_block
 
     def run(self, request: str, *, observer: RelayObserver | None = None) -> RelayResult:
         observer = observer or RelayObserver()
@@ -202,6 +249,7 @@ class Relay:
             llm=self.llm,
             prompt_template=template,
             model=resolve_model(self.settings, role),
+            skills_block=self.skills_block if role is Role.coder else "",
         )
 
     def _run_role(
@@ -225,8 +273,25 @@ class Relay:
         coder = self._agent(Role.coder, CODER_TEMPLATE, default_registry())
         reviewer = self._agent(Role.reviewer, REVIEWER_TEMPLATE, reviewer_registry())
 
+        # 0. Explore (optional): a read-only context brief for the Planner.
+        #    Advisory — a failed Explorer never aborts (nothing was modified,
+        #    but planning can proceed exactly as it would without the role).
+        planner_request = request
+        if self.settings.relay_explorer:
+            explorer = self._agent(Role.explorer, EXPLORER_TEMPLATE, planner_registry())
+            explore_run = self._run_role(explorer, Role.explorer, request, 0, observer, result)
+            brief = explore_run.result.final_text.strip()
+            if explore_run.result.stopped_reason == "done" and brief:
+                planner_request = (
+                    f"{request}\n\nContext brief from the Explorer:\n{brief}"
+                )
+            else:
+                result.notes.append(
+                    "Explorer failed; planning without a context brief."
+                )
+
         # 1. Plan. Nothing has been modified yet, so any failure aborts cleanly.
-        plan_run = self._run_role(planner, Role.planner, request, 0, observer, result)
+        plan_run = self._run_role(planner, Role.planner, planner_request, 0, observer, result)
         plan = plan_run.result.final_text.strip()
         if plan_run.result.stopped_reason != "done":
             result.stopped_reason = plan_run.result.stopped_reason
@@ -253,19 +318,43 @@ class Relay:
                 result.stopped_reason = code_run.result.stopped_reason
                 return
 
+            # 2b. Test (optional): run the plan's verification step and hand
+            #     the evidence to the Reviewer. Advisory — the Reviewer can
+            #     still run tests itself when the Tester fails.
+            tester_report = ""
+            if self.settings.relay_tester:
+                tester = self._agent(Role.tester, TESTER_TEMPLATE, reviewer_registry())
+                tester_request = (
+                    f"User request:\n{request}\n\n"
+                    f"Plan:\n{plan}\n\n"
+                    f"The Coder reports:\n{code_run.result.final_text}\n\n"
+                    f"Run the plan's verification step now and report the outcome."
+                )
+                test_run = self._run_role(
+                    tester, Role.tester, tester_request, cycle, observer, result
+                )
+                report = test_run.result.final_text.strip()
+                if test_run.result.stopped_reason == "done" and report:
+                    tester_report = f"\n\nTester report:\n{report}"
+                else:
+                    result.notes.append(
+                        "Tester failed; review proceeds without a test report."
+                    )
+
             # 3. Review. The reviewer inspects the real working tree itself.
             if cycle == 0:
                 review_request = (
                     f"User request:\n{request}\n\n"
                     f"Plan:\n{plan}\n\n"
-                    f"The Coder reports:\n{code_run.result.final_text}\n\n"
+                    f"The Coder reports:\n{code_run.result.final_text}"
+                    f"{tester_report}\n\n"
                     f"Review the actual changes in the working tree against the "
                     f"request and the plan."
                 )
             else:
                 review_request = (
                     f"The Coder revised the work and reports:\n"
-                    f"{code_run.result.final_text}\n\nRe-review."
+                    f"{code_run.result.final_text}{tester_report}\n\nRe-review."
                 )
             review_run = self._run_role(
                 reviewer, Role.reviewer, review_request, cycle, observer, result

@@ -557,6 +557,23 @@ def test_prompt_is_minimal_caret():
     assert repl._prompt_text() == [("class:prompt", "❯ ")]
 
 
+def test_banner_warns_when_workspace_is_home(tmp_path):
+    # Launching from $HOME makes the whole home tree the workspace — the
+    # 2026-07-03 incident: the agent wandered into Downloads and ballooned
+    # the context. The banner must say so; a real project dir stays quiet.
+    from pathlib import Path
+
+    from relaycli.render import render_welcome
+
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    render_welcome(console, _hermetic(model="ollama_chat/llama3.1"), Path.home(), "not needed")
+    assert "whole home" in _out(console)
+
+    console2 = Console(file=io.StringIO(), force_terminal=False, width=100)
+    render_welcome(console2, _hermetic(model="ollama_chat/llama3.1"), tmp_path, "not needed")
+    assert "whole home" not in _out(console2)
+
+
 def test_banner_has_claude_style_welcome():
     repl, console = _hermetic_repl(model="ollama_chat/llama3.1")
     repl._print_banner()

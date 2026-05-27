@@ -98,6 +98,9 @@ wasn't, a setup panel lists the exact fixes (it doesn't block the session).
 | `/model [name]` | show or switch model (e.g. `gpt-4o-mini`, `ollama_chat/llama3.1`) |
 | `/mode [suggest\|auto-edit\|full-auto]` | show or switch permission mode |
 | `/relay [on\|off]` | toggle the Planner → Coder → Reviewer pipeline |
+| `/agents [r on\|off]` | show relay agents; toggle the optional explorer/tester |
+| `/skill [name]` | toggle a skill for this session (tdd, debug, ponytail, …) |
+| `/skills` | list available skills and their sources |
 | `/diff` | show working-tree changes (`git diff`) |
 | `/clear` | reset the conversation |
 | `/help` | show help (also `help`, `?`) |
@@ -111,6 +114,24 @@ submits otherwise; Alt+Enter inserts a newline; Ctrl-C clears the line. A
 status bar at the bottom shows the live `model · mode · relay` state. Typing a
 `-flag` in the REPL prints a hint instead of sending it to the model — flags
 belong on the `relaycli` command line.
+
+### Skills
+
+A skill is a small markdown file that steers how the agent works — toggled
+per session with `/skill <name>`, never auto-activated. Built-ins:
+`ponytail` (least-code discipline), `tdd`, `debug`, `brainstorm`, `verify`,
+`frontend-taste`. Add your own to `~/.relaycli/skills/` (or a project's
+`.relaycli/skills/`) as `name.md` with a `---` header carrying `name:` and
+`description:`. Active skills also steer the relay coder.
+
+### Agents
+
+The relay pipeline is Planner → Coder → Reviewer, plus two opt-in roles:
+an **explorer** that scouts the codebase before planning (read-only) and a
+**tester** that runs the plan's verification step after coding. `/agents`
+shows the lineup; `/agents explorer on` / `/agents tester on` enable them
+(each adds a full agent run per request). Per-role models via
+`RELAYCLI_EXPLORER_MODEL` etc.
 
 ### One-shot and flags
 
