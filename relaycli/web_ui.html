@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RelayCLI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Tokens from the local design (docs/design/RelayCLI.dc.html) */
+  :root {
+    --accent: #2D5BFF; --bg: #060608; --panel: #0B0B0E; --raise: #14151A;
+    --card: #101116; --well: #0E0F13; --border: #24252B; --border2: #202127;
+    --t1: #E7E7EA; --t2: #B7B8BE; --t3: #8A8B92; --t4: #6E6F77; --t5: #4D4E55;
+    --green: #3FB950; --amber: #E3A008; --red: #F0554E;
+    --mono: 'JetBrains Mono', ui-monospace, monospace;
+    --sans: 'Geist', -apple-system, system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); font-family: var(--sans);
+    -webkit-font-smoothing: antialiased; color: var(--t1); }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: #26272E; border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  input::placeholder { color: #5E5F66; }
+  button { font-family: inherit; }
+  @keyframes live { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .35; transform: scale(.8);} }
+  @keyframes blink { 0%,48% { opacity: 1;} 52%,100% { opacity: 0;} }
+  @keyframes ring { 0% { transform: scale(1); opacity: .5;} 100% { transform: scale(1.55); opacity: 0;} }
+  @keyframes cardring { 0% { transform: scale(1); opacity: .45;} 100% { transform: scale(1.05); opacity: 0;} }
+  @keyframes flow { to { stroke-dashoffset: -24; } }
+  @keyframes glow { 0%,100% { opacity: .38;} 50% { opacity: .8;} }
+  @keyframes pulse { 0% { offset-distance: 0%; opacity: 0;} 15% { opacity: 1;} 80% { opacity: 1;} 100% { offset-distance: 100%; opacity: 0;} }
+  .reduce * { animation: none !important; }
+
+  .app { height: 100vh; display: flex; flex-direction: column; background: var(--panel);
+    box-shadow: 0 0 0 1px var(--border); overflow: hidden; }
+
+  /* ── top bar ── */
+  .top { flex: 0 0 52px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+    background: var(--raise); border-bottom: 1px solid var(--border); position: relative; z-index: 40; }
+  .dots span { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .logo { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--t1); }
+  .logo b { color: var(--accent); }
+  .proj { font-family: var(--mono); font-size: 12px; color: var(--t2); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--card);
+    font-family: var(--mono); font-size: 11.5px; color: var(--t2); }
+  .btn:hover { border-color: #34353C; color: var(--t1); }
+  .btn svg { width: 12px; height: 12px; }
+  .menu-wrap { position: relative; }
+  .menu { position: absolute; top: calc(100% + 8px); min-width: 250px; background: #16171C;
+    border: 1px solid #26272E; border-radius: 12px; padding: 6px;
+    box-shadow: 0 18px 40px -12px rgba(0,0,0,.85); z-index: 60; }
+  .menu.hidden { display: none; }
+  .menu.mcol { display: flex; flex-direction: column; max-height: 74vh; padding: 0; overflow: hidden; }
+  .menu.mcol.hidden { display: none; }
+  #modelItems { overflow-y: auto; padding: 6px; }
+  .menu .head { font-family: var(--mono); font-size: 9.5px; letter-spacing: 1.2px; color: var(--t4);
+    text-transform: uppercase; padding: 8px 9px 6px; }
+  .menu .head.grp { position: sticky; top: 0; background: #16171C; border-top: 1px solid var(--border2); margin-top: 2px; }
+  .menu .head.grp:first-child { border-top: 0; margin-top: 0; }
+  .menu .custom { flex: 0 0 auto; border-top: 1px solid var(--border2); background: #121318; padding: 9px 10px 10px; }
+  .menu .custom .h { font-family: var(--mono); font-size: 9.5px; letter-spacing: 1.2px; color: var(--t4);
+    text-transform: uppercase; margin-bottom: 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 8px; }
+  .chip2 { padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--card);
+    color: var(--t3); font-family: var(--mono); font-size: 10px; cursor: pointer; }
+  .chip2:hover { border-color: #34353C; color: var(--t1); }
+  .crow { display: flex; gap: 6px; }
+  .crow input { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--well);
+    color: var(--t1); font-family: var(--mono); font-size: 11.5px; padding: 6px 8px; outline: none; }
+  .crow input:focus { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+  .crow button { border: 0; border-radius: 7px; background: var(--accent); color: #fff; font-size: 11.5px; padding: 0 13px; cursor: pointer; }
+  .menu .item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 9px;
+    border: 0; background: transparent; border-radius: 7px; cursor: pointer; text-align: left; }
+  .menu .item:hover { background: #1E1F27; }
+  .menu .item .nm { font-family: var(--mono); font-size: 12px; color: var(--t1); flex: 1; }
+  .menu .item .ds { font-size: 10.5px; color: var(--t4); }
+  .menu .item .ck { color: var(--accent); opacity: 0; }
+  .menu .item.on .ck { opacity: 1; }
+  .modes { margin-left: auto; display: flex; padding: 4px; background: var(--well);
+    border: 1px solid var(--border); border-radius: 9px; }
+  .modes button { width: 78px; height: 22px; border: 0; background: transparent; cursor: pointer;
+    font-family: var(--mono); font-size: 11px; color: #C2C3C9; border-radius: 6px; }
+  .modes button.on { background: var(--card); color: var(--t1); box-shadow: 0 0 0 1px var(--border); }
+  .live { display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px; color: var(--t3); }
+  .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--t5); }
+  .live.on i { background: var(--accent); animation: live 1.7s ease-in-out infinite; }
+  .stop { display: inline-flex; align-items: center; gap: 7px; padding: 6px 13px; border-radius: 8px;
+    border: 1px solid var(--border); background: #16171C; color: var(--t1);
+    font-size: 12.5px; cursor: pointer; }
+  .stop:hover { border-color: color-mix(in srgb, var(--red) 50%, var(--border)); color: var(--red);
+    background: color-mix(in srgb, var(--red) 8%, #16171C); }
+  .stop:disabled { opacity: .4; cursor: default; }
+  .stop span { width: 8px; height: 8px; background: currentColor; border-radius: 2px; }
+
+  /* settings panel */
+  .settings { width: 300px; right: 0; padding: 0; }
+  .settings .sec { padding: 12px 14px; border-top: 1px solid var(--border2); }
+  .settings .sec:first-child { border-top: 0; }
+  .settings .sec .h { font-family: var(--mono); font-size: 9.5px; letter-spacing: 1.2px;
+    color: var(--t4); text-transform: uppercase; margin-bottom: 8px; }
+  .setrow { display: flex; align-items: center; gap: 12px; padding: 7px 0; }
+  .setrow .l { flex: 1; min-width: 0; }
+  .setrow .l .t { font-size: 12.5px; color: var(--t1); }
+  .setrow .l .s { font-size: 10.5px; color: var(--t4); margin-top: 2px; }
+  .tog { width: 34px; height: 20px; border-radius: 999px; background: #24252B; position: relative;
+    cursor: pointer; flex: 0 0 auto; transition: background .15s; }
+  .tog.on { background: var(--accent); }
+  .tog span { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: #fff; transition: left .15s; }
+  .tog.on span { left: 16px; }
+  .swatches { display: flex; gap: 10px; }
+  .swatch { width: 18px; height: 18px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; }
+  .swatch.on { border-color: var(--t1); }
+  .settings .foot { display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+    border-top: 1px solid var(--border2); background: #121318; }
+  .settings .foot .p { font-family: var(--mono); font-size: 10px; color: var(--t4);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .settings .foot .v { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--t5); }
+
+  /* ── main row ── */
+  .main { flex: 1 1 auto; display: flex; min-height: 0; }
+
+  /* chat */
+  .chat { flex: 0 0 330px; width: 330px; display: flex; flex-direction: column; min-height: 0;
+    border-right: 1px solid var(--border); background: var(--raise); }
+  .chat-head { display: flex; align-items: center; gap: 9px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  .chat-head .ic { width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center;
+    justify-content: center; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  .chat-head .t { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--t1); }
+  .chat-head .s { font-size: 10.5px; color: var(--t3); }
+  .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--t3); cursor: pointer; }
+  .icon-btn:hover { border-color: #34353C; color: var(--t1); }
+  .thread { flex: 1 1 auto; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 15px; }
+  .msg { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
+  .msg.you { align-items: flex-end; }
+  .msg .who { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 10px; color: var(--t2); }
+  .msg .who i { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+  .msg .who .ago { color: var(--t4); font-size: 9.5px; }
+  .bubble { max-width: 90%; background: var(--well); border: 1px solid var(--border);
+    border-radius: 12px; border-top-left-radius: 4px; padding: 9px 11px; font-size: 12.5px;
+    line-height: 1.5; color: #C9CAD0; white-space: pre-wrap; word-break: break-word; }
+  .msg.you .bubble { background: color-mix(in srgb, var(--accent) 15%, var(--card));
+    border-color: color-mix(in srgb, var(--accent) 30%, #1E1F26);
+    border-radius: 12px; border-top-right-radius: 4px; color: var(--t1); }
+  .msg.err .bubble { border-color: color-mix(in srgb, var(--red) 40%, var(--border)); color: var(--red); }
+  .composer { flex: 0 0 auto; border-top: 1px solid var(--border); padding: 12px; }
+  .composer .box { display: flex; align-items: center; gap: 8px; background: var(--well);
+    border: 1px solid var(--border); border-radius: 10px; padding: 6px 6px 6px 12px; }
+  .composer .caret { font-family: var(--mono); font-size: 13px; color: var(--accent); }
+  .composer input { flex: 1; border: 0; background: transparent; color: var(--t1);
+    font-family: var(--sans); font-size: 13px; outline: none; }
+  .composer .send { width: 32px; height: 32px; border: 0; border-radius: 8px;
+    background: var(--accent); color: #fff; cursor: pointer; display: inline-flex;
+    align-items: center; justify-content: center; }
+  .composer .send:disabled { opacity: .4; cursor: default; }
+
+  /* center graph */
+  .canvas { flex: 1 1 auto; position: relative; overflow: hidden; display: flex; align-items: center;
+    justify-content: center; background-color: var(--panel);
+    background-image: radial-gradient(rgba(255,255,255,.045) 1px, transparent 1.4px); background-size: 24px 24px; }
+  .stage { position: relative; transform-origin: center; }
+  .gnode { position: absolute; width: 186px; padding: 11px 13px; background: var(--raise);
+    border: 1px solid var(--border); border-radius: 13px; z-index: 2;
+    transition: border-color .3s, box-shadow .3s; }
+  .gnode .ghead { display: flex; align-items: center; gap: 10px; }
+  .gnode .gi { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; background: #1A1B21; color: var(--t3); flex: 0 0 auto; font-family: var(--mono); font-size: 14px; }
+  .gnode .gn { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--t1); }
+  .gnode .gs { font-size: 10.5px; color: var(--t3); margin-top: 2px; }
+  .gnode .gdot { margin-left: auto; position: relative; width: 9px; height: 9px; flex: 0 0 auto; }
+  .gnode .gdot i { position: absolute; inset: 0; border-radius: 50%; background: var(--t5); }
+  .gnode .gfoot { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border2);
+    display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px;
+    color: var(--t2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .gnode.orch { border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    box-shadow: 0 0 24px -10px color-mix(in srgb, var(--accent) 60%, transparent); }
+  .gnode.orch .gi { background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent); }
+  .gnode.orch .gdot i { background: var(--accent); }
+  .gnode.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    box-shadow: 0 0 34px -6px color-mix(in srgb, var(--accent) 45%, transparent); z-index: 3; }
+  .gnode.active .gi { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+  .gnode.active .gdot i { background: var(--accent); }
+  .gnode.active .gdot::after { content: ""; position: absolute; inset: -1px; border-radius: 50%;
+    border: 1px solid var(--accent); animation: ring 1.9s ease-out infinite; }
+  .gnode .cardring { position: absolute; inset: -1px; border-radius: 13px;
+    border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+    animation: cardring 2.6s ease-out infinite; pointer-events: none; }
+  .gnode.done { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); }
+  .gnode.done .gi { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--green); }
+  .gnode.done .gdot i { background: var(--green); }
+  .gnode.off { opacity: .45; }
+  .pulse { position: absolute; top: 0; left: 0; width: 7px; height: 7px; border-radius: 50%;
+    background: #EAF0FF; box-shadow: 0 0 9px 2px var(--accent), 0 0 4px 0 #fff;
+    offset-anchor: center; z-index: 1; pointer-events: none; }
+  .flabel { position: absolute; transform: translateX(-50%); font-family: var(--mono);
+    font-size: 10px; color: var(--t5); z-index: 2; }
+  .zoom { position: absolute; right: 20px; bottom: 18px; display: flex; align-items: center; gap: 2px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 3px; z-index: 5; }
+  .zoom button { width: 24px; height: 22px; border: 0; background: transparent; color: var(--t3);
+    cursor: pointer; border-radius: 5px; font-size: 15px; line-height: 1; }
+  .zoom button:hover { background: #1B1C22; color: var(--t1); }
+  .zoom .zv { font-family: var(--mono); font-size: 11px; color: var(--t3); padding: 0 4px; min-width: 40px; text-align: center; }
+  .legend { position: absolute; left: 20px; bottom: 16px; display: flex; gap: 15px;
+    font-family: var(--mono); font-size: 10px; color: var(--t4); z-index: 5; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+
+  /* right run panel */
+  .side { flex: 0 0 320px; width: 320px; display: flex; flex-direction: column; min-height: 0;
+    background: var(--raise); border-left: 1px solid var(--border); }
+  .run { padding: 14px 18px 13px; border-bottom: 1px solid var(--border); }
+  .run .label { display: flex; align-items: center; gap: 7px; font-family: var(--mono);
+    font-size: 10px; letter-spacing: 1.4px; color: var(--t3); text-transform: uppercase; }
+  .run .label i { width: 6px; height: 6px; border-radius: 50%; background: var(--t5); }
+  .run .label.on i { background: var(--accent); animation: live 1.7s ease-in-out infinite; }
+  .run .goal { margin-top: 8px; font-size: 14px; font-weight: 500; color: var(--t1); line-height: 1.35; min-height: 19px; }
+  .prog { margin-top: 12px; }
+  .prog .r { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 10.5px; color: var(--t3); margin-bottom: 6px; }
+  .prog .bar { height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
+  .prog .bar i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent);
+    box-shadow: 0 0 10px -1px color-mix(in srgb, var(--accent) 70%, transparent); transition: width .3s; }
+  .stats { margin-top: 12px; display: flex; gap: 8px; }
+  .stat { flex: 1; padding: 8px 10px; background: var(--card); border: 1px solid var(--border2); border-radius: 8px; }
+  .stat .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .4px; text-transform: uppercase; color: var(--t4); }
+  .stat .v { font-family: var(--mono); font-size: 12.5px; color: var(--t1); margin-top: 4px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .agents { flex: 1 1 auto; overflow-y: auto; padding: 11px 16px 14px; }
+  .agents .label { display: flex; justify-content: space-between; font-family: var(--mono);
+    font-size: 10px; letter-spacing: 1.4px; color: var(--t3); text-transform: uppercase; margin-bottom: 9px; }
+  .card { padding: 8px 12px; border-radius: 11px; border: 1px solid #1E1F26; background: var(--card); margin-bottom: 8px; }
+  .card.active { border-color: color-mix(in srgb, var(--accent) 45%, #1E1F26);
+    background: color-mix(in srgb, var(--accent) 7%, var(--card)); box-shadow: inset 2px 0 0 var(--accent); }
+  .card.done { border-color: color-mix(in srgb, var(--green) 30%, #1E1F26); }
+  .card.off { opacity: .55; background: var(--well); }
+  .card .row { display: flex; align-items: center; gap: 8px; }
+  .card .name { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--t1); }
+  .pill { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px;
+    border-radius: 999px; background: #1A1B21; color: var(--t3); font-family: var(--mono); font-size: 10px; }
+  .pill i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .card.active .pill { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+  .card.active .pill i { animation: live 1.7s ease-in-out infinite; }
+  .card.done .pill { background: color-mix(in srgb, var(--green) 15%, transparent); color: #5FCE77; }
+  .card .desc { font-size: 11px; color: var(--t3); margin-top: 3px; }
+  .card .act { font-size: 11.5px; color: var(--t2); margin-top: 6px; font-family: var(--mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* terminal drawer */
+  .term { flex: 0 0 auto; border-top: 1px solid var(--border); }
+  .term-head { height: 37px; display: flex; align-items: center; gap: 9px; padding: 0 14px; background: var(--raise); }
+  .term-head .t { font-family: var(--mono); font-size: 10.5px; letter-spacing: 1.2px; color: var(--t3); text-transform: uppercase; }
+  .term-head .cwd { font-family: var(--mono); font-size: 10.5px; color: var(--t4); }
+  .chev { margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+    width: 24px; height: 22px; border: 0; background: transparent; color: var(--t3); cursor: pointer; border-radius: 5px; }
+  .chev:hover { background: #1B1C22; color: var(--t1); }
+  .chev svg { transition: transform .2s; }
+  .term.collapsed .chev svg { transform: rotate(-90deg); }
+  .term-body { height: 150px; overflow-y: auto; padding: 8px 14px 10px; background: var(--panel);
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.65; transition: height .2s; }
+  .term.collapsed .term-body { height: 0; padding-top: 0; padding-bottom: 0; }
+  .line { display: flex; gap: 12px; padding: 1px 0; }
+  .line .tag { color: var(--t4); flex: 0 0 92px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .line .tag.hot { color: var(--accent); }
+  .line .m { color: var(--t3); word-break: break-word; }
+  .cursor { display: inline-block; width: 8px; height: 14px; background: var(--accent);
+    border-radius: 1px; animation: blink 1.1s step-end infinite; vertical-align: text-bottom; }
+  .ok { color: var(--green); } .bad { color: var(--red); } .warn { color: var(--amber); }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <div class="top">
+    <span class="dots"><span style="background:#FF5F57"></span><span style="background:#FEBC2E"></span><span style="background:#28C840"></span></span>
+    <span class="logo">Relay<b>CLI</b></span>
+    <span class="proj" id="proj"></span>
+
+    <div class="menu-wrap">
+      <button class="btn" id="modelBtn">
+        <svg viewBox="0 0 24 24" fill="var(--accent)"><path d="M12 2l1.7 6.1L20 10l-6.3 1.9L12 18l-1.7-6.1L4 10l6.3-1.9z"></path></svg>
+        <span id="modelName">…</span>
+        <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#6E6F77" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg>
+      </button>
+      <div class="menu mcol hidden" id="modelMenu">
+        <div id="modelItems"></div>
+        <div class="custom">
+          <div class="h">Custom · any provider / model</div>
+          <div class="chips" id="provChips"></div>
+          <div class="crow">
+            <input id="customModel" placeholder="e.g. groq/llama-3.3-70b-versatile" autocomplete="off">
+            <button id="customSet">Set</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modes" id="modes">
+      <button data-m="suggest">Suggest</button>
+      <button data-m="auto-edit">Auto-edit</button>
+      <button data-m="full-auto">Full-auto</button>
+    </div>
+    <span class="live" id="live"><i></i><span id="liveText">idle</span></span>
+
+    <div class="menu-wrap">
+      <button class="btn" id="gearBtn" aria-label="Settings" style="width:32px;height:30px;justify-content:center;padding:0">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      </button>
+      <div class="menu settings hidden" id="settingsMenu">
+        <div class="sec">
+          <div class="h">Pipeline</div>
+          <div class="setrow"><div class="l"><div class="t">Relay</div><div class="s">Planner → Coder → Reviewer</div></div><div class="tog" data-flag="relay"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Task-split</div><div class="s">One fresh coder per task</div></div><div class="tog" data-flag="tasks"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Explorer</div><div class="s">Scout before planning</div></div><div class="tog" data-flag="explorer"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Tester</div><div class="s">Run the verification step</div></div><div class="tog" data-flag="tester"><span></span></div></div>
+        </div>
+        <div class="sec">
+          <div class="h">Appearance</div>
+          <div class="setrow"><div class="l"><div class="t">Accent</div><div class="s">The signal color</div></div>
+            <div class="swatches" id="swatches"></div></div>
+          <div class="setrow"><div class="l"><div class="t">Reduce motion</div><div class="s">Pause pulses and shimmer</div></div><div class="tog" id="reduceTog"><span></span></div></div>
+        </div>
+        <div class="foot"><span class="p" id="cfgPath"></span><span class="v" id="ver"></span></div>
+      </div>
+    </div>
+
+    <button class="stop" id="stopBtn" disabled><span></span>Stop</button>
+  </div>
+
+  <div class="main">
+    <div class="chat">
+      <div class="chat-head">
+        <div class="ic"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.9-.9L3 21l1.9-5.6a8.5 8.5 0 0 1-.9-3.9A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"></path></svg></div>
+        <div><div class="t">Chat</div><div class="s">with the agents</div></div>
+        <button class="icon-btn" id="newBtn" style="margin-left:auto" aria-label="New chat" title="New chat">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+        </button>
+      </div>
+      <div class="thread" id="thread"></div>
+      <div class="composer">
+        <div class="box">
+          <span class="caret">❯</span>
+          <input id="input" placeholder="Message the agents…" autocomplete="off">
+          <button class="send" id="send" title="Send">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"></path></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="canvas">
+      <div class="stage" id="stage"></div>
+      <div class="legend">
+        <span><i style="background:var(--accent)"></i>active</span>
+        <span><i style="background:var(--green)"></i>done</span>
+        <span><i style="background:var(--t5)"></i>idle</span>
+      </div>
+      <div class="zoom">
+        <button id="zOut">−</button><span class="zv" id="zVal">85%</span><button id="zIn">+</button>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="run">
+        <div class="label" id="runLabel"><i></i><span>Active run</span></div>
+        <div class="goal" id="goal"><span style="color:var(--t4)">no run yet</span></div>
+        <div class="prog"><div class="r"><span>progress</span><span id="progPct">—</span></div><div class="bar"><i id="progBar"></i></div></div>
+        <div class="stats">
+          <div class="stat"><div class="k">elapsed</div><div class="v" id="stElapsed">—</div></div>
+          <div class="stat"><div class="k">tokens</div><div class="v" id="stTokens">—</div></div>
+          <div class="stat"><div class="k">model</div><div class="v" id="stModel">—</div></div>
+        </div>
+      </div>
+      <div class="agents">
+        <div class="label"><span>Agents</span><span id="agentCount"></span></div>
+        <div id="cards"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="term" id="term">
+    <div class="term-head">
+      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#8A8B92" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 3.5 3.5L5 15M12.5 16h6"></path></svg>
+      <span class="t">Terminal</span><span class="cwd" id="cwd"></span>
+      <button class="chev" id="termToggle"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+    </div>
+    <div class="term-body" id="log"><div class="line"><span class="tag hot">❯</span><span class="cursor"></span></div></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const DESC = {
+  explorer: "scouts the codebase", planner: "decomposes the goal",
+  coder: "writes and edits code", tester: "runs the verification step",
+  reviewer: "reviews the result", agent: "single-agent run",
+};
+const GLYPH = { explorer: "◎", planner: "≣", coder: "⟨⟩", tester: "✓", reviewer: "🔍", agent: "❯" };
+const ACCENTS = ["#2D5BFF", "#3FB950", "#E3A008", "#B060F0", "#F0554E"];
+let since = 0, mode = "auto-edit", busy = false, state = null;
+const activity = {}, status = {};
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+async function api(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}) });
+  return r;
+}
+
+/* ---- top-bar menus ---- */
+function closeMenus(except) {
+  if (except !== "model") $("modelMenu").classList.add("hidden");
+  if (except !== "settings") $("settingsMenu").classList.add("hidden");
+}
+$("modelBtn").onclick = (e) => { e.stopPropagation(); const m = $("modelMenu"); const h = m.classList.contains("hidden"); closeMenus("model"); m.classList.toggle("hidden", !h); };
+$("gearBtn").onclick = (e) => { e.stopPropagation(); const m = $("settingsMenu"); const h = m.classList.contains("hidden"); closeMenus("settings"); m.classList.toggle("hidden", !h); };
+// clicks inside a menu must not bubble to the document close-handler
+// (otherwise the custom input would close the menu on focus)
+$("modelMenu").addEventListener("click", (e) => e.stopPropagation());
+$("settingsMenu").addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("click", () => closeMenus());
+
+// Provider quick-picks for the free-form model field. No maximum: type any
+// LiteLLM id; the chip just prefills a starter prefix.
+const PROVIDERS = [
+  ["openai", "gpt-4o"], ["anthropic", "claude-3-5-sonnet-latest"],
+  ["gemini", "gemini/"], ["deepseek", "deepseek/"], ["qwen", "dashscope/qwen-"],
+  ["glm", "zhipu/glm-"], ["groq", "groq/"], ["mistral", "mistral/"],
+  ["openrouter", "openrouter/"], ["ollama", "ollama_chat/"],
+];
+function renderProvChips() {
+  const c = $("provChips");
+  c.innerHTML = PROVIDERS.map(([p], i) => `<button class="chip2" data-i="${i}">${p}</button>`).join("");
+  for (const b of c.children) b.onclick = () => {
+    const tmpl = PROVIDERS[+b.dataset.i][1];
+    const inp = $("customModel"); inp.value = tmpl; inp.focus();
+    inp.setSelectionRange(tmpl.length, tmpl.length);
+  };
+}
+async function setCustom() {
+  const v = $("customModel").value.trim(); if (!v) return;
+  await api("/api/model", { model: v });
+  $("customModel").value = ""; closeMenus(); await loadState();
+  addLog("model", "switched to " + v);
+}
+$("customSet").onclick = setCustom;
+$("customModel").addEventListener("keydown", (e) => { if (e.key === "Enter") setCustom(); });
+renderProvChips();
+
+function renderModels() {
+  const models = state.models || [];
+  let html = "", lastGroup = null;
+  models.forEach((m, i) => {
+    if (m.group !== lastGroup) { html += `<div class="head grp">${esc(m.group)}</div>`; lastGroup = m.group; }
+    html += `<button class="item ${m.current ? "on" : ""}" data-i="${i}">` +
+      `<span class="nm">${esc(m.name)}</span><span class="ds">${esc(m.desc)}</span>` +
+      `<span class="ck"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9 17.5 20 6.5"></path></svg></span></button>`;
+  });
+  $("modelItems").innerHTML = html;
+  for (const b of $("modelItems").querySelectorAll(".item")) b.onclick = async () => {
+    const m = models[+b.dataset.i];
+    await api("/api/model", { model: m.id });
+    closeMenus(); await loadState();
+    addLog("model", "switched to " + m.name);
+  };
+}
+
+function renderSettings() {
+  for (const t of document.querySelectorAll(".tog[data-flag]")) {
+    const on = !!state[t.dataset.flag];
+    t.classList.toggle("on", on);
+    t.onclick = async () => {
+      const next = !t.classList.contains("on");
+      const r = await api("/api/flag", { name: t.dataset.flag, on: next });
+      if (r.ok) { await loadState(); }
+    };
+  }
+  $("cfgPath").textContent = state.config_file || "";
+  $("ver").textContent = "v" + (state.version || "");
+  const sw = $("swatches");
+  sw.innerHTML = ACCENTS.map((c, i) => `<span class="swatch" data-c="${c}" style="background:${c}"></span>`).join("");
+  const cur = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  for (const s of sw.children) {
+    s.classList.toggle("on", s.dataset.c === (localStorage.accent || "#2D5BFF"));
+    s.onclick = () => { document.documentElement.style.setProperty("--accent", s.dataset.c);
+      localStorage.accent = s.dataset.c; for (const x of sw.children) x.classList.toggle("on", x === s); };
+  }
+  const rt = $("reduceTog");
+  rt.classList.toggle("on", localStorage.reduce === "1");
+  document.body.classList.toggle("reduce", localStorage.reduce === "1");
+  rt.onclick = () => { const on = !rt.classList.contains("on"); rt.classList.toggle("on", on);
+    localStorage.reduce = on ? "1" : "0"; document.body.classList.toggle("reduce", on); };
+}
+
+/* ---- agent views ---- */
+function activeRoles() {
+  return (state && state.relay) ? state.roles.filter(r => r.enabled)
+    : [{ name: "agent", enabled: true, model: state ? state.model_short : "" }];
+}
+function renderCards() {
+  const roles = activeRoles();
+  $("agentCount").textContent = roles.length;
+  $("cards").innerHTML = roles.map(r => {
+    const st = status[r.name] || "idle";
+    const cls = st === "active" ? "active" : st === "done" ? "done" : "";
+    const pill = st === "active" ? "Working" : st === "done" ? "Done" : "Idle";
+    const act = activity[r.name] || "waiting";
+    return `<div class="card ${cls}"><div class="row"><span class="name">${esc(r.name)}</span>` +
+      `<span class="pill"><i></i>${pill}</span></div>` +
+      `<div class="desc">${esc(DESC[r.name] || "")} · ${esc(r.model)}</div>` +
+      `<div class="act">${esc(act)}</div></div>`;
+  }).join("");
+}
+let zoom = 0.85;
+const NW = 186, NH = 64, GW = 900, GH = 440;
+
+function edgePath(a, b) {  // horizontal cubic bezier between node centers
+  const ax = a.x + NW / 2, ay = a.y + NH / 2, bx = b.x + NW / 2, by = b.y + NH / 2;
+  const dx = (bx - ax) * 0.5;
+  return `M${ax} ${ay} C ${ax + dx} ${ay} ${bx - dx} ${by} ${bx} ${by}`;
+}
+
+function renderGraph() {
+  const stage = $("stage"); if (!stage) return;
+  const relay = state && state.relay;
+  const roles = activeRoles();
+  const pos = {};
+  if (!relay) {
+    pos[roles[0].name] = { x: (GW - NW) / 2, y: (GH - NH) / 2 };
+  } else {
+    const n = roles.length, firstX = 60, lastX = GW - 60 - NW;
+    const step = n > 1 ? (lastX - firstX) / (n - 1) : 0;
+    roles.forEach((r, i) => {
+      const t = n > 1 ? i / (n - 1) : 0.5;
+      pos[r.name] = { x: firstX + i * step, y: 250 - 42 * Math.sin(t * Math.PI) };  // gentle arc
+    });
+  }
+  const orch = relay ? { x: GW / 2 - NW / 2, y: 34 } : null;
+  const activeName = (roles.find(r => status[r.name] === "active") || {}).name;
+
+  let paths = "", pulses = "", labels = "";
+  if (relay) {
+    paths += `<path d="${edgePath(orch, pos[roles[0].name])}" stroke="color-mix(in srgb, var(--accent) 24%, var(--border))" stroke-width="1.3" fill="none" opacity=".7"/>`;
+    for (let i = 0; i < roles.length - 1; i++) {
+      const d = edgePath(pos[roles[i].name], pos[roles[i + 1].name]);
+      if (roles[i + 1].name === activeName) {
+        paths += `<path d="${d}" stroke="var(--accent)" stroke-width="6" fill="none" opacity=".14" style="filter:blur(3.5px)"/>`;
+        paths += `<path d="${d}" stroke="var(--accent)" stroke-width="1.8" fill="none" opacity=".55" marker-end="url(#arrowA)"/>`;
+        pulses += `<div class="pulse" style="offset-path:path('${d}');animation:pulse 1.7s linear infinite"></div>`;
+        pulses += `<div class="pulse" style="offset-path:path('${d}');animation:pulse 1.7s linear infinite .85s"></div>`;
+      } else {
+        paths += `<path d="${d}" stroke="#2E2F36" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>`;
+      }
+    }
+    // feedback loop: reviewer → coder (retry on failure)
+    const ci = roles.findIndex(r => r.name === "coder"), ri = roles.length - 1;
+    if (ci >= 0 && ri > ci) {
+      const rc = pos[roles[ri].name], cc = pos[roles[ci].name];
+      const rx = rc.x + NW / 2, ry = rc.y + NH, cx = cc.x + NW / 2, cy = cc.y + NH;
+      const dip = Math.max(ry, cy) + 90;
+      paths += `<path d="M${rx} ${ry} C ${rx} ${dip} ${cx} ${dip} ${cx} ${cy}" stroke="#34353C" stroke-width="1.4" stroke-dasharray="2 6" fill="none" opacity=".7" marker-end="url(#arrow)"/>`;
+      labels += `<div class="flabel" style="left:${(rx + cx) / 2}px;top:${dip - 6}px">retry on failure</div>`;
+    }
+  }
+
+  function nodeHtml(name, p, forceCls) {
+    const st = status[name] || "idle";
+    const cls = forceCls || (st === "active" ? "active" : st === "done" ? "done" : (busy ? "off" : ""));
+    const ring = cls === "active" ? '<span class="cardring"></span>' : "";
+    const foot = (name === activeName && activity[name])
+      ? `<div class="gfoot"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#6E6F77" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"></path><path d="M13 3v6h6"></path></svg>${esc(activity[name])}</div>`
+      : "";
+    return `<div class="gnode ${cls}" style="left:${p.x}px;top:${p.y}px">${ring}` +
+      `<div class="ghead"><div class="gi">${esc(GLYPH[name] || "●")}</div>` +
+      `<div style="min-width:0"><div class="gn">${esc(name)}</div><div class="gs">${esc(DESC[name] || "")}</div></div>` +
+      `<div class="gdot"><i></i></div></div>${foot}</div>`;
+  }
+
+  let nodes = "";
+  if (relay) {
+    nodes += `<div class="gnode orch" style="left:${orch.x}px;top:${orch.y}px">` +
+      `<div class="ghead"><div class="gi">◈</div>` +
+      `<div style="min-width:0"><div class="gn">orchestrator</div><div class="gs">coordinates the relay</div></div>` +
+      `<div class="gdot"><i></i>${busy ? '<span style="position:absolute;inset:0;border-radius:50%;border:1px solid var(--accent);animation:ring 2.6s ease-out infinite"></span>' : ""}</div></div></div>`;
+  }
+  roles.forEach(r => { nodes += nodeHtml(r.name, pos[r.name]); });
+
+  stage.style.width = GW + "px"; stage.style.height = GH + "px";
+  stage.style.transform = `scale(${zoom})`;
+  stage.innerHTML =
+    `<svg width="${GW}" height="${GH}" style="position:absolute;inset:0;overflow:visible;z-index:1"><defs>` +
+    `<marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1.5 1.5 L7.5 5 L1.5 8.5" fill="none" stroke="#3C3D45" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></marker>` +
+    `<marker id="arrowA" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M1.5 1.5 L7.5 5 L1.5 8.5" fill="none" stroke="var(--accent)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></marker>` +
+    `</defs>${paths}</svg>${pulses}${labels}${nodes}`;
+}
+function updateProgress() {
+  const roles = activeRoles();
+  const done = roles.filter(r => (status[r.name] || "idle") === "done").length;
+  const anyActive = roles.some(r => status[r.name] === "active");
+  const pct = busy ? Math.min(95, Math.round((done + (anyActive ? 0.5 : 0)) / roles.length * 100))
+    : (done ? 100 : 0);
+  $("progBar").style.width = pct + "%";
+  $("progPct").textContent = busy || done ? pct + "%" : "—";
+}
+
+function addMsg(cls, who, text) {
+  const el = document.createElement("div");
+  const dot = cls === "you" ? "" : `<i style="background:${cls === "err" ? "var(--red)" : "var(--accent)"}"></i>`;
+  el.className = "msg " + cls;
+  el.innerHTML = `<div class="who">${dot}<span>${esc(who)}</span><span class="ago">now</span></div><div class="bubble">${esc(text)}</div>`;
+  $("thread").appendChild(el); $("thread").scrollTop = 1e9;
+}
+function addLog(tag, msg, cls) {
+  const el = document.createElement("div");
+  el.className = "line";
+  el.innerHTML = `<span class="tag ${tag === "you" ? "hot" : ""}">[${esc(tag)}]</span><span class="m ${cls || ""}">${esc(msg)}</span>`;
+  const log = $("log"); log.insertBefore(el, log.lastElementChild); log.scrollTop = 1e9;
+}
+
+function setBusy(b) {
+  busy = b;
+  $("live").className = "live" + (b ? " on" : "");
+  $("liveText").textContent = b ? "running" : "idle";
+  $("runLabel").className = "label" + (b ? " on" : "");
+  $("send").disabled = b; $("stopBtn").disabled = !b;
+  if (!b) for (const k in status) if (status[k] === "active") status[k] = "done";
+  renderCards(); renderGraph(); updateProgress();
+}
+
+function handle(ev) {
+  if (ev.kind === "user") {
+    addMsg("you", "you", ev.text); addLog("you", ev.text);
+    for (const k in status) { status[k] = "idle"; activity[k] = "waiting"; }
+    $("goal").textContent = ev.text;
+  } else if (ev.kind === "role") {
+    for (const k in status) if (status[k] === "active") status[k] = "done";
+    status[ev.agent] = "active"; activity[ev.agent] = "started (" + ev.model + ")";
+    addLog(ev.agent, "started · " + ev.model);
+  } else if (ev.kind === "text") {
+    status[ev.agent] = "active"; addMsg("", ev.agent, ev.text);
+    addLog(ev.agent, ev.text.split("\n")[0].slice(0, 140));
+  } else if (ev.kind === "tool") {
+    status[ev.agent] = "active"; activity[ev.agent] = ev.summary;
+    addLog(ev.agent, ev.summary, ev.ok ? "" : "bad");
+  } else if (ev.kind === "note") {
+    addLog("note", ev.text, "warn");
+  } else if (ev.kind === "summary") {
+    const p = ["■ " + ev.stopped];
+    if (ev.verdict) p.push("verdict " + ev.verdict);
+    if (ev.tasks && ev.tasks.length) p.push(ev.tasks.length + " tasks");
+    p.push(ev.tokens + " tok", "$" + (ev.cost || 0).toFixed(4), ev.elapsed + "s");
+    addLog("run", p.join(" · "), ev.stopped === "done" ? "ok" : "bad");
+    if (ev.text) addMsg(ev.stopped === "done" ? "" : "err", "run", ev.text);
+    $("stElapsed").textContent = ev.elapsed + "s"; $("stTokens").textContent = ev.tokens;
+  } else if (ev.kind === "error") {
+    addMsg("err", "error", ev.text); addLog("error", ev.text, "bad");
+  }
+  renderCards(); renderGraph(); updateProgress();
+}
+
+async function poll() {
+  try {
+    const r = await (await fetch("/api/events?since=" + since)).json();
+    for (const ev of r.events) { since = ev.n + 1; handle(ev); }
+    if (busy !== r.busy) setBusy(r.busy);
+  } catch (e) {}
+  setTimeout(poll, 600);
+}
+
+async function loadState() {
+  state = await (await fetch("/api/state")).json();
+  $("proj").textContent = state.project;
+  $("cwd").textContent = state.cwd;
+  $("modelName").textContent = state.model_short;
+  $("stModel").textContent = state.model_short;
+  mode = state.mode;
+  for (const b of $("modes").children) b.classList.toggle("on", b.dataset.m === mode);
+  renderModels(); renderSettings(); renderCards(); renderGraph();
+}
+
+$("modes").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  mode = b.dataset.m; for (const x of $("modes").children) x.classList.toggle("on", x === b);
+});
+$("stopBtn").onclick = async () => { await api("/api/stop", {}); addLog("note", "stop requested — halting after the current step", "warn"); };
+$("newBtn").onclick = async () => {
+  const r = await api("/api/reset", {});
+  if ((await r.json()).ok) { $("thread").innerHTML = ""; since = 0;
+    $("goal").innerHTML = '<span style="color:var(--t4)">no run yet</span>';
+    for (const k in status) { delete status[k]; delete activity[k]; }
+    $("stElapsed").textContent = "—"; $("stTokens").textContent = "—";
+    renderCards(); renderGraph(); updateProgress(); }
+};
+$("termToggle").onclick = () => $("term").classList.toggle("collapsed");
+function setZoom(z) { zoom = Math.max(0.5, Math.min(1.3, z)); $("zVal").textContent = Math.round(zoom * 100) + "%";
+  const s = $("stage"); if (s) s.style.transform = `scale(${zoom})`; }
+$("zIn").onclick = () => setZoom(zoom + 0.1);
+$("zOut").onclick = () => setZoom(zoom - 0.1);
+
+async function send() {
+  const text = $("input").value.trim(); if (!text || busy) return;
+  $("input").value = "";
+  const r = await api("/api/send", { text, mode });
+  if (r.status === 409) addLog("note", "a run is already in progress", "warn"); else setBusy(true);
+}
+$("send").onclick = send;
+$("input").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+
+if (localStorage.accent) document.documentElement.style.setProperty("--accent", localStorage.accent);
+loadState().then(poll);
+</script>
+</body>
+</html>

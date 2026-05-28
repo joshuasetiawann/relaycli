@@ -1,0 +1,445 @@
+"""relaycli web — the desktop UI in a browser.
+
+A stdlib-only HTTP server (no new dependencies) that serves the single-file
+UI (``web_ui.html``, rebuilt from the user's local design) and a tiny JSON
+API the page polls:
+
+* ``GET  /``                 → the UI
+* ``GET  /api/state``        → model, mode, relay, roles, skills, cwd, version
+* ``POST /api/send``         → run one request on a worker thread (409 if busy)
+* ``GET  /api/events?since`` → incremental event log (user/role/text/tool/…)
+
+SECURITY: binds 127.0.0.1 ONLY. The page can edit files and run commands
+with the user's account and there is no auth story — never bind 0.0.0.0.
+Loopback alone does not stop the browser being used against us, so the
+handler also rejects non-loopback Host headers (DNS rebinding) and
+cross-origin POSTs (a text/plain form crosses origins with no preflight).
+Interactive permission prompts cannot block a web run, so a prompter that
+declines is installed: in suggest mode writes/commands are refused with a
+note (the UI's mode toggle exists precisely for this; auto-edit is the
+web default).
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from rich.console import Console
+
+from relaycli.config import PermissionMode, Settings
+from relaycli.context import ProjectContext
+from relaycli.llm import preflight_settings
+from relaycli.render import short_model_name
+from relaycli.router import Role, resolve_model, role_enabled
+
+UI_PATH = Path(__file__).parent / "web_ui.html"
+
+
+class WebReporter:
+    """Reporter protocol → session events (one per assistant block / tool)."""
+
+    def __init__(self, session: "WebSession", agent: str) -> None:
+        self._session = session
+        self._agent = agent
+        self._buf: list[str] = []
+
+    def assistant_token(self, text: str) -> None:
+        self._buf.append(text)
+
+    def assistant_end(self) -> None:
+        text = "".join(self._buf).strip()
+        self._buf.clear()
+        if text:
+            self._session.add("text", agent=self._agent, text=text)
+
+    def tool_start(self, call) -> None: ...
+
+    def tool_end(self, call, result) -> None:
+        ok = result is not None and result.ok
+        summary = (result.summary if result is not None else "") or call.name
+        self._session.add("tool", agent=self._agent, ok=ok, summary=summary)
+
+    def iteration(self, n: int) -> None: ...
+
+    def close(self) -> None:
+        self.assistant_end()
+
+
+class WebObserver:
+    """RelayObserver protocol → session events, one WebReporter per role."""
+
+    def __init__(self, session: "WebSession") -> None:
+        self._session = session
+
+    def role_start(self, role, model: str, cycle: int) -> None:
+        self._session.add("role", agent=str(role), model=short_model_name(model),
+                          cycle=cycle)
+
+    def reporter_for(self, role) -> WebReporter:
+        return WebReporter(self._session, str(role))
+
+
+class WebSession:
+    """One browser session's state: the event log and the single worker."""
+
+    def __init__(self, settings: Settings, *, llm=None) -> None:
+        self.settings = settings
+        self.project = ProjectContext(Path.cwd())
+        self._llm = llm  # injection seam for tests
+        self._events: list[dict] = []
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+
+    # -- events ------------------------------------------------------------
+    def add(self, kind: str, **data) -> None:
+        with self._lock:
+            self._events.append({"n": len(self._events), "kind": kind, **data})
+
+    def events_since(self, n: int) -> list[dict]:
+        with self._lock:
+            return self._events[n:]
+
+    @property
+    def busy(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    # -- state -------------------------------------------------------------
+    def state(self) -> dict:
+        from relaycli import __version__
+        from relaycli.config import CONFIG_FILE
+        from relaycli.skills import discover_skills
+
+        s = self.settings
+        roles = [
+            {
+                "name": str(role),
+                "enabled": role_enabled(s, role),
+                "model": short_model_name(resolve_model(s, role)),
+            }
+            for role in Role
+        ]
+        return {
+            "version": __version__,
+            "cwd": str(self.project.root),
+            "project": self.project.root.name,
+            "config_file": str(CONFIG_FILE),
+            "model": s.model,
+            "model_short": short_model_name(s.model),
+            "models": self._model_choices(),
+            "mode": str(s.permission_mode),
+            "relay": s.relay_enabled,
+            "explorer": s.relay_explorer,
+            "tester": s.relay_tester,
+            # "tasks" mirrors the /api/flag name the settings toggle uses;
+            # "split_tasks" is kept for any other consumer.
+            "tasks": s.relay_split_tasks,
+            "split_tasks": s.relay_split_tasks,
+            "roles": roles,
+            "skills": sorted(discover_skills(self.project.root)),
+            "preflight": preflight_settings(s),
+            "busy": self.busy,
+        }
+
+    # The model catalog shown in the top-bar config menu, grouped by
+    # provider: six direct providers (2 each) plus OpenRouter (8, all
+    # open-weights so they work on the user's free tier). Ids are LiteLLM
+    # model ids; each needs its provider's API key set (except the
+    # :free OpenRouter ones, which still need OPENROUTER_API_KEY).
+    MODEL_CATALOG: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
+        ("GPT", (
+            ("gpt-4o", "OpenAI · flagship"),
+            ("gpt-4o-mini", "OpenAI · fast"),
+        )),
+        ("Gemini", (
+            ("gemini/gemini-1.5-pro", "Google · capable"),
+            ("gemini/gemini-1.5-flash", "Google · fast"),
+        )),
+        ("Claude", (
+            ("claude-3-5-sonnet-latest", "Anthropic · balanced"),
+            ("claude-3-5-haiku-latest", "Anthropic · fast"),
+        )),
+        ("DeepSeek", (
+            ("deepseek/deepseek-chat", "DeepSeek · V3"),
+            ("deepseek/deepseek-reasoner", "DeepSeek · R1"),
+        )),
+        ("Qwen", (
+            ("dashscope/qwen-max", "Alibaba · max"),
+            ("dashscope/qwen-plus", "Alibaba · plus"),
+        )),
+        ("GLM", (
+            ("zhipu/glm-4-plus", "Zhipu · plus"),
+            ("zhipu/glm-4-flash", "Zhipu · fast"),
+        )),
+        ("OpenRouter", (
+            ("openrouter/cohere/north-mini-code:free", "Cohere · free"),
+            ("openrouter/qwen/qwen3-coder:free", "Qwen coder · free"),
+            ("openrouter/openai/gpt-oss-120b:free", "GPT-OSS 120B · free"),
+            ("openrouter/meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 · free"),
+            ("openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "Qwen3-Next · free"),
+            ("openrouter/deepseek/deepseek-v4-flash", "DeepSeek V4 · paid"),
+            ("openrouter/z-ai/glm-4.7", "GLM 4.7 · paid"),
+            ("openrouter/moonshotai/kimi-k2.6", "Kimi K2.6 · paid"),
+        )),
+        # Ollama entries are the fallback when nothing is installed locally;
+        # _ollama_models() replaces them with the actually-pulled models when
+        # a local server answers.
+        ("Ollama", (
+            ("ollama_chat/llama3.1", "local · needs `ollama pull`"),
+            ("ollama_chat/qwen2.5-coder", "local · needs `ollama pull`"),
+        )),
+    )
+
+    def _ollama_models(self) -> list[tuple[str, str]]:
+        """Models actually installed on the local Ollama server (best effort).
+
+        A short timeout keeps state() snappy; any failure (no server, refused)
+        falls back to the catalog defaults. No key needed — Ollama is local.
+        """
+        import json as _json
+        import urllib.request
+
+        url = self.settings.ollama_base_url.rstrip("/") + "/api/tags"
+        try:
+            with urllib.request.urlopen(url, timeout=0.5) as resp:
+                data = _json.loads(resp.read())
+        except Exception:
+            return []
+        models = []
+        for entry in data.get("models", []):
+            name = entry.get("name")
+            if name:
+                models.append((f"ollama_chat/{name}", "local · installed"))
+        return models
+
+    def _model_choices(self) -> list[dict]:
+        """Flat catalog for the config menu, tagged with a provider group.
+
+        The current model is always present: if it is not one of the
+        curated ids it is surfaced under a leading 'Current' group.
+        """
+        out: list[dict] = []
+        known = {mid for _, models in self.MODEL_CATALOG for mid, _ in models}
+        if self.settings.model not in known:
+            out.append({
+                "id": self.settings.model, "name": short_model_name(self.settings.model),
+                "desc": "in use", "group": "Current", "current": True,
+            })
+        for group, models in self.MODEL_CATALOG:
+            entries = models
+            if group == "Ollama":
+                detected = self._ollama_models()
+                if detected:
+                    entries = detected
+            for mid, desc in entries:
+                out.append({
+                    "id": mid, "name": short_model_name(mid), "desc": desc,
+                    "group": group, "current": mid == self.settings.model,
+                })
+        return out
+
+    def set_model(self, model: str) -> None:
+        model = (model or "").strip()
+        if model:
+            self.settings.model = model
+
+    def set_flag(self, name: str, value: bool) -> bool:
+        """Toggle a boolean session setting from the UI. Returns True if known."""
+        allowed = {
+            "relay": "relay_enabled", "explorer": "relay_explorer",
+            "tester": "relay_tester", "tasks": "relay_split_tasks",
+        }
+        field = allowed.get(name)
+        if field is None:
+            return False
+        setattr(self.settings, field, bool(value))
+        return True
+
+    def stop(self) -> None:
+        """Ask the in-flight run to halt after its current step (idempotent)."""
+        self._stop.set()
+
+    def reset(self) -> bool:
+        """Clear the event log for a new chat (refused while a run is live)."""
+        if self.busy:
+            return False
+        with self._lock:
+            self._events.clear()
+        return True
+
+    # -- running -----------------------------------------------------------
+    def send(self, text: str, mode: str | None = None) -> bool:
+        """Start one run; False when a run is already in flight."""
+        if self.busy:
+            return False
+        if mode:
+            try:
+                self.settings.permission_mode = PermissionMode(mode)
+            except ValueError:
+                pass
+        self._stop.clear()
+        self.add("user", text=text)
+        self._thread = threading.Thread(target=self._run, args=(text,), daemon=True)
+        self._thread.start()
+        return True
+
+    def _run(self, text: str) -> None:
+        from relaycli.agent import Agent
+        from relaycli.permissions import PermissionManager
+        from relaycli.relay import Relay
+
+        console = Console(file=io.StringIO(), force_terminal=False, width=100)
+        # A web run cannot answer an interactive prompt: everything that
+        # would ask, declines. The UI surfaces this as a note.
+        permissions = PermissionManager(
+            self.settings.permission_mode, prompter=lambda *a, **k: False,
+            console=console,
+        )
+        if self.settings.permission_mode is PermissionMode.suggest:
+            self.add("note", text=(
+                "suggest mode declines every edit/command on the web — "
+                "switch the mode toggle to auto-edit or full-auto"
+            ))
+        try:
+            if self.settings.relay_enabled:
+                relay = Relay(self.settings, console=console, project=self.project,
+                              permissions=permissions, should_stop=self._stop.is_set,
+                              **({"llm": self._llm} if self._llm else {}))
+                result = relay.run(text, observer=WebObserver(self))
+                self.add("summary", stopped=result.stopped_reason,
+                         verdict=result.verdict, cycles=result.cycles,
+                         tasks=result.tasks, tokens=result.usage.total_tokens,
+                         cost=result.usage.cost_usd, elapsed=round(result.elapsed, 1),
+                         text=result.final_text if result.stopped_reason != "done" else "")
+            else:
+                agent = Agent(self.settings, console=console, project=self.project,
+                              permissions=permissions, should_stop=self._stop.is_set,
+                              **({"llm": self._llm} if self._llm else {}))
+                reporter = WebReporter(self, "agent")
+                try:
+                    result = agent.run(text, reporter=reporter)
+                finally:
+                    reporter.close()
+                self.add("summary", stopped=result.stopped_reason,
+                         verdict=None, cycles=0, tasks=[],
+                         tokens=result.usage.total_tokens,
+                         cost=result.usage.cost_usd, elapsed=round(result.elapsed, 1),
+                         text=result.final_text if result.stopped_reason != "done" else "")
+        except Exception as exc:  # never kill the server thread silently
+            self.add("error", text=f"{type(exc).__name__}: {exc}")
+
+
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def make_handler(session: WebSession):
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args) -> None:  # quiet server log
+            pass
+
+        # Loopback binding alone does not stop the BROWSER from being used
+        # against us: a malicious site can DNS-rebind its domain to
+        # 127.0.0.1 (Host: evil.com reaches us), and a text/plain form POST
+        # crosses origins without a CORS preflight. Reject any Host that is
+        # not a loopback literal, and any state-changing request whose
+        # Origin (when present) is not loopback.
+        def _host_ok(self) -> bool:
+            host = urlparse(f"//{self.headers.get('Host') or ''}").hostname
+            return host in _LOOPBACK_HOSTS
+
+        def _origin_ok(self) -> bool:
+            origin = self.headers.get("Origin")
+            if not origin:
+                return True  # non-browser client (curl); Host is checked
+            return urlparse(origin).hostname in _LOOPBACK_HOSTS
+
+        def _json(self, obj, status: int = 200) -> None:
+            body = json.dumps(obj).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            if not self._host_ok():
+                self._json({"error": "bad host"}, status=421)
+                return
+            url = urlparse(self.path)
+            if url.path == "/":
+                body = UI_PATH.read_bytes()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif url.path == "/api/state":
+                self._json(session.state())
+            elif url.path == "/api/events":
+                since = int((parse_qs(url.query).get("since") or ["0"])[0])
+                self._json({"events": session.events_since(since),
+                            "busy": session.busy})
+            else:
+                self._json({"error": "not found"}, status=404)
+
+        def do_POST(self) -> None:
+            if not self._host_ok():
+                self._json({"error": "bad host"}, status=421)
+                return
+            if not self._origin_ok():
+                self._json({"error": "cross-origin request rejected"}, status=403)
+                return
+            path = urlparse(self.path).path
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                data = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                self._json({"error": "bad json"}, status=400)
+                return
+
+            if path == "/api/stop":
+                session.stop()
+                self._json({"ok": True})
+            elif path == "/api/reset":
+                self._json({"ok": session.reset()})
+            elif path == "/api/model":
+                session.set_model(data.get("model") or "")
+                self._json({"ok": True, "model": session.settings.model})
+            elif path == "/api/flag":
+                ok = session.set_flag(data.get("name") or "", bool(data.get("on")))
+                self._json({"ok": ok}, status=200 if ok else 400)
+            elif path == "/api/send":
+                text = (data.get("text") or "").strip()
+                if not text:
+                    self._json({"error": "empty message"}, status=400)
+                    return
+                if not session.send(text, data.get("mode")):
+                    self._json({"error": "a run is already in progress"}, status=409)
+                    return
+                self._json({"ok": True})
+            else:
+                self._json({"error": "not found"}, status=404)
+
+    return Handler
+
+
+def serve(settings: Settings, port: int = 8484) -> None:
+    """Serve the desktop UI on loopback until Ctrl-C."""
+    session = WebSession(settings)
+    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(session))
+    console = Console()
+    console.print(
+        f"[bold]RelayCLI desktop[/bold] → [cyan]http://127.0.0.1:{port}[/cyan]  "
+        f"[dim](loopback only · Ctrl-C to stop)[/dim]"
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        console.print("\n[dim]bye.[/dim]")
+    finally:
+        server.server_close()

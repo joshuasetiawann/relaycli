@@ -153,6 +153,16 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
 
 
 @app.command()
+def web(
+    port: int = typer.Option(8484, "--port", help="Port on 127.0.0.1 to serve."),
+) -> None:
+    """Open the RelayCLI desktop UI in your browser (loopback only)."""
+    from relaycli.web import serve
+
+    serve(get_settings(), port)
+
+
+@app.command()
 def config() -> None:
     """Show the active configuration and which provider keys are detected."""
     settings = get_settings()

@@ -16,6 +16,7 @@ untouched when a richer UI is added later.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -129,6 +130,7 @@ class Agent:
         prompt_template: str | None = None,
         model: str | None = None,
         skills_block: str = "",
+        should_stop: "Callable[[], bool] | None" = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.console = console or Console()
@@ -141,6 +143,7 @@ class Agent:
         self._prompt_template = prompt_template or _SYSTEM_TEMPLATE
         self._model_override = model
         self._skills_block = skills_block
+        self._should_stop = should_stop
         self.tool_ctx = ToolContext(self.project, self.permissions, self.console)
         self._schemas = self.registry.schemas()
         self.session = Session(
@@ -185,6 +188,18 @@ class Agent:
         tool_calls = 0
 
         for i in range(1, self.settings.max_iterations + 1):
+            # Cooperative cancellation (e.g. the web Stop button): checked
+            # between iterations, so a run halts after the current step
+            # rather than mid-tool.
+            if self._should_stop is not None and self._should_stop():
+                return AgentResult(
+                    final_text="Stopped by user.",
+                    iterations=i - 1,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                    stopped_reason="stopped",
+                    elapsed=time.perf_counter() - started,
+                )
             reporter.iteration(i)
             self.session.trim()
 

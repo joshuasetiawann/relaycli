@@ -151,6 +151,20 @@ How to work:
     + _SECURITY_BLOCK
 )
 
+_TASK_LINE_RE = re.compile(r"^\s*\d+[.)]\s+(.*\S)", re.MULTILINE)
+_MAX_TASKS = 6
+
+
+def parse_tasks(plan: str) -> list[str]:
+    """Extract the plan's numbered steps as individual tasks (capped).
+
+    Used by the opt-in task-split mode: each numbered line becomes one
+    task owned by a fresh coder agent. A plan without at least two
+    numbered lines is not worth splitting.
+    """
+    return [m.group(1).strip() for m in _TASK_LINE_RE.finditer(plan or "")][:_MAX_TASKS]
+
+
 _VERDICT_LINE_RE = re.compile(r"^\s*VERDICT:\s*(approve|revise)\b", re.IGNORECASE | re.MULTILINE)
 _VERDICT_ANY_RE = re.compile(r"VERDICT:\s*(approve|revise)", re.IGNORECASE)
 
@@ -204,6 +218,7 @@ class RelayResult:
     elapsed: float = 0.0
     verdict: str | None = None  # last effective verdict
     notes: list[str] = field(default_factory=list)  # advisory warnings for the summary
+    tasks: list[str] = field(default_factory=list)  # task-split mode: the parsed tasks
 
 
 class Relay:
@@ -218,6 +233,7 @@ class Relay:
         permissions: PermissionManager | None = None,
         llm: LLM | None = None,
         skills_block: str = "",
+        should_stop=None,
     ) -> None:
         self.settings = settings or get_settings()
         self.console = console or Console()
@@ -229,6 +245,7 @@ class Relay:
         # Skills shape HOW work is done, so they apply to the role that does
         # the work; advisory roles keep their tightly-scoped prompts.
         self.skills_block = skills_block
+        self.should_stop = should_stop
 
     def run(self, request: str, *, observer: RelayObserver | None = None) -> RelayResult:
         observer = observer or RelayObserver()
@@ -252,6 +269,7 @@ class Relay:
             prompt_template=template,
             model=resolve_model(self.settings, role),
             skills_block=self.skills_block if role is Role.coder else "",
+            should_stop=self.should_stop,
         )
 
     def _run_role(
@@ -269,6 +287,45 @@ class Relay:
         result.role_runs.append(role_run)
         result.usage = result.usage.add(run.usage)
         return role_run
+
+    def _run_tasks(
+        self,
+        request: str,
+        plan: str,
+        tasks: list[str],
+        observer: RelayObserver,
+        result: RelayResult,
+    ) -> str | None:
+        """Run one FRESH coder agent per plan task, sequentially.
+
+        Each agent gets a clean context window: the request, the full plan,
+        the previous tasks' reports, and exactly one task to own. Returns the
+        combined report, or None after recording an aborting failure.
+        """
+        reports: list[str] = []
+        for i, task in enumerate(tasks):
+            coder = self._agent(Role.coder, CODER_TEMPLATE, default_registry())
+            prev = ""
+            if reports:
+                prev = "\n\n" + "\n\n".join(
+                    f"Report from task {j + 1}:\n{r}" for j, r in enumerate(reports)
+                )
+            task_request = (
+                f"User request:\n{request}\n\n"
+                f"Full plan:\n{plan}{prev}\n\n"
+                f"Your assignment is ONLY task {i + 1} of {len(tasks)}:\n{task}\n\n"
+                f"Do this one step now — other tasks are handled by other agents."
+            )
+            run = self._run_role(coder, Role.coder, task_request, 0, observer, result)
+            if run.result.stopped_reason != "done":
+                result.final_text = run.result.final_text
+                result.stopped_reason = run.result.stopped_reason
+                return None
+            reports.append(run.result.final_text.strip())
+        return "\n\n".join(
+            f"Task {i + 1} ({task}):\n{report}"
+            for i, (task, report) in enumerate(zip(tasks, reports))
+        )
 
     def _pipeline(self, request: str, observer: RelayObserver, result: RelayResult) -> None:
         planner = self._agent(Role.planner, PLANNER_TEMPLATE, planner_registry())
@@ -310,15 +367,37 @@ class Relay:
             f"Carry out this plan now."
         )
 
+        # Task-split mode (opt-in): each numbered plan step is owned by a
+        # fresh coder agent with a clean context window.
+        tasks: list[str] = []
+        if self.settings.relay_split_tasks:
+            tasks = parse_tasks(plan)
+            if len(tasks) < 2:
+                result.notes.append(
+                    "Plan has no numbered tasks to split; running a single Coder."
+                )
+                tasks = []
+            result.tasks = tasks
+
         for cycle in range(self.settings.max_review_cycles + 1):
             result.cycles = cycle
 
-            # 2. Code.
-            code_run = self._run_role(coder, Role.coder, coder_request, cycle, observer, result)
-            result.final_text = code_run.result.final_text
-            if code_run.result.stopped_reason != "done":
-                result.stopped_reason = code_run.result.stopped_reason
-                return
+            # 2. Code — one coder per task (first cycle only), or the classic
+            #    single persistent coder.
+            if tasks and cycle == 0:
+                code_report = self._run_tasks(request, plan, tasks, observer, result)
+                if code_report is None:
+                    return
+            else:
+                code_run = self._run_role(
+                    coder, Role.coder, coder_request, cycle, observer, result
+                )
+                if code_run.result.stopped_reason != "done":
+                    result.final_text = code_run.result.final_text
+                    result.stopped_reason = code_run.result.stopped_reason
+                    return
+                code_report = code_run.result.final_text
+            result.final_text = code_report
 
             # 2b. Test (optional): run the plan's verification step and hand
             #     the evidence to the Reviewer. Advisory — the Reviewer can
@@ -329,7 +408,7 @@ class Relay:
                 tester_request = (
                     f"User request:\n{request}\n\n"
                     f"Plan:\n{plan}\n\n"
-                    f"The Coder reports:\n{code_run.result.final_text}\n\n"
+                    f"The Coder reports:\n{code_report}\n\n"
                     f"Run the plan's verification step now and report the outcome."
                 )
                 test_run = self._run_role(
@@ -348,7 +427,7 @@ class Relay:
                 review_request = (
                     f"User request:\n{request}\n\n"
                     f"Plan:\n{plan}\n\n"
-                    f"The Coder reports:\n{code_run.result.final_text}"
+                    f"The Coder reports:\n{code_report}"
                     f"{tester_report}\n\n"
                     f"Review the actual changes in the working tree against the "
                     f"request and the plan."
@@ -356,7 +435,7 @@ class Relay:
             else:
                 review_request = (
                     f"The Coder revised the work and reports:\n"
-                    f"{code_run.result.final_text}{tester_report}\n\nRe-review."
+                    f"{code_report}{tester_report}\n\nRe-review."
                 )
             review_run = self._run_role(
                 reviewer, Role.reviewer, review_request, cycle, observer, result
@@ -392,8 +471,18 @@ class Relay:
                     "Reviewer feedback remains unaddressed (revision limit reached)."
                 )
                 return
-            coder_request = (
+            feedback = (
                 "The Reviewer rejected the work. Address every point of this "
                 "feedback, then report what you changed:\n\n"
                 + review_run.result.final_text
             )
+            if tasks:
+                # The fixer coder is fresh (task agents owned cycle 0):
+                # give it the full context, not just the feedback.
+                coder_request = (
+                    f"User request:\n{request}\n\nPlan:\n{plan}\n\n"
+                    f"Combined reports from the task agents:\n{code_report}\n\n"
+                    + feedback
+                )
+            else:
+                coder_request = feedback

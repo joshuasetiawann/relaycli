@@ -23,6 +23,25 @@ from relaycli.router import Role, resolve_model, routing_table
 from relaycli.tools import default_registry, planner_registry, reviewer_registry
 
 
+import os
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_config(monkeypatch, tmp_path):
+    """Isolate from the user's env and ~/.relaycli/config.toml.
+
+    These tests assert default values (relay_enabled=False, etc.); a real
+    config.toml that enables relay/task-split would otherwise leak in via
+    the TOML settings source (_env_file=None does NOT block it).
+    """
+    for var in list(os.environ):
+        if var.startswith("RELAYCLI_"):
+            monkeypatch.delenv(var, raising=False)
+    monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no.toml"))
+
+
 def _settings(**kw) -> Settings:
     # _env_file=None: ignore any local .env so tests are hermetic.
     return Settings(_env_file=None, **kw)
@@ -722,3 +741,81 @@ class TestRegistrySubsets:
         default_schemas = {s["function"]["name"]: s for s in default_registry().schemas()}
         for schema in planner_registry().schemas() + reviewer_registry().schemas():
             assert schema == default_schemas[schema["function"]["name"]]
+
+
+class TestTaskSplit:
+    def test_parse_tasks(self):
+        from relaycli.relay import _MAX_TASKS, parse_tasks
+
+        plan = "Goal: do X\n1. scaffold jwt utils\n2) protect user routes\n3. auth tests"
+        assert parse_tasks(plan) == [
+            "scaffold jwt utils", "protect user routes", "auth tests",
+        ]
+        assert parse_tasks("no numbers here") == []
+        many = "\n".join(f"{i}. step {i}" for i in range(1, 12))
+        assert len(parse_tasks(many)) == _MAX_TASKS
+
+    def test_one_fresh_coder_per_task(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="Goal\n1. make utils\n2. wire routes"),   # planner
+            _resp(text="UTILS-DONE"),                              # coder task 1
+            _resp(text="ROUTES-DONE"),                             # coder task 2
+            _resp(text="VERDICT: approve"),                        # reviewer
+        ])
+        relay = _relay(sample_project, llm, relay_split_tasks=True)
+        result = relay.run("REQ")
+
+        assert result.stopped_reason == "done"
+        assert result.tasks == ["make utils", "wire routes"]
+        assert [str(r.role) for r in result.role_runs] == [
+            "planner", "coder", "coder", "reviewer",
+        ]
+        # Task 1's coder sees only its assignment; task 2's sees task 1's report.
+        t1_user = llm.calls[1][-1]["content"]
+        assert "ONLY task 1 of 2" in t1_user and "make utils" in t1_user
+        t2_user = llm.calls[2][-1]["content"]
+        assert "ONLY task 2 of 2" in t2_user and "UTILS-DONE" in t2_user
+        # Fresh context per task: task 2's history has no task-1 dialogue.
+        t2_roles = [m["role"] for m in llm.calls[2]]
+        assert t2_roles == ["system", "user"]
+        # The reviewer sees the combined report.
+        reviewer_user = llm.calls[3][-1]["content"]
+        assert "UTILS-DONE" in reviewer_user and "ROUTES-DONE" in reviewer_user
+        assert result.final_text.startswith("Task 1")
+
+    def test_unsplittable_plan_falls_back(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="just do the thing, no numbered steps"),
+            _resp(text="DONE"),
+            _resp(text="VERDICT: approve"),
+        ])
+        result = _relay(sample_project, llm, relay_split_tasks=True).run("REQ")
+        assert result.stopped_reason == "done"
+        assert result.tasks == []
+        assert any("no numbered tasks" in n for n in result.notes)
+        assert [str(r.role) for r in result.role_runs] == ["planner", "coder", "reviewer"]
+
+    def test_revise_uses_single_fixer_with_context(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="1. a\n2. b"),               # planner
+            _resp(text="A-DONE"),                    # task 1
+            _resp(text="B-DONE"),                    # task 2
+            _resp(text="VERDICT: revise\n1. fix X"), # reviewer
+            _resp(text="FIXED"),                     # fixer coder (fresh)
+            _resp(text="VERDICT: approve"),          # re-review
+        ])
+        result = _relay(sample_project, llm, relay_split_tasks=True).run("REQ")
+        assert result.stopped_reason == "done"
+        assert result.cycles == 1
+        fixer_user = llm.calls[4][-1]["content"]
+        assert "A-DONE" in fixer_user and "B-DONE" in fixer_user
+        assert "fix X" in fixer_user
+        assert result.final_text == "FIXED"
+
+    def test_agents_tasks_toggle(self):
+        settings = _settings(model="fake/m")
+        repl = Repl(settings, console=_console())
+        repl._handle_slash("/agents tasks on")
+        assert repl.settings.relay_split_tasks is True
+        repl._handle_slash("/agents tasks off")
+        assert repl.settings.relay_split_tasks is False

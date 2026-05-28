@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #060608; }
+  body { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; font-family: 'Geist', -apple-system, system-ui, sans-serif; }
+  @keyframes rl-blink { 0%, 48% { opacity: 1; } 52%, 100% { opacity: 0; } }
+  @keyframes rl-ring { 0% { transform: scale(1); opacity: .5; } 100% { transform: scale(1.55); opacity: 0; } }
+  @keyframes rl-cardring { 0% { transform: scale(1); opacity: .45; } 100% { transform: scale(1.05); opacity: 0; } }
+  @keyframes rl-glow { 0%, 100% { opacity: .38; } 50% { opacity: .8; } }
+  @keyframes rl-live { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .35; transform: scale(.8); } }
+  @keyframes rl-flow { to { stroke-dashoffset: -32; } }
+  @keyframes rl-pulse { 0% { offset-distance: 0%; opacity: 0; } 15% { opacity: 1; } 80% { opacity: 1; } 100% { offset-distance: 100%; opacity: 0; } }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: #26272E; border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: #34353D; background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  input::placeholder { color: #5E5F66; opacity: 1; }
+</style>
+</helmet>
+
+<div ref="{{ appRef }}" style="--accent: #2D5BFF; width: 1440px; height: 900px; background: #060608; display: flex; align-items: center; justify-content: center; font-family: 'Geist', -apple-system, system-ui, sans-serif;">
+
+  <div style="position: relative; width: 1408px; height: 868px; background: #0B0B0E; border-radius: 13px; box-shadow: 0 24px 70px -24px rgba(0,0,0,.8), 0 0 0 1px #24252B; display: flex; flex-direction: column; overflow: hidden;">
+
+    <!-- ═══════════ TOP BAR ═══════════ -->
+    <div style="flex: 0 0 auto; height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 16px; background: #14151A; border-bottom: 1px solid #24252B;">
+      <div style="display: flex; gap: 8px; align-items: center;">
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #FF5F57; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.28);"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #FEBC2E; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.28);"></span>
+        <span style="width: 12px; height: 12px; border-radius: 50%; background: #28C840; box-shadow: inset 0 0 0 .5px rgba(0,0,0,.28);"></span>
+      </div>
+      <span style="width: 1px; height: 20px; background: #24252B; margin-left: 4px;"></span>
+      <div style="font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 600; letter-spacing: -.2px; color: #E7E7EA; flex: 0 0 auto;">Relay<span style="color: var(--accent, #2D5BFF);">CLI</span></div>
+      <div style="display: flex; align-items: center; gap: 6px; color: #8A8B92; font-family: 'JetBrains Mono', monospace; font-size: 12px; margin-left: 2px; flex: 0 0 auto; white-space: nowrap;">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#6E6F77" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.3"></circle><circle cx="6" cy="18" r="2.3"></circle><circle cx="18" cy="7.5" r="2.3"></circle><path d="M6 8.3v7.4M18 9.8c0 3.6-3.8 3.3-6 5.2"></path></svg>
+        <span style="color: #B7B8BE;">users-api</span>
+      </div>
+      <div style="position: relative; flex: 0 0 auto;">
+        <button onClick="{{ toggleModelMenu }}" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px 4px 9px; border: 1px solid #24252B; border-radius: 7px; background: #101116; font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: #B7B8BE; cursor: pointer; white-space: nowrap;" style-hover="border-color: #34353C; color: #E7E7EA;">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="var(--accent, #2D5BFF)"><path d="M12 2l1.7 6.1L20 10l-6.3 1.9L12 18l-1.7-6.1L4 10l6.3-1.9z"></path></svg>
+          {{ modelName }}
+          <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#6E6F77" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="{{ modelChevronStyle }}"><path d="m6 9 6 6 6-6"></path></svg>
+        </button>
+        <div onClick="{{ closeModelMenu }}" style="{{ modelOverlayStyle }}"></div>
+        <div style="{{ modelMenuStyle }}">
+          <div style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: 1.2px; color: #6E6F77; text-transform: uppercase; padding: 6px 9px 8px;">Model</div>
+          <sc-for list="{{ modelList }}" as="m" hint-placeholder-count="5">
+            <button onClick="{{ m.onSelect }}" style="display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 9px; border: 0; background: transparent; border-radius: 7px; cursor: pointer; text-align: left;" style-hover="background: #1E1F27;">
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #E7E7EA; flex: 1 1 auto;">{{ m.name }}</span>
+              <span style="font-family: 'Geist', sans-serif; font-size: 10.5px; color: #6E6F77; flex: 0 0 auto;">{{ m.desc }}</span>
+              <span style="{{ m.checkStyle }}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9 17.5 20 6.5"></path></svg></span>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="margin-left: auto; display: flex; align-items: center; gap: 14px; flex: 0 0 auto;">
+        <div style="position: relative; display: flex; padding: 4px; background: #0E0F13; border: 1px solid #24252B; border-radius: 9px;">
+          <div style="{{ highlightStyle }}"></div>
+          <button onClick="{{ setSuggest }}" style="position: relative; z-index: 1; width: 82px; height: 22px; border: 0; background: transparent; cursor: pointer; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C2C3C9; border-radius: 6px;" style-hover="color: #E7E7EA;">Suggest</button>
+          <button onClick="{{ setAutoEdit }}" style="position: relative; z-index: 1; width: 82px; height: 22px; border: 0; background: transparent; cursor: pointer; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C2C3C9; border-radius: 6px;" style-hover="color: #E7E7EA;">Auto-edit</button>
+          <button onClick="{{ setFullAuto }}" style="position: relative; z-index: 1; width: 82px; height: 22px; border: 0; background: transparent; cursor: pointer; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #C2C3C9; border-radius: 6px;" style-hover="color: #E7E7EA;">Full-auto</button>
+        </div>
+        <span style="width: 1px; height: 20px; background: #24252B;"></span>
+        <div style="display: flex; align-items: center; gap: 7px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8A8B92;">
+          <span data-anim="1" style="width: 7px; height: 7px; border-radius: 50%; background: var(--accent, #2D5BFF); animation: rl-live 1.7s ease-in-out infinite;"></span>
+          running
+        </div>
+
+        <!-- SETTINGS -->
+        <div style="position: relative; flex: 0 0 auto;">
+          <button onClick="{{ toggleSettings }}" style="{{ gearBtnStyle }}" style-hover="border-color: #34353C; color: #E7E7EA;" aria-label="Settings">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+          </button>
+          <div onClick="{{ closeSettings }}" style="{{ settingsOverlayStyle }}"></div>
+          <div style="{{ settingsPanelStyle }}">
+            <!-- header -->
+            <div style="display: flex; align-items: center; gap: 9px; padding: 12px 14px 11px; border-bottom: 1px solid #202127;">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--accent, #2D5BFF)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .3px; color: #E7E7EA; font-weight: 500;">Settings</span>
+              <button onClick="{{ closeSettings }}" style="margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: 6px; background: transparent; color: #6E6F77; cursor: pointer;" style-hover="background: #1E1F27; color: #E7E7EA;"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+            </div>
+
+            <!-- General -->
+            <div style="padding: 12px 14px;">
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: 1.2px; color: #6E6F77; text-transform: uppercase; margin-bottom: 8px;">General</div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 7px 0;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                  <div style="font-size: 12.5px; color: #E7E7EA;">Notify on completion</div>
+                  <div style="font-size: 10.5px; color: #6E6F77; margin-top: 2px;">Ping when a run finishes</div>
+                </div>
+                <div onClick="{{ onToggleNotify }}" style="{{ notifyTog.track }}"><span style="{{ notifyTog.knob }}"></span></div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 7px 0;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                  <div style="font-size: 12.5px; color: #E7E7EA;">Sound alerts</div>
+                  <div style="font-size: 10.5px; color: #6E6F77; margin-top: 2px;">Chime when approval is needed</div>
+                </div>
+                <div onClick="{{ onToggleSound }}" style="{{ soundTog.track }}"><span style="{{ soundTog.knob }}"></span></div>
+              </div>
+            </div>
+
+            <!-- Agents -->
+            <div style="padding: 12px 14px; border-top: 1px solid #202127;">
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: 1.2px; color: #6E6F77; text-transform: uppercase; margin-bottom: 8px;">Agents</div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 7px 0;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                  <div style="font-size: 12.5px; color: #E7E7EA;">Auto-approve safe edits</div>
+                  <div style="font-size: 10.5px; color: #6E6F77; margin-top: 2px;">Skip prompts for low-risk changes</div>
+                </div>
+                <div onClick="{{ onToggleAutoApprove }}" style="{{ autoApproveTog.track }}"><span style="{{ autoApproveTog.knob }}"></span></div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 7px 0;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                  <div style="font-size: 12.5px; color: #E7E7EA;">Max parallel agents</div>
+                  <div style="font-size: 10.5px; color: #6E6F77; margin-top: 2px;">How many run at once</div>
+                </div>
+                <div style="display: flex; gap: 3px; background: #0E0F13; border: 1px solid #24252B; border-radius: 7px; padding: 3px; flex: 0 0 auto;">
+                  <sc-for list="{{ parallelOpts }}" as="p" hint-placeholder-count="3">
+                    <button onClick="{{ p.onSelect }}" style="{{ p.style }}">{{ p.label }}</button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 7px 0;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                  <div style="font-size: 12.5px; color: #E7E7EA;">Cost limit / run</div>
+                  <div style="font-size: 10.5px; color: #6E6F77; margin-top: 2px;">Pause a run past this budget</div>
+                </div>
+                <div style="display: flex; align-items: center; background: #0E0F13; border: 1px solid #24252B; border-radius: 7px; flex: 0 0 auto; overflow: hidden;">
+                  <button onClick="{{ onCostMinus }}" style="width: 26px; height: 26px; border: 0; background: transparent; color: #8A8B92; cursor: pointer; font-size: 15px; line-height: 1;" style-hover="background: #1B1C22; color: #E7E7EA;">−</button>
+                  <span style="min-width: 42px; text-align: center; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #E7E7EA;">{{ costLabel }}</span>
+                  <button onClick="{{ onCostPlus }}" style="width: 26px; height: 26px; border: 0; background: transparent; color: #8A8B92; cursor: pointer; font-size: 15px; line-height: 1;" style-hover="background: #1B1C22; color: #E7E7EA;">+</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Appearance -->
+            <div style="padding: 12px 14px; border-top: 1px solid #202127;">
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: 1.2px; color: #6E6F77; text-transform: uppercase; margin-bottom: 8px;">Appearance</div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 7px 0;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                  <div style="font-size: 12.5px; color: #E7E7EA;">Accent</div>
+                  <div style="font-size: 10.5px; color: #6E6F77; margin-top: 2px;">The signal color</div>
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center; flex: 0 0 auto;">
+                  <sc-for list="{{ accentOpts }}" as="a" hint-placeholder-count="4">
+                    <button onClick="{{ a.onSelect }}" style="{{ a.style }}"></button>
+                  </sc-for>
+                </div>
+              </div>
+              <div style="display: flex; align-items: center; gap: 12px; padding: 7px 0;">
+                <div style="flex: 1 1 auto; min-width: 0;">
+                  <div style="font-size: 12.5px; color: #E7E7EA;">Reduce motion</div>
+                  <div style="font-size: 10.5px; color: #6E6F77; margin-top: 2px;">Pause pulses and shimmer</div>
+                </div>
+                <div onClick="{{ onToggleReduceMotion }}" style="{{ reduceMotionTog.track }}"><span style="{{ reduceMotionTog.knob }}"></span></div>
+              </div>
+            </div>
+
+            <!-- footer -->
+            <div style="display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-top: 1px solid #202127; background: #121318;">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#5E5F66" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 auto;"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"></path><path d="M13 3v6h6"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6E6F77;">~/.relaycli/config.toml</span>
+              <span style="margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #4D4E55;">v0.4.2</span>
+            </div>
+          </div>
+        </div>
+
+        <button style="display: inline-flex; align-items: center; gap: 7px; padding: 6px 13px; border: 1px solid #24252B; border-radius: 8px; background: #16171C; color: #E7E7EA; font-family: 'Geist', sans-serif; font-size: 12.5px; font-weight: 500; cursor: pointer;" style-hover="border-color: color-mix(in srgb, #F0554E 50%, #24252B); color: #F0554E; background: color-mix(in srgb, #F0554E 8%, #16171C);">
+          <span style="width: 8px; height: 8px; background: currentColor; border-radius: 2px;"></span>
+          Stop
+        </button>
+      </div>
+    </div>
+
+    <!-- ═══════════ MAIN ROW ═══════════ -->
+    <div style="flex: 1 1 auto; display: flex; min-height: 0;">
+
+      <!-- ───── LEFT CHAT PANEL ───── -->
+      <div style="flex: 0 0 330px; width: 330px; border-right: 1px solid #24252B; background: #14151A; display: flex; flex-direction: column; min-height: 0;">
+        <!-- header -->
+        <div style="flex: 0 0 auto; display: flex; align-items: center; gap: 9px; padding: 12px 16px; border-bottom: 1px solid #24252B;">
+          <div style="flex: 0 0 auto; width: 26px; height: 26px; border-radius: 7px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent, #2D5BFF) 14%, transparent); color: var(--accent, #2D5BFF);">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.9-.9L3 21l1.9-5.6a8.5 8.5 0 0 1-.9-3.9A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"></path></svg>
+          </div>
+          <div style="min-width: 0;">
+            <div style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 500; color: #E7E7EA;">Chat</div>
+            <div style="font-size: 10.5px; color: #8A8B92; margin-top: 1px;">with orchestrator</div>
+          </div>
+          <button style="margin-left: auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid #24252B; border-radius: 7px; background: #101116; color: #8A8B92; cursor: pointer;" style-hover="border-color: #34353C; color: #E7E7EA;" aria-label="New chat">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
+          </button>
+        </div>
+        <!-- thread -->
+        <div ref="{{ chatBodyRef }}" style="flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 16px; display: flex; flex-direction: column; gap: 15px;">
+
+          <!-- you: goal -->
+          <div style="display: flex; flex-direction: column; gap: 5px; align-items: flex-end;">
+            <div style="display: flex; align-items: center; gap: 6px; padding-right: 3px;">
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E6F77;">1m ago</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--accent, #2D5BFF);">you</span>
+            </div>
+            <div style="max-width: 88%; background: color-mix(in srgb, var(--accent, #2D5BFF) 15%, #101116); border: 1px solid color-mix(in srgb, var(--accent, #2D5BFF) 30%, #1E1F26); border-radius: 12px; border-top-right-radius: 4px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; color: #E7E7EA;">Add JWT authentication to the users API</div>
+          </div>
+
+          <!-- orchestrator: plan -->
+          <div style="display: flex; flex-direction: column; gap: 5px; align-items: flex-start;">
+            <div style="display: flex; align-items: center; gap: 6px; padding-left: 3px;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #2D5BFF);"></span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #B7B8BE;">orchestrator</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E6F77;">1m</span>
+            </div>
+            <div style="max-width: 92%; background: #0E0F13; border: 1px solid #24252B; border-radius: 12px; border-top-left-radius: 4px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; color: #C9CAD0;">
+              Decomposed the goal into 4 tasks and routed them to the team.
+              <div style="margin-top: 8px; display: flex; flex-direction: column; gap: 4px; font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8A8B92;">
+                <div style="display: flex; gap: 8px;"><span style="color: #4D4E55;">1</span>scaffold jwt utils</div>
+                <div style="display: flex; gap: 8px;"><span style="color: #4D4E55;">2</span>protect user routes</div>
+                <div style="display: flex; gap: 8px;"><span style="color: #4D4E55;">3</span>token fixtures</div>
+                <div style="display: flex; gap: 8px;"><span style="color: #4D4E55;">4</span>auth tests</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- planner: done -->
+          <div style="display: flex; flex-direction: column; gap: 5px; align-items: flex-start;">
+            <div style="display: flex; align-items: center; gap: 6px; padding-left: 3px;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: #3FB950;"></span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #B7B8BE;">planner</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E6F77;">52s</span>
+            </div>
+            <div style="max-width: 92%; background: #0E0F13; border: 1px solid #24252B; border-radius: 12px; border-top-left-radius: 4px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; color: #C9CAD0;">Plan ready — handing the first task off to Coder.</div>
+          </div>
+
+          <!-- reviewer: amber -->
+          <div style="display: flex; flex-direction: column; gap: 5px; align-items: flex-start;">
+            <div style="display: flex; align-items: center; gap: 6px; padding-left: 3px;">
+              <span style="width: 6px; height: 6px; border-radius: 50%; background: #E3A008;"></span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #B7B8BE;">reviewer</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E6F77;">30s</span>
+            </div>
+            <div style="max-width: 92%; background: #0E0F13; border: 1px solid #24252B; border-radius: 12px; border-top-left-radius: 4px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; color: #C9CAD0;">First pass on the diff: <span style="color: #E3A008;">2 issues found</span>. Sending it back to Coder.</div>
+          </div>
+
+          <!-- coder: working -->
+          <div style="display: flex; flex-direction: column; gap: 5px; align-items: flex-start;">
+            <div style="display: flex; align-items: center; gap: 6px; padding-left: 3px;">
+              <span data-anim="1" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #2D5BFF); animation: rl-live 1.7s ease-in-out infinite;"></span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #B7B8BE;">coder</span>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E6F77;">now</span>
+            </div>
+            <div style="max-width: 92%; background: #0E0F13; border: 1px solid #24252B; border-radius: 12px; border-top-left-radius: 4px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; color: #C9CAD0;">Applying fixes to <span style="font-family: 'JetBrains Mono', monospace; color: #E7E7EA;">auth/jwt.py</span> <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px;"><span style="color: #3FB950;">+38</span> <span style="color: #F0554E;">−4</span></span></div>
+          </div>
+
+          <!-- appended user messages -->
+          <sc-for list="{{ chatMsgs }}" as="msg" hint-placeholder-count="0">
+            <div style="display: flex; flex-direction: column; gap: 5px; align-items: flex-end;">
+              <div style="display: flex; align-items: center; gap: 6px; padding-right: 3px;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: #6E6F77;">now</span>
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: var(--accent, #2D5BFF);">you</span>
+              </div>
+              <div style="max-width: 88%; background: color-mix(in srgb, var(--accent, #2D5BFF) 15%, #101116); border: 1px solid color-mix(in srgb, var(--accent, #2D5BFF) 30%, #1E1F26); border-radius: 12px; border-top-right-radius: 4px; padding: 9px 11px; font-size: 12.5px; line-height: 1.5; color: #E7E7EA;">{{ msg.text }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <!-- composer -->
+        <div style="flex: 0 0 auto; border-top: 1px solid #24252B; padding: 12px;">
+          <div style="display: flex; align-items: center; gap: 8px; background: #0E0F13; border: 1px solid #24252B; border-radius: 10px; padding: 6px 6px 6px 12px;">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--accent, #2D5BFF); flex: 0 0 auto;">❯</span>
+            <input value="{{ draft }}" onChange="{{ onDraft }}" onKeyDown="{{ onDraftKey }}" placeholder="Message the agents…" style="flex: 1 1 auto; min-width: 0; border: 0; background: transparent; color: #E7E7EA; font-family: 'Geist', -apple-system, system-ui, sans-serif; font-size: 13px; outline: none;">
+            <button onClick="{{ sendInstruction }}" style="flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border: 0; border-radius: 8px; background: var(--accent, #2D5BFF); color: #fff; cursor: pointer;" style-hover="filter: brightness(1.12);">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"></path></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ───── CENTER CANVAS (hero) ───── -->
+      <div style="flex: 1 1 auto; position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; background-color: #0B0B0E; background-image: radial-gradient(rgba(255,255,255,.045) 1px, transparent 1.4px); background-size: 24px 24px; background-position: center;">
+
+        <div style="position: relative; width: 1020px; height: 580px; flex: 0 0 auto; transform: scale(0.8); transform-origin: center;">
+
+          <!-- edges -->
+          <svg ref="{{ svgRef }}" viewBox="0 0 1020 580" width="1020" height="580" fill="none" style="position: absolute; inset: 0; overflow: visible; z-index: 1;">
+            <defs>
+              <marker id="rl-arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1.5 1.5 L7.5 5 L1.5 8.5" fill="none" stroke="#3C3D45" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path></marker>
+              <marker id="rl-arrow-accent" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M1.5 1.5 L7.5 5 L1.5 8.5" fill="none" stroke="var(--accent, #2D5BFF)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></marker>
+            </defs>
+            <!-- orchestrator fan-out spokes (coordination) -->
+            <path d="M248 120 C 440 120 620 206 620 283" stroke="color-mix(in srgb, var(--accent, #2D5BFF) 24%, #24252B)" stroke-width="1.3" opacity=".75"></path>
+            <path d="M248 120 C 580 104 880 148 880 316" stroke="#24252B" stroke-width="1.2" opacity=".85"></path>
+            <path d="M150 152 C 150 240 315 248 315 316" stroke="#2E2F36" stroke-width="1.4" marker-end="url(#rl-arrow)"></path>
+            <!-- upcoming: coder -> reviewer -->
+            <path d="M727 332 C 754 332 758 346 785 346" stroke="#34353C" stroke-width="1.5" stroke-dasharray="2 6" stroke-linecap="round" opacity=".85" marker-end="url(#rl-arrow)"></path>
+            <!-- feedback: reviewer -> coder (retry) -->
+            <path d="M880 376 C 880 472 620 480 620 381" stroke="#34353C" stroke-width="1.4" stroke-dasharray="2 6" stroke-linecap="round" opacity=".7" marker-end="url(#rl-arrow)"></path>
+            <!-- ACTIVE: planner -> coder -->
+            <path d="M410 346 C 452 346 472 332 513 332" stroke="var(--accent, #2D5BFF)" stroke-width="6" opacity=".15" style="filter: blur(3.5px);"></path>
+            <path d="M410 346 C 452 346 472 332 513 332" stroke="var(--accent, #2D5BFF)" stroke-width="1.75" stroke-linecap="round" opacity=".5" marker-end="url(#rl-arrow-accent)"></path>
+          </svg>
+
+          <!-- traveling relay pulses (Planner -> Coder) -->
+          <div data-anim="1" style="position: absolute; top: 0; left: 0; width: 7px; height: 7px; border-radius: 50%; background: #EAF0FF; box-shadow: 0 0 9px 2px var(--accent, #2D5BFF), 0 0 4px 0 #fff; offset-path: path('M410 346 C 452 346 472 332 513 332'); offset-anchor: center; offset-rotate: 0deg; animation: rl-pulse 1.7s linear infinite; z-index: 2; pointer-events: none;"></div>
+          <div data-anim="1" style="position: absolute; top: 0; left: 0; width: 7px; height: 7px; border-radius: 50%; background: #EAF0FF; box-shadow: 0 0 9px 2px var(--accent, #2D5BFF), 0 0 4px 0 #fff; offset-path: path('M410 346 C 452 346 472 332 513 332'); offset-anchor: center; offset-rotate: 0deg; animation: rl-pulse 1.7s linear infinite; animation-delay: .85s; z-index: 2; pointer-events: none;"></div>
+
+          <!-- NODE: Orchestrator (coordinating) -->
+          <div style="position: absolute; left: 52px; top: 88px; width: 196px; padding: 12px 13px; background: #14151A; border: 1px solid color-mix(in srgb, var(--accent, #2D5BFF) 40%, #24252B); border-radius: 13px; box-shadow: 0 0 24px -10px color-mix(in srgb, var(--accent, #2D5BFF) 65%, transparent); z-index: 2;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent, #2D5BFF) 13%, transparent); color: var(--accent, #2D5BFF);">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2.6"></circle><circle cx="12" cy="4.5" r="1.5"></circle><circle cx="5" cy="18" r="1.5"></circle><circle cx="19" cy="18" r="1.5"></circle><path d="M12 9.4V6M10.1 13.6 6.3 16.6M13.9 13.6 17.7 16.6"></path></svg>
+              </div>
+              <div style="min-width: 0;">
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: #E7E7EA;">Orchestrator</div>
+                <div style="font-size: 10.5px; color: #8A8B92; margin-top: 2px;">Coordinating the relay</div>
+              </div>
+              <div style="margin-left: auto; position: relative; width: 9px; height: 9px;">
+                <span style="position: absolute; inset: 0; border-radius: 50%; background: var(--accent, #2D5BFF);"></span>
+                <span data-anim="1" style="position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--accent, #2D5BFF); animation: rl-ring 2.6s ease-out infinite;"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- NODE: Planner (done) -->
+          <div style="position: absolute; left: 220px; top: 316px; width: 190px; padding: 11px 13px; background: #14151A; border: 1px solid #24252B; border-radius: 13px; z-index: 2;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, #3FB950 13%, transparent); color: #3FB950;">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6h11M8 12h11M8 18h11"></path><path d="M3.6 6h.01M3.6 12h.01M3.6 18h.01"></path></svg>
+              </div>
+              <div style="min-width: 0;">
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: #E7E7EA;">Planner</div>
+                <div style="font-size: 10.5px; color: #8A8B92; margin-top: 2px;">4 tasks planned</div>
+              </div>
+              <div style="margin-left: auto; display: flex; align-items: center; justify-content: center; width: 19px; height: 19px; border-radius: 50%; background: color-mix(in srgb, #3FB950 18%, transparent); color: #3FB950;">
+                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9 17.5 20 6.5"></path></svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- NODE: Coder (active / working) -->
+          <div style="position: absolute; left: 513px; top: 288px; width: 214px; padding: 13px 14px; background: #14151A; border: 1px solid color-mix(in srgb, var(--accent, #2D5BFF) 55%, #24252B); border-radius: 14px; box-shadow: 0 0 34px -6px color-mix(in srgb, var(--accent, #2D5BFF) 45%, transparent); z-index: 3;">
+            <span data-anim="1" style="position: absolute; inset: -1px; border-radius: 14px; border: 1px solid color-mix(in srgb, var(--accent, #2D5BFF) 60%, transparent); animation: rl-cardring 2.6s ease-out infinite; pointer-events: none;"></span>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: color-mix(in srgb, var(--accent, #2D5BFF) 15%, transparent); color: var(--accent, #2D5BFF);">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 7.5 4 12l4.5 4.5M15.5 7.5 20 12l-4.5 4.5"></path></svg>
+              </div>
+              <div style="min-width: 0;">
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: #E7E7EA;">Coder</div>
+                <div style="font-size: 10.5px; color: var(--accent, #2D5BFF); margin-top: 2px;">Working</div>
+              </div>
+              <div style="margin-left: auto; position: relative; width: 9px; height: 9px;">
+                <span style="position: absolute; inset: 0; border-radius: 50%; background: var(--accent, #2D5BFF);"></span>
+                <span data-anim="1" style="position: absolute; inset: 0; border-radius: 50%; border: 1px solid var(--accent, #2D5BFF); animation: rl-ring 1.9s ease-out infinite;"></span>
+              </div>
+            </div>
+            <div style="margin-top: 11px; padding-top: 10px; border-top: 1px solid #202127; display: flex; align-items: center; gap: 7px;">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#6E6F77" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex: 0 0 auto;"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"></path><path d="M13 3v6h6"></path></svg>
+              <span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #C9CAD0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">editing auth/jwt.py</span>
+              <span style="margin-left: auto; font-family: 'JetBrains Mono', monospace; font-size: 10.5px; display: flex; gap: 5px; flex: 0 0 auto;"><span style="color: #3FB950;">+38</span><span style="color: #F0554E;">−4</span></span>
+            </div>
+          </div>
+
+          <!-- NODE: Reviewer (idle / upcoming) -->
+          <div style="position: absolute; left: 785px; top: 316px; width: 190px; padding: 11px 13px; background: #101116; border: 1px solid #202127; border-radius: 13px; opacity: .5; z-index: 2;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; background: #1A1B21; color: #8A8B92;">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="10.5" cy="10.5" r="6"></circle><path d="m20 20-4.3-4.3"></path></svg>
+              </div>
+              <div style="min-width: 0;">
+                <div style="font-family: 'JetBrains Mono', monospace; font-size: 13px; font-weight: 500; color: #B7B8BE;">Reviewer</div>
+                <div style="font-size: 10.5px; color: #8A8B92; margin-top: 2px;">Idle · upcoming</div>
+              </div>
+              <div style="margin-left: auto; width: 8px; height: 8px; border-radius: 50%; background: #5A5B62;"></div>
+            </div>
+          </div>
+
+          <!-- feedback label -->
+          <div style="position: absolute; left: 620px; top: 486px; transform: translateX(-50%); font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #5A5B62; letter-spacing: .2px;">retry on failure</div>
+
+          <!-- legend -->
+          <div style="position: absolute; left: 2px; bottom: -14px; display: flex; gap: 15px; align-items: center; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6E6F77;">
+            <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: var(--accent, #2D5BFF);"></span>active</span>
+            <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #3FB950;"></span>done</span>
+            <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #E3A008;"></span>waiting</span>
+            <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 7px; height: 7px; border-radius: 50%; background: #5A5B62;"></span>idle</span>
+          </div>
+        </div>
+
+        <!-- canvas controls -->
+        <div style="position: absolute; right: 20px; bottom: 18px; display: flex; align-items: center; gap: 2px; background: #101116; border: 1px solid #24252B; border-radius: 8px; padding: 3px;">
+          <button style="width: 24px; height: 22px; border: 0; background: transparent; color: #8A8B92; cursor: pointer; border-radius: 5px; font-size: 15px; line-height: 1;" style-hover="background: #1B1C22; color: #E7E7EA;">−</button>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #8A8B92; padding: 0 4px; min-width: 40px; text-align: center;">100%</span>
+          <button style="width: 24px; height: 22px; border: 0; background: transparent; color: #8A8B92; cursor: pointer; border-radius: 5px; font-size: 15px; line-height: 1;" style-hover="background: #1B1C22; color: #E7E7EA;">+</button>
+          <span style="width: 1px; height: 15px; background: #24252B; margin: 0 3px;"></span>
+          <button style="width: 24px; height: 22px; border: 0; background: transparent; color: #8A8B92; cursor: pointer; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center;" style-hover="background: #1B1C22; color: #E7E7EA;"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M20 9V5a1 1 0 0 0-1-1h-4M4 15v4a1 1 0 0 0 1 1h4M20 15v4a1 1 0 0 1-1 1h-4"></path></svg></button>
+        </div>
+      </div>
+
+      <!-- ───── RIGHT PANEL (agent status) ───── -->
+      <div style="flex: 0 0 320px; width: 320px; border-left: 1px solid #24252B; background: #14151A; display: flex; flex-direction: column; min-height: 0;">
+        <!-- run header -->
+        <div style="padding: 14px 18px 13px; border-bottom: 1px solid #24252B;">
+          <div style="display: flex; align-items: center; gap: 7px;">
+            <span data-anim="1" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #2D5BFF); animation: rl-live 1.7s ease-in-out infinite;"></span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 1.4px; color: #8A8B92; text-transform: uppercase;">Active Run</span>
+          </div>
+          <div style="margin-top: 8px; font-size: 14.5px; font-weight: 500; color: #E7E7EA; line-height: 1.35; letter-spacing: -.1px;">Add JWT authentication to the users API</div>
+          <div style="margin-top: 12px; display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #8A8B92;">progress</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #B7B8BE;">60%</span>
+          </div>
+          <div style="height: 5px; border-radius: 3px; background: #24252B; overflow: hidden;">
+            <div style="height: 100%; width: 60%; border-radius: 3px; background: var(--accent, #2D5BFF); box-shadow: 0 0 10px -1px color-mix(in srgb, var(--accent, #2D5BFF) 70%, transparent);"></div>
+          </div>
+          <div style="margin-top: 12px; display: flex; gap: 8px;">
+            <div style="flex: 1; padding: 8px 10px; background: #101116; border: 1px solid #202127; border-radius: 8px;">
+              <div style="display: flex; align-items: center; gap: 4px; color: #6E6F77;"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.6V12l3 1.8"></path></svg><span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: .4px; text-transform: uppercase;">elapsed</span></div>
+              <div ref="{{ elapsedRef }}" style="font-family: 'JetBrains Mono', monospace; font-size: 13.5px; color: #E7E7EA; margin-top: 4px;">1:12</div>
+            </div>
+            <div style="flex: 1; padding: 8px 10px; background: #101116; border: 1px solid #202127; border-radius: 8px;">
+              <div style="display: flex; align-items: center; gap: 4px; color: #6E6F77;"><span style="font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1;">$</span><span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: .4px; text-transform: uppercase;">cost</span></div>
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 13.5px; color: #E7E7EA; margin-top: 4px;">$0.04</div>
+            </div>
+            <div style="flex: 1; padding: 8px 10px; background: #101116; border: 1px solid #202127; border-radius: 8px;">
+              <div style="display: flex; align-items: center; gap: 4px; color: #6E6F77;"><svg viewBox="0 0 24 24" width="11" height="11" fill="var(--accent, #2D5BFF)" stroke="none"><path d="M12 2l1.7 6.1L20 10l-6.3 1.9L12 18l-1.7-6.1L4 10l6.3-1.9z"></path></svg><span style="font-family: 'JetBrains Mono', monospace; font-size: 9.5px; letter-spacing: .4px; text-transform: uppercase;">model</span></div>
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #B7B8BE; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{ modelShort }}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- agents list -->
+        <div style="flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 11px 16px 14px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px;">
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 1.4px; color: #8A8B92; text-transform: uppercase;">Agents</span>
+            <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #6E6F77;">4</span>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 8px; line-height: 1.3;">
+
+            <!-- Orchestrator card -->
+            <div style="position: relative; padding: 8px 12px; border-radius: 11px; border: 1px solid #1E1F26; background: #101116;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 500; color: #E7E7EA;">Orchestrator</span>
+                <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--accent, #2D5BFF) 45%, transparent); background: transparent; color: var(--accent, #2D5BFF); font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;"><span style="width: 5px; height: 5px; border-radius: 50%; background: currentColor;"></span>Coordinating</span>
+              </div>
+              <div style="font-size: 11px; color: #8A8B92; margin-top: 3px;">Coordinates the relay</div>
+              <div style="font-size: 11.5px; color: #B7B8BE; margin-top: 6px; font-family: 'JetBrains Mono', monospace;">routing tasks to agents</div>
+              <div style="font-size: 10.5px; color: #6E6F77; margin-top: 6px; font-family: 'JetBrains Mono', monospace; display: flex; gap: 6px;"><span>3.1k tok</span><span style="color: #34353C;">·</span><span>$0.01</span><span style="color: #34353C;">·</span><span>1:12</span></div>
+            </div>
+
+            <!-- Planner card -->
+            <div style="position: relative; padding: 8px 12px; border-radius: 11px; border: 1px solid #1E1F26; background: #101116;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 500; color: #E7E7EA;">Planner</span>
+                <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, #3FB950 15%, transparent); color: #5FCE77; font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9 17.5 20 6.5"></path></svg>Done</span>
+              </div>
+              <div style="font-size: 11px; color: #8A8B92; margin-top: 3px;">Decomposes the goal</div>
+              <div style="font-size: 11.5px; color: #8A8B92; margin-top: 6px; font-family: 'JetBrains Mono', monospace;">4 tasks planned</div>
+              <div style="font-size: 10.5px; color: #6E6F77; margin-top: 6px; font-family: 'JetBrains Mono', monospace; display: flex; gap: 6px;"><span>8.2k tok</span><span style="color: #34353C;">·</span><span>$0.01</span><span style="color: #34353C;">·</span><span>22s</span></div>
+            </div>
+
+            <!-- Coder card (active) -->
+            <div style="position: relative; padding: 8px 12px; border-radius: 11px; border: 1px solid color-mix(in srgb, var(--accent, #2D5BFF) 45%, #1E1F26); background: color-mix(in srgb, var(--accent, #2D5BFF) 7%, #101116); box-shadow: inset 2px 0 0 var(--accent, #2D5BFF), 0 0 24px -10px color-mix(in srgb, var(--accent, #2D5BFF) 70%, transparent);">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 500; color: #E7E7EA;">Coder</span>
+                <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: color-mix(in srgb, var(--accent, #2D5BFF) 16%, transparent); color: var(--accent, #2D5BFF); font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;"><span data-anim="1" style="width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: rl-live 1.7s ease-in-out infinite;"></span>Coding</span>
+              </div>
+              <div style="font-size: 11px; color: #8A8B92; margin-top: 3px;">Writes and edits code</div>
+              <div style="font-size: 11.5px; color: #E7E7EA; margin-top: 6px; font-family: 'JetBrains Mono', monospace;">editing auth/jwt.py</div>
+              <div style="font-size: 10.5px; color: #6E6F77; margin-top: 6px; font-family: 'JetBrains Mono', monospace; display: flex; gap: 6px;"><span>14.6k tok</span><span style="color: #34353C;">·</span><span>$0.02</span><span style="color: #34353C;">·</span><span>41s</span></div>
+            </div>
+
+            <!-- Reviewer card (idle) -->
+            <div style="position: relative; padding: 8px 12px; border-radius: 11px; border: 1px solid #1A1B21; background: #0E0F13; opacity: .72;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="font-family: 'JetBrains Mono', monospace; font-size: 12.5px; font-weight: 500; color: #B7B8BE;">Reviewer</span>
+                <span style="margin-left: auto; display: inline-flex; align-items: center; gap: 5px; padding: 2px 8px; border-radius: 999px; background: #1A1B21; color: #8A8B92; font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 500;"><span style="width: 5px; height: 5px; border-radius: 50%; background: #5A5B62;"></span>Idle</span>
+              </div>
+              <div style="font-size: 11px; color: #8A8B92; margin-top: 3px;">Reviews the diff</div>
+              <div style="font-size: 11.5px; color: #8A8B92; margin-top: 6px; font-family: 'JetBrains Mono', monospace;">waiting for changes</div>
+              <div style="font-size: 10.5px; color: #6E6F77; margin-top: 6px; font-family: 'JetBrains Mono', monospace; display: flex; gap: 6px;"><span>0 tok</span><span style="color: #34353C;">·</span><span>$0.00</span><span style="color: #34353C;">·</span><span>—</span></div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ═══════════ BOTTOM LOG DRAWER ═══════════ -->
+    <div style="flex: 0 0 auto; border-top: 1px solid #24252B; overflow: hidden; display: flex; flex-direction: column;">
+      <div style="flex: 0 0 auto; height: 37px; display: flex; align-items: center; gap: 9px; padding: 0 14px; background: #14151A;">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#8A8B92" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 3.5 3.5L5 15M12.5 16h6"></path></svg>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; letter-spacing: 1.2px; color: #8A8B92; text-transform: uppercase;">Terminal</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #4D4E55;">·</span>
+        <span style="font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: #6E6F77;">users-api</span>
+        <div style="margin-left: auto; display: flex; align-items: center; gap: 12px;">
+          <span style="display: inline-flex; align-items: center; gap: 6px; font-family: 'JetBrains Mono', monospace; font-size: 10px; color: #8A8B92;"><span data-anim="1" style="width: 6px; height: 6px; border-radius: 50%; background: var(--accent, #2D5BFF); animation: rl-live 1.7s ease-in-out infinite;"></span>live</span>
+          <button onClick="{{ toggleCollapse }}" style="display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; border: 0; background: transparent; color: #8A8B92; cursor: pointer; border-radius: 5px;" style-hover="background: #1B1C22; color: #E7E7EA;">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="{{ chevronStyle }}"><path d="m6 9 6 6 6-6"></path></svg>
+          </button>
+        </div>
+      </div>
+      <div ref="{{ logBodyRef }}" style="{{ logBodyStyle }}">
+        <div style="display: flex; gap: 12px; padding: 1px 0;"><span style="color: #6E6F77; flex: 0 0 82px;">[planner]</span><span style="color: #8A8B92;">decomposed goal into 4 tasks</span></div>
+        <div style="display: flex; gap: 12px; padding: 1px 0;"><span style="color: var(--accent, #2D5BFF); flex: 0 0 82px;">[coder]</span><span style="color: #9A9BA2;">editing auth/jwt.py&nbsp;&nbsp;<span style="color: #3FB950;">+38</span> <span style="color: #F0554E;">−4</span></span></div>
+        <div style="display: flex; gap: 12px; padding: 1px 0;"><span style="color: #6E6F77; flex: 0 0 82px;">[reviewer]</span><span style="color: #8A8B92;"><span style="color: #E3A008;">2 issues found</span> — returning to coder</span></div>
+        <div style="display: flex; gap: 12px; padding: 1px 0;"><span style="color: var(--accent, #2D5BFF); flex: 0 0 82px;">[coder]</span><span style="color: #C9CAD0;">applying fixes…</span></div>
+        <sc-for list="{{ logLines }}" as="line" hint-placeholder-count="0">
+          <div style="display: flex; gap: 12px; padding: 1px 0;"><span style="{{ line.tagStyle }}">{{ line.tag }}</span><span style="{{ line.msgStyle }}">{{ line.m }}</span></div>
+        </sc-for>
+        <div style="display: flex; gap: 12px; padding: 3px 0 0;"><span style="color: var(--accent, #2D5BFF); flex: 0 0 82px;">❯</span><span data-anim="1" style="display: inline-block; width: 8px; height: 15px; background: var(--accent, #2D5BFF); border-radius: 1px; animation: rl-blink 1.1s step-end infinite;"></span></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{
+  &quot;$preview&quot;: { &quot;width&quot;: 1440, &quot;height&quot;: 900 },
+  &quot;accentColor&quot;: { &quot;editor&quot;: &quot;color&quot;, &quot;default&quot;: &quot;#2D5BFF&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;options&quot;: [&quot;#2D5BFF&quot;, &quot;#3B82F6&quot;, &quot;#5B8DEF&quot;, &quot;#4C6EF5&quot;], &quot;section&quot;: &quot;Theme&quot; },
+  &quot;permissionMode&quot;: { &quot;editor&quot;: &quot;enum&quot;, &quot;default&quot;: &quot;suggest&quot;, &quot;options&quot;: [&quot;suggest&quot;, &quot;auto-edit&quot;, &quot;full-auto&quot;], &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Run&quot; },
+  &quot;logCollapsed&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Layout&quot; },
+  &quot;reduceMotion&quot;: { &quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: false, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Motion&quot; }
+}">
+class Component extends DCLogic {
+  appRef = React.createRef();
+  svgRef = React.createRef();
+  elapsedRef = React.createRef();
+  logBodyRef = React.createRef();
+  chatBodyRef = React.createRef();
+
+  constructor(props) {
+    super(props);
+    this.state = {
+      mode: (props && props.permissionMode) || 'suggest',
+      collapsed: !!(props && props.logCollapsed),
+      extraLogs: [],
+      model: 'claude-sonnet',
+      modelMenuOpen: false,
+      draft: '',
+      settingsOpen: false,
+      accent: (props && props.accentColor) || '#2D5BFF',
+      reduceMotion: !!(props && props.reduceMotion),
+      notify: true,
+      sound: false,
+      autoApprove: false,
+      parallel: 2,
+      costLimit: 5,
+      chat: [],
+    };
+    this.elapsed = 72;
+    this._li = 0;
+  }
+
+  componentDidMount() {
+    this.applyAccent();
+    this.applyMotion();
+    this.timer = setInterval(() => {
+      this.elapsed += 1;
+      if (this.elapsedRef.current) this.elapsedRef.current.textContent = this.fmt(this.elapsed);
+    }, 1000);
+    this.logTimer = setInterval(() => this.pushLog(), 4800);
+  }
+
+  componentDidUpdate(prev) {
+    if (prev.accentColor !== this.props.accentColor) this.setState({ accent: this.props.accentColor }, () => this.applyAccent());
+    if (prev.reduceMotion !== this.props.reduceMotion) this.setState({ reduceMotion: !!this.props.reduceMotion }, () => this.applyMotion());
+    if (prev.permissionMode !== this.props.permissionMode && this.props.permissionMode) {
+      this.setState({ mode: this.props.permissionMode });
+    }
+    if (prev.logCollapsed !== this.props.logCollapsed) {
+      this.setState({ collapsed: !!this.props.logCollapsed });
+    }
+    if (this.logBodyRef.current && !this.state.collapsed) {
+      this.logBodyRef.current.scrollTop = this.logBodyRef.current.scrollHeight;
+    }
+    if (this.chatBodyRef.current) {
+      this.chatBodyRef.current.scrollTop = this.chatBodyRef.current.scrollHeight;
+    }
+  }
+
+  componentWillUnmount() {
+    clearInterval(this.timer);
+    clearInterval(this.logTimer);
+  }
+
+  applyAccent() {
+    const el = this.appRef.current;
+    const c = this.state.accent || this.props.accentColor;
+    if (el && c) el.style.setProperty('--accent', c);
+  }
+
+  applyMotion() {
+    const reduce = !!this.props.reduceMotion || !!this.state.reduceMotion;
+    const el = this.appRef.current;
+    if (el) el.querySelectorAll('[data-anim]').forEach(n => { n.style.animationPlayState = reduce ? 'paused' : 'running'; });
+    const svg = this.svgRef.current;
+    if (svg) { try { reduce ? svg.pauseAnimations() : svg.unpauseAnimations(); } catch (e) {} }
+  }
+
+  fmt(s) {
+    const m = Math.floor(s / 60), ss = s % 60;
+    return m + ':' + String(ss).padStart(2, '0');
+  }
+
+  pushLog() {
+    if (this.props.reduceMotion || this.state.reduceMotion) return;
+    const lines = [
+      'updated auth/jwt.py',
+      'wired auth middleware into app factory',
+      'regenerating token fixtures…',
+      're-running local test suite…',
+    ];
+    const next = lines[this._li % lines.length];
+    this._li += 1;
+    this.setState(s => ({ extraLogs: [...s.extraLogs, { m: next, id: Date.now() + '-' + this._li }].slice(-24) }));
+  }
+
+  setMode(m) { this.setState({ mode: m }); }
+  toggleCollapse() { this.setState(s => ({ collapsed: !s.collapsed })); }
+  setModel(id) { this.setState({ model: id, modelMenuOpen: false }); }
+  toggleModelMenu() { this.setState(s => ({ modelMenuOpen: !s.modelMenuOpen })); }
+  closeModelMenu() { this.setState({ modelMenuOpen: false }); }
+  sendInstruction() {
+    const t = (this.state.draft || '').trim();
+    if (!t) return;
+    this._li += 1;
+    const id = 'u-' + Date.now() + '-' + this._li;
+    this.setState(s => ({
+      extraLogs: [...s.extraLogs, { m: t, id, user: true }].slice(-24),
+      chat: [...s.chat, { text: t, id }].slice(-30),
+      draft: '',
+    }));
+  }
+  toggleSettings() { this.setState(s => ({ settingsOpen: !s.settingsOpen })); }
+  closeSettings() { this.setState({ settingsOpen: false }); }
+  setAccent(hex) { this.setState({ accent: hex }, () => this.applyAccent()); }
+  toggleReduceMotion() { this.setState(s => ({ reduceMotion: !s.reduceMotion }), () => this.applyMotion()); }
+  toggleSetting(k) { this.setState(s => ({ [k]: !s[k] })); }
+  setParallel(n) { this.setState({ parallel: n }); }
+  bumpCost(d) { this.setState(s => ({ costLimit: Math.max(1, Math.min(50, s.costLimit + d)) })); }
+
+  renderVals() {
+    const segW = 82;
+    const order = { 'suggest': 0, 'auto-edit': 1, 'full-auto': 2 };
+    const idx = order[this.state.mode] != null ? order[this.state.mode] : 0;
+    const collapsed = this.state.collapsed;
+    const sOpen = this.state.settingsOpen;
+    const tog = (on) => ({
+      track: { marginLeft: 'auto', width: '34px', height: '20px', borderRadius: '999px', flex: '0 0 auto', cursor: 'pointer', position: 'relative', background: on ? 'var(--accent, #2D5BFF)' : '#2A2B31', border: '1px solid ' + (on ? 'transparent' : '#34353C'), transition: 'background .2s ease, border-color .2s ease' },
+      knob: { position: 'absolute', top: '2px', left: on ? '16px' : '2px', width: '14px', height: '14px', borderRadius: '50%', background: '#fff', transition: 'left .2s ease', boxShadow: '0 1px 2px rgba(0,0,0,.45)' },
+    });
+    return {
+      appRef: this.appRef,
+      svgRef: this.svgRef,
+      elapsedRef: this.elapsedRef,
+      logBodyRef: this.logBodyRef,
+      chatBodyRef: this.chatBodyRef,
+      chatMsgs: this.state.chat.map(m => ({ id: m.id, text: m.text })),
+      logLines: this.state.extraLogs.map(l => ({
+        id: l.id,
+        tag: l.user ? '[you]' : '[coder]',
+        m: l.m,
+        tagStyle: { color: 'var(--accent, #2D5BFF)', flex: '0 0 82px' },
+        msgStyle: { color: l.user ? '#E7E7EA' : '#9A9BA2' },
+      })),
+      modelName: this.state.model,
+      modelShort: this.state.model.replace('claude-', ''),
+      toggleModelMenu: () => this.toggleModelMenu(),
+      closeModelMenu: () => this.closeModelMenu(),
+      modelChevronStyle: { transform: this.state.modelMenuOpen ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform .2s ease', flex: '0 0 auto' },
+      modelMenuStyle: {
+        display: this.state.modelMenuOpen ? 'block' : 'none',
+        position: 'absolute', top: 'calc(100% + 7px)', left: '0', width: '254px',
+        background: '#16171C', border: '1px solid #26272E', borderRadius: '10px',
+        boxShadow: '0 16px 38px -12px rgba(0,0,0,.8)', padding: '6px', zIndex: 60,
+      },
+      modelOverlayStyle: { display: this.state.modelMenuOpen ? 'block' : 'none', position: 'fixed', inset: '0', zIndex: 55, cursor: 'default' },
+      modelList: [
+        { id: 'claude-opus', name: 'claude-opus', desc: 'Most capable' },
+        { id: 'claude-sonnet', name: 'claude-sonnet', desc: 'Balanced · default' },
+        { id: 'claude-haiku', name: 'claude-haiku', desc: 'Fastest' },
+        { id: 'gpt-4o', name: 'gpt-4o', desc: 'OpenAI' },
+        { id: 'gemini-2.5-pro', name: 'gemini-2.5-pro', desc: 'Google' },
+      ].map(m => ({
+        id: m.id, name: m.name, desc: m.desc,
+        onSelect: () => this.setModel(m.id),
+        checkStyle: { opacity: m.id === this.state.model ? 1 : 0, color: 'var(--accent, #2D5BFF)', display: 'inline-flex', flex: '0 0 auto' },
+      })),
+      draft: this.state.draft,
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      onDraftKey: (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.sendInstruction(); } },
+      sendInstruction: () => this.sendInstruction(),
+      setSuggest: () => this.setMode('suggest'),
+      setAutoEdit: () => this.setMode('auto-edit'),
+      setFullAuto: () => this.setMode('full-auto'),
+      toggleCollapse: () => this.toggleCollapse(),
+      toggleSettings: () => this.toggleSettings(),
+      closeSettings: () => this.closeSettings(),
+      gearBtnStyle: {
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', borderRadius: '8px', cursor: 'pointer',
+        border: '1px solid ' + (sOpen ? 'color-mix(in srgb, var(--accent, #2D5BFF) 55%, #24252B)' : '#24252B'),
+        background: sOpen ? 'color-mix(in srgb, var(--accent, #2D5BFF) 12%, #16171C)' : '#16171C',
+        color: sOpen ? 'var(--accent, #2D5BFF)' : '#8A8B92', transition: 'color .18s ease, border-color .18s ease, background .18s ease',
+      },
+      settingsOverlayStyle: { display: sOpen ? 'block' : 'none', position: 'fixed', inset: '0', zIndex: 55, cursor: 'default' },
+      settingsPanelStyle: { display: sOpen ? 'block' : 'none', position: 'absolute', top: 'calc(100% + 9px)', right: '0', width: '300px', background: '#16171C', border: '1px solid #26272E', borderRadius: '12px', boxShadow: '0 20px 46px -14px rgba(0,0,0,.85)', zIndex: 60, overflow: 'hidden' },
+      notifyTog: tog(this.state.notify), onToggleNotify: () => this.toggleSetting('notify'),
+      soundTog: tog(this.state.sound), onToggleSound: () => this.toggleSetting('sound'),
+      autoApproveTog: tog(this.state.autoApprove), onToggleAutoApprove: () => this.toggleSetting('autoApprove'),
+      reduceMotionTog: tog(this.state.reduceMotion), onToggleReduceMotion: () => this.toggleReduceMotion(),
+      parallelOpts: [1, 2, 4].map(n => {
+        const active = this.state.parallel === n;
+        return { n, label: String(n), onSelect: () => this.setParallel(n), style: {
+          flex: '0 0 26px', width: '26px', height: '24px', border: '0', borderRadius: '6px', cursor: 'pointer',
+          fontFamily: "'JetBrains Mono', monospace", fontSize: '11.5px',
+          background: active ? 'color-mix(in srgb, var(--accent, #2D5BFF) 22%, transparent)' : 'transparent',
+          color: active ? 'var(--accent, #2D5BFF)' : '#B7B8BE',
+          boxShadow: active ? 'inset 0 0 0 1px color-mix(in srgb, var(--accent, #2D5BFF) 45%, transparent)' : 'none',
+        } };
+      }),
+      accentOpts: ['#2D5BFF', '#3B82F6', '#5B8DEF', '#4C6EF5'].map(hex => {
+        const active = (this.state.accent || '').toLowerCase() === hex.toLowerCase();
+        return { hex, onSelect: () => this.setAccent(hex), style: {
+          width: '20px', height: '20px', borderRadius: '50%', background: hex, cursor: 'pointer', padding: '0',
+          border: active ? '2px solid #16171C' : '2px solid transparent',
+          boxShadow: active ? '0 0 0 2px ' + hex : 'inset 0 0 0 1px rgba(255,255,255,.12)', outline: 'none',
+        } };
+      }),
+      costLabel: '$' + this.state.costLimit,
+      onCostMinus: () => this.bumpCost(-1),
+      onCostPlus: () => this.bumpCost(1),
+      highlightStyle: {
+        position: 'absolute', left: '4px', top: '4px', height: '22px', width: segW + 'px',
+        borderRadius: '6px', transform: 'translateX(' + (idx * segW) + 'px)',
+        transition: 'transform .28s cubic-bezier(.4,0,.2,1)',
+        background: 'color-mix(in srgb, var(--accent, #2D5BFF) 20%, transparent)',
+        border: '1px solid color-mix(in srgb, var(--accent, #2D5BFF) 45%, transparent)',
+      },
+      chevronStyle: { transform: collapsed ? 'rotate(180deg)' : 'rotate(0deg)', transition: 'transform .3s ease' },
+      logBodyStyle: {
+        fontFamily: "'JetBrains Mono', ui-monospace, monospace",
+        fontSize: '12.5px', lineHeight: '1.75',
+        padding: collapsed ? '0 16px' : '10px 16px 12px',
+        maxHeight: collapsed ? '0px' : '84px',
+        opacity: collapsed ? 0 : 1,
+        overflowY: 'auto', overflowX: 'hidden',
+        background: '#0B0B0E',
+        transition: 'max-height .32s cubic-bezier(.4,0,.2,1), opacity .24s ease, padding .3s ease',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

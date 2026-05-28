@@ -165,6 +165,13 @@ class Settings(BaseSettings):
         default=False,
         description="Add a Tester after the Coder (runs the plan's verification step).",
     )
+    relay_split_tasks: bool = Field(
+        default=False,
+        description=(
+            "Task-split mode: run one fresh Coder agent per numbered plan step "
+            "(clean context each) instead of a single Coder for the whole plan."
+        ),
+    )
     explorer_model: str | None = Field(
         default=None,
         description="Model for the relay Explorer role (falls back to 'model').",

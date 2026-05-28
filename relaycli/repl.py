@@ -58,7 +58,7 @@ SLASH_COMMANDS: dict[str, tuple[str, str]] = {
 _ARG_COMPLETIONS: dict[str, tuple[str, ...]] = {
     "mode": ("suggest", "auto-edit", "full-auto"),
     "relay": ("on", "off"),
-    "agents": ("explorer", "tester"),
+    "agents": ("explorer", "tester", "tasks"),
     "model": (
         "gpt-4o",
         "gpt-4o-mini",
@@ -496,9 +496,10 @@ class Repl:
 
         if arg:
             parts = arg.split()
-            if (len(parts) == 2 and parts[0] in ("explorer", "tester")
+            if (len(parts) == 2 and parts[0] in ("explorer", "tester", "tasks")
                     and parts[1] in ("on", "off")):
-                setattr(self.settings, f"relay_{parts[0]}", parts[1] == "on")
+                field = "relay_split_tasks" if parts[0] == "tasks" else f"relay_{parts[0]}"
+                setattr(self.settings, field, parts[1] == "on")
                 self.console.print(f"agent {parts[0]} → [cyan]{parts[1]}[/cyan]")
                 if parts[1] == "on" and not self.settings.relay_enabled:
                     self.console.print(
@@ -506,7 +507,9 @@ class Repl:
                         "/relay on to use them.[/dim]"
                     )
                 return
-            self.console.print("[red]Usage:[/red] /agents \\[explorer|tester on|off]")
+            self.console.print(
+                "[red]Usage:[/red] /agents \\[explorer|tester|tasks on|off]"
+            )
             return
 
         from rich.table import Table
@@ -528,9 +531,10 @@ class Repl:
             )
         self.console.print(table)
         relay_state = "on" if self.settings.relay_enabled else "off"
+        split_state = "on" if self.settings.relay_split_tasks else "off"
         self.console.print(
-            f"[dim]relay {relay_state} · /agents explorer|tester on|off · "
-            f"models via RELAYCLI_<ROLE>_MODEL[/dim]"
+            f"[dim]relay {relay_state} · task-split {split_state} (one fresh coder "
+            f"per plan task) · /agents explorer|tester|tasks on|off[/dim]"
         )
 
     def _skills_block(self) -> str:
