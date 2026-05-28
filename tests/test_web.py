@@ -21,6 +21,10 @@ def _no_ambient_config(monkeypatch, tmp_path):
         if var.startswith("RELAYCLI_"):
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no.toml"))
+    # WebSession reads/writes the roster via appconfig — keep it hermetic so
+    # tests never touch the real ~/.relaycli/config.toml.
+    from relaycli import appconfig
+    monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
     monkeypatch.chdir(tmp_path)
 
 
@@ -287,3 +291,84 @@ def test_http_stop_model_reset_endpoints():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_state_includes_full_roster_and_set_roster():
+    session = WebSession(_settings(relay_enabled=True))
+    roster = session.state()["roster"]
+    ids = {r["id"] for r in roster}
+    assert {"orchestrator", "coder", "backend", "frontend", "security"} <= ids
+    assert len(roster) == 16
+    # enabling + assigning a roster role persists and reflects in state
+    assert session.set_roster("backend", enabled=True, model="strong") is True
+    r2 = {r["id"]: r for r in session.state()["roster"]}["backend"]
+    assert r2["enabled"] is True and r2["assigned"] == "strong"
+    assert session.set_roster("nope", enabled=True) is False
+
+
+def test_state_lists_enabled_specialists():
+    session = WebSession(_settings(relay_enabled=True))
+    specs = session.state()["specialists"]
+    assert "coder" in specs                       # enabled implementer
+    assert "planner" not in specs                 # pipeline role, not a task owner
+
+
+def test_role_models_in_state_and_set():
+    session = WebSession(_settings(model="base/model", relay_enabled=True))
+    rm = {r["role"]: r for r in session.state()["role_models"]}
+    assert set(rm) == {"explorer", "planner", "coder", "tester", "reviewer"}
+    # default: no override, resolves to the base model
+    assert rm["coder"]["assigned"] is None
+    assert rm["coder"]["resolved"] == "model"  # short name of base/model
+    # assign a specialist to the coder
+    assert session.set_role_model("coder", "claude-3-5-sonnet-latest") is True
+    assert session.settings.coder_model == "claude-3-5-sonnet-latest"
+    rm2 = {r["role"]: r for r in session.state()["role_models"]}
+    assert rm2["coder"]["resolved"] == "claude-3-5-sonnet-latest"
+    # clearing falls back to the base model
+    assert session.set_role_model("coder", "") is True
+    assert session.settings.coder_model is None
+    assert session.set_role_model("bogus", "x") is False
+
+
+def test_set_key_settings_field_vs_env(monkeypatch):
+    session = WebSession(_settings())
+    # managed provider → Settings field
+    assert session.set_key("openai", "sk-managed") is True
+    assert session.settings.openai_api_key == "sk-managed"
+    # unmanaged provider → process env var LiteLLM reads
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    assert session.set_key("deepseek", "sk-deep") is True
+    assert os.environ["DEEPSEEK_API_KEY"] == "sk-deep"
+    # provider status reflects both
+    st = {p["id"]: p for p in session.state()["providers"]}
+    assert st["openai"]["detected"] is True
+    assert st["deepseek"]["detected"] is True
+    assert st["anthropic"]["detected"] is False
+    # clearing removes it
+    assert session.set_key("deepseek", "") is True
+    assert "DEEPSEEK_API_KEY" not in os.environ
+    assert session.set_key("nope", "x") is False
+
+
+def test_role_model_and_key_endpoints():
+    session = WebSession(_settings(relay_enabled=True))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+
+        def post(path, body):
+            req = urllib.request.Request(
+                base + path, method="POST", data=json.dumps(body).encode(),
+                headers={"Content-Type": "application/json",
+                         "Origin": f"http://127.0.0.1:{port}"})
+            return json.loads(urllib.request.urlopen(req, timeout=5).read())
+
+        assert post("/api/role-model", {"role": "planner", "model": "deepseek/deepseek-reasoner"})["ok"]
+        assert session.settings.planner_model == "deepseek/deepseek-reasoner"
+        assert post("/api/key", {"provider": "anthropic", "key": "sk-ant-web"})["ok"]
+        assert session.settings.anthropic_api_key == "sk-ant-web"
+    finally:
+        server.shutdown(); server.server_close()

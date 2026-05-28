@@ -40,6 +40,9 @@ def _no_ambient_config(monkeypatch, tmp_path):
         if var.startswith("RELAYCLI_"):
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no.toml"))
+    # The relay reads the roster from appconfig; keep it hermetic too.
+    from relaycli import appconfig
+    monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
 
 
 def _settings(**kw) -> Settings:
@@ -636,14 +639,6 @@ class TestCliRelayFlag:
         result = CliRunner().invoke(cli_module.app, ["-p", "do it", "-y"])
         assert result.exit_code == 0, result.output
 
-    def test_config_shows_routing(self, monkeypatch):
-        monkeypatch.setattr(cli_module, "get_settings",
-                            lambda: _settings(model="base/m", coder_model="strong/c"))
-        result = CliRunner().invoke(cli_module.app, ["config"])
-        assert result.exit_code == 0
-        assert "relay" in result.output
-        assert "strong/c" in result.output
-
     def test_no_relay_flag_overrides_enabled_config(self, sample_project, monkeypatch):
         monkeypatch.chdir(sample_project)
 
@@ -666,14 +661,6 @@ class TestCliRelayFlag:
         monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
         result = CliRunner().invoke(cli_module.app, ["-p", "do it", "--no-relay", "-y"])
         assert result.exit_code == 0, result.output
-
-    def test_config_escapes_model_markup(self, monkeypatch):
-        monkeypatch.setattr(cli_module, "get_settings",
-                            lambda: _settings(model="[i]m[/i]"))
-        result = CliRunner().invoke(cli_module.app, ["config"])
-        assert result.exit_code == 0
-        assert "[i]m" in result.output  # shown literally, not eaten as markup
-
 
 class TestReplRelayCommand:
     def _repl(self) -> Repl:
@@ -819,3 +806,75 @@ class TestTaskSplit:
         assert repl.settings.relay_split_tasks is True
         repl._handle_slash("/agents tasks off")
         assert repl.settings.relay_split_tasks is False
+
+
+class TestAgentsSpecialistsDisplay:
+    def test_agents_lists_specialists_when_task_split(self, monkeypatch, tmp_path):
+        from relaycli import appconfig
+        monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
+        settings = _settings(model="fake/m", relay_split_tasks=True)
+        repl = Repl(settings, console=_console())
+        repl._handle_slash("/agents")
+        out = repl.console.file.getvalue()
+        assert "specialists (task-split)" in out and "coder" in out
+
+
+class TestSpecialistRouting:
+    def _enable(self, monkeypatch, tmp_path, *roles):
+        from relaycli import appconfig
+        from relaycli.appconfig import RoleConfig, load_app_config, save_app_config
+        monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
+        cfg = load_app_config()
+        for r in roles:
+            cfg.roles[r] = RoleConfig(enabled=True, model=f"model-for-{r}")
+        save_app_config(cfg)
+
+    def test_tagged_tasks_run_their_specialist_role_and_model(self, sample_project, monkeypatch, tmp_path):
+        self._enable(monkeypatch, tmp_path, "backend", "frontend")
+        llm = ScriptedLLM([
+            _resp(text="1. [backend] build the API\n2. [frontend] build the UI"),  # planner
+            _resp(text="API-DONE"),      # backend specialist
+            _resp(text="UI-DONE"),       # frontend specialist
+            _resp(text="VERDICT: approve"),
+        ])
+        relay = _relay(sample_project, llm, relay_split_tasks=True)
+        result = relay.run("make an app")
+
+        assert result.stopped_reason == "done"
+        # the specialist roles actually ran, in order, as the task owners
+        assert [str(r.role) for r in result.role_runs] == [
+            "planner", "backend", "frontend", "reviewer",
+        ]
+        # each ran with its roster-resolved specialist model
+        assert llm.models == ["base/model", "model-for-backend", "model-for-frontend", "base/model"]
+        # and with its role-specific system prompt
+        backend_system = llm.calls[1][0]["content"]
+        assert "Backend" in backend_system and "server" in backend_system.lower()
+        frontend_system = llm.calls[2][0]["content"]
+        assert "Frontend" in frontend_system
+
+    def test_planner_is_told_the_enabled_specialists(self, sample_project, monkeypatch, tmp_path):
+        self._enable(monkeypatch, tmp_path, "security")
+        llm = ScriptedLLM([
+            _resp(text="1. a\n2. b"),
+            _resp(text="A"), _resp(text="B"),
+            _resp(text="VERDICT: approve"),
+        ])
+        _relay(sample_project, llm, relay_split_tasks=True).run("go")
+        planner_user = llm.calls[0][-1]["content"]
+        assert "specialist" in planner_user.lower() and "security" in planner_user
+
+    def test_disabled_or_unknown_tag_falls_back_to_coder(self, sample_project, monkeypatch, tmp_path):
+        self._enable(monkeypatch, tmp_path)  # nothing extra enabled
+        llm = ScriptedLLM([
+            _resp(text="1. [architect] design it\n2. [wizard] cast a spell"),  # both unavailable
+            _resp(text="DESIGN"), _resp(text="SPELL"),
+            _resp(text="VERDICT: approve"),
+        ])
+        result = _relay(sample_project, llm, relay_split_tasks=True).run("go")
+        # architect is a real role but disabled; wizard is unknown → both Coder
+        assert [str(r.role) for r in result.role_runs] == [
+            "planner", "coder", "coder", "reviewer",
+        ]
+        assert any("architect" in n for n in result.notes)
+        assert any("wizard" in n for n in result.notes)

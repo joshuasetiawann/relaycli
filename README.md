@@ -103,6 +103,8 @@ wasn't, a setup panel lists the exact fixes (it doesn't block the session).
 | `/agents [r on\|off]` | show relay agents; toggle the optional explorer/tester |
 | `/skill [name]` | toggle a skill for this session (tdd, debug, ponytail, …) |
 | `/skills` | list available skills and their sources |
+| `/config` | roles, per-role models & provider keys (persistent config) |
+| `/settings` | general preferences: mode, theme, context limit |
 | `/diff` | show working-tree changes (`git diff`) |
 | `/clear` | reset the conversation |
 | `/help` | show help (also `help`, `?`) |
@@ -134,6 +136,32 @@ an **explorer** that scouts the codebase before planning (read-only) and a
 shows the lineup; `/agents explorer on` / `/agents tester on` enable them
 (each adds a full agent run per request). Per-role models via
 `RELAYCLI_EXPLORER_MODEL` etc.
+
+**Specialists (roster-driven).** With task-split on (`/agents tasks on`), the
+Planner delegates each numbered step to a specialist from the 16-role roster
+by tagging it — `1. [backend] add the token helper`, `2. [frontend] wire the
+form`. Each task then runs on a fresh agent with that role's system prompt and
+its own resolved model, so a real team of specialists collaborates on one
+request. Enable roles and assign their models in `relaycli config` (or
+`/config`); `/agents` lists the enabled specialists. Untagged steps use the
+general Coder.
+
+### Configuration & Settings
+
+RelayCLI keeps two surfaces strictly separate:
+
+- **`relaycli settings`** (or `/settings`) — general preferences only:
+  permission mode, theme, context-token limit.
+- **`relaycli config`** (or `/config`) — a persistent, roster-based config
+  with two sections: **Roles & Models** (16 built-in roles, each
+  enable/disable + a per-role model or tier) and **Providers & Keys** (set a
+  key as an env reference or a masked literal). Scriptable subcommands:
+  `config show`, `config set-model <role> <model|tier>`, `config tier <t>
+  <model>`, `config enable|disable <role>`, `config set-key <provider>
+  [--env VAR | --value …]`, `config path`.
+
+Everything persists atomically to `~/.relaycli/config.toml` (`0600`); keys
+are never printed — only masked status (`via env (VAR)` or `sk-…abcd`).
 
 ### One-shot and flags
 

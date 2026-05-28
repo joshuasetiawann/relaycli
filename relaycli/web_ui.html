@@ -97,8 +97,28 @@
   .stop span { width: 8px; height: 8px; background: currentColor; border-radius: 2px; }
 
   /* settings panel */
-  .settings { width: 300px; right: 0; padding: 0; }
+  .settings { width: 320px; right: 0; padding: 0; max-height: 82vh; overflow-y: auto; }
   .settings .sec { padding: 12px 14px; border-top: 1px solid var(--border2); }
+  .rmrow { display: flex; align-items: center; gap: 10px; padding: 6px 0; }
+  .rmrow .rn { font-family: var(--mono); font-size: 12px; color: var(--t1); width: 66px; flex: 0 0 auto; }
+  .rmrow .rn.off { color: var(--t4); }
+  .rmrow select { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--well); color: var(--t2); font-family: var(--mono); font-size: 11px;
+    padding: 5px 6px; outline: none; cursor: pointer; }
+  .rmrow select:focus { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+  .keyrow { display: flex; align-items: center; gap: 8px; padding: 6px 0; }
+  .keyrow .kdot { width: 7px; height: 7px; border-radius: 50%; background: var(--t5); flex: 0 0 auto; }
+  .keyrow .kdot.on { background: var(--green); }
+  .keyrow .kl { font-size: 11.5px; color: var(--t2); width: 96px; flex: 0 0 auto;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .keyrow input { flex: 1; min-width: 0; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--well); color: var(--t1); font-family: var(--mono); font-size: 11px;
+    padding: 5px 7px; outline: none; }
+  .keyrow input:focus { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+  .keyrow button { border: 0; border-radius: 7px; background: var(--card); color: var(--t2);
+    border: 1px solid var(--border); font-size: 10.5px; padding: 5px 9px; cursor: pointer; flex: 0 0 auto; }
+  .keyrow button:hover { border-color: #34353C; color: var(--t1); }
+  .sec.legacy { padding: 12px 14px; border-top: 1px solid var(--border2); }
   .settings .sec:first-child { border-top: 0; }
   .settings .sec .h { font-family: var(--mono); font-size: 9.5px; letter-spacing: 1.2px;
     color: var(--t4); text-transform: uppercase; margin-bottom: 8px; }
@@ -210,6 +230,45 @@
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 
+  /* vertical workflow flow — scales to any number of roles */
+  .stage { display: flex; flex-direction: column; }
+  .vnode { position: relative; display: flex; align-items: center; gap: 11px; width: 300px;
+    padding: 10px 13px; background: var(--raise); border: 1px solid var(--border);
+    border-radius: 12px; transition: border-color .3s, box-shadow .3s, opacity .3s; }
+  .vnode.off { opacity: .45; }
+  .vnode.orch { border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+    box-shadow: 0 0 22px -12px color-mix(in srgb, var(--accent) 60%, transparent); }
+  .vnode.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    box-shadow: 0 0 30px -8px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .vnode.done { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); }
+  .vgi { position: relative; flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center; background: #1A1B21;
+    color: var(--t3); font-family: var(--mono); font-size: 14px; }
+  .vnode.orch .vgi, .vnode.active .vgi { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+  .vnode.done .vgi { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--green); }
+  .vring { position: absolute; inset: -1px; border-radius: 8px; border: 1px solid var(--accent);
+    animation: cardring 1.9s ease-out infinite; }
+  .vbody { min-width: 0; flex: 1; }
+  .vhead { display: flex; align-items: baseline; gap: 8px; }
+  .vn { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--t1); }
+  .vmodel { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--t4);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
+  .vdesc { font-size: 10.5px; color: var(--t3); margin-top: 2px; }
+  .vact { font-family: var(--mono); font-size: 11px; color: var(--t2); margin-top: 5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .vdot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--t5); }
+  .vnode.active .vdot { background: var(--accent); animation: live 1.7s ease-in-out infinite; }
+  .vnode.done .vdot { background: var(--green); }
+  .vspine { width: 2px; height: 22px; margin-left: 26px; background: repeating-linear-gradient(
+    to bottom, #2E2F36 0 4px, transparent 4px 9px); }
+  .vspine.done { background: color-mix(in srgb, var(--green) 45%, #2E2F36); }
+
+  /* roster row toggle (Configuration → Roles & Models) */
+  .rmrow .tog { flex: 0 0 auto; }
+  .rmrow .rtog { width: 30px; height: 18px; }
+  .rmrow .rtog span { width: 14px; height: 14px; }
+  .rmrow .rtog.on span { left: 14px; }
+
   /* right run panel */
   .side { flex: 0 0 320px; width: 320px; display: flex; flex-direction: column; min-height: 0;
     background: var(--raise); border-left: 1px solid var(--border); }
@@ -304,25 +363,46 @@
     </div>
     <span class="live" id="live"><i></i><span id="liveText">idle</span></span>
 
+    <!-- CONFIGURATION — the team: pipeline, roles & models, providers & keys -->
+    <div class="menu-wrap">
+      <button class="btn" id="configBtn" style="gap:6px">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2" fill="var(--panel)"/><circle cx="15" cy="12" r="2" fill="var(--panel)"/><circle cx="8" cy="18" r="2" fill="var(--panel)"/></svg>
+        Config
+      </button>
+      <div class="menu settings hidden" id="configMenu">
+        <div class="sec">
+          <div class="h">Pipeline</div>
+          <div class="setrow"><div class="l"><div class="t">Relay</div><div class="s">Planner → Coder → Reviewer</div></div><div class="tog" data-flag="relay"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Task-split</div><div class="s">Delegate each step to a specialist</div></div><div class="tog" data-flag="tasks"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Explorer</div><div class="s">Scout before planning</div></div><div class="tog" data-flag="explorer"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Tester</div><div class="s">Run the verification step</div></div><div class="tog" data-flag="tester"><span></span></div></div>
+        </div>
+        <div class="sec">
+          <div class="h">Roles &amp; Models · the team</div>
+          <div style="font-size:10.5px;color:var(--t4);margin-bottom:8px">Enable a role and pick its model. Enabled roles are the specialists the Planner can delegate to in task-split.</div>
+          <div id="roster"></div>
+        </div>
+        <div class="sec">
+          <div class="h">Providers &amp; Keys</div>
+          <div id="apiKeys"></div>
+        </div>
+        <div class="foot"><span class="p" id="cfgPath"></span><span class="v" id="ver"></span></div>
+      </div>
+    </div>
+
+    <!-- SETTINGS — general preferences only -->
     <div class="menu-wrap">
       <button class="btn" id="gearBtn" aria-label="Settings" style="width:32px;height:30px;justify-content:center;padding:0">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
       </button>
       <div class="menu settings hidden" id="settingsMenu">
-        <div class="sec">
-          <div class="h">Pipeline</div>
-          <div class="setrow"><div class="l"><div class="t">Relay</div><div class="s">Planner → Coder → Reviewer</div></div><div class="tog" data-flag="relay"><span></span></div></div>
-          <div class="setrow"><div class="l"><div class="t">Task-split</div><div class="s">One fresh coder per task</div></div><div class="tog" data-flag="tasks"><span></span></div></div>
-          <div class="setrow"><div class="l"><div class="t">Explorer</div><div class="s">Scout before planning</div></div><div class="tog" data-flag="explorer"><span></span></div></div>
-          <div class="setrow"><div class="l"><div class="t">Tester</div><div class="s">Run the verification step</div></div><div class="tog" data-flag="tester"><span></span></div></div>
-        </div>
-        <div class="sec">
+        <div class="sec" style="border-top:0">
           <div class="h">Appearance</div>
           <div class="setrow"><div class="l"><div class="t">Accent</div><div class="s">The signal color</div></div>
             <div class="swatches" id="swatches"></div></div>
           <div class="setrow"><div class="l"><div class="t">Reduce motion</div><div class="s">Pause pulses and shimmer</div></div><div class="tog" id="reduceTog"><span></span></div></div>
         </div>
-        <div class="foot"><span class="p" id="cfgPath"></span><span class="v" id="ver"></span></div>
+        <div class="foot"><span class="v" id="ver2"></span></div>
       </div>
     </div>
 
@@ -412,14 +492,19 @@ async function api(path, body) {
 /* ---- top-bar menus ---- */
 function closeMenus(except) {
   if (except !== "model") $("modelMenu").classList.add("hidden");
+  if (except !== "config") $("configMenu").classList.add("hidden");
   if (except !== "settings") $("settingsMenu").classList.add("hidden");
 }
-$("modelBtn").onclick = (e) => { e.stopPropagation(); const m = $("modelMenu"); const h = m.classList.contains("hidden"); closeMenus("model"); m.classList.toggle("hidden", !h); };
-$("gearBtn").onclick = (e) => { e.stopPropagation(); const m = $("settingsMenu"); const h = m.classList.contains("hidden"); closeMenus("settings"); m.classList.toggle("hidden", !h); };
+function toggleMenu(id, tag) {
+  const m = $(id); const h = m.classList.contains("hidden");
+  closeMenus(tag); m.classList.toggle("hidden", !h);
+}
+$("modelBtn").onclick = (e) => { e.stopPropagation(); toggleMenu("modelMenu", "model"); };
+$("configBtn").onclick = (e) => { e.stopPropagation(); toggleMenu("configMenu", "config"); };
+$("gearBtn").onclick = (e) => { e.stopPropagation(); toggleMenu("settingsMenu", "settings"); };
 // clicks inside a menu must not bubble to the document close-handler
-// (otherwise the custom input would close the menu on focus)
-$("modelMenu").addEventListener("click", (e) => e.stopPropagation());
-$("settingsMenu").addEventListener("click", (e) => e.stopPropagation());
+for (const id of ["modelMenu", "configMenu", "settingsMenu"])
+  $(id).addEventListener("click", (e) => e.stopPropagation());
 document.addEventListener("click", () => closeMenus());
 
 // Provider quick-picks for the free-form model field. No maximum: type any
@@ -467,8 +552,9 @@ function renderModels() {
   };
 }
 
-function renderSettings() {
-  for (const t of document.querySelectorAll(".tog[data-flag]")) {
+// CONFIGURATION panel — pipeline, the roster (roles & models), providers & keys.
+function renderConfig() {
+  for (const t of document.querySelectorAll("#configMenu .tog[data-flag]")) {
     const on = !!state[t.dataset.flag];
     t.classList.toggle("on", on);
     t.onclick = async () => {
@@ -477,11 +563,17 @@ function renderSettings() {
       if (r.ok) { await loadState(); }
     };
   }
+  renderRoster();
+  renderApiKeys();
   $("cfgPath").textContent = state.config_file || "";
   $("ver").textContent = "v" + (state.version || "");
+}
+
+// SETTINGS panel — general preferences only (appearance).
+function renderSettings() {
+  $("ver2").textContent = "v" + (state.version || "");
   const sw = $("swatches");
-  sw.innerHTML = ACCENTS.map((c, i) => `<span class="swatch" data-c="${c}" style="background:${c}"></span>`).join("");
-  const cur = getComputedStyle(document.documentElement).getPropertyValue("--accent").trim();
+  sw.innerHTML = ACCENTS.map((c) => `<span class="swatch" data-c="${c}" style="background:${c}"></span>`).join("");
   for (const s of sw.children) {
     s.classList.toggle("on", s.dataset.c === (localStorage.accent || "#2D5BFF"));
     s.onclick = () => { document.documentElement.style.setProperty("--accent", s.dataset.c);
@@ -494,13 +586,91 @@ function renderSettings() {
     localStorage.reduce = on ? "1" : "0"; document.body.classList.toggle("reduce", on); };
 }
 
-/* ---- agent views ---- */
-function activeRoles() {
-  return (state && state.relay) ? state.roles.filter(r => r.enabled)
-    : [{ name: "agent", enabled: true, model: state ? state.model_short : "" }];
+const TIERS = ["fast", "balanced", "strong"];
+function short(id) { return id.split("/").pop(); }
+
+function modelOptions(selected) {
+  // tiers first (roster assignments are usually a tier), then the full catalog.
+  let html = `<optgroup label="Tier">` +
+    TIERS.map(t => `<option value="${t}"${t === selected ? " selected" : ""}>${t}</option>`).join("") +
+    `</optgroup>`;
+  let group = null, buf = "";
+  (state.models || []).forEach(m => {
+    if (m.group === "Current") return;
+    if (m.group !== group) { if (buf) html += `<optgroup label="${esc(group)}">${buf}</optgroup>`; buf = ""; group = m.group; }
+    buf += `<option value="${esc(m.id)}"${m.id === selected ? " selected" : ""}>${esc(m.name)}</option>`;
+  });
+  if (buf) html += `<optgroup label="${esc(group)}">${buf}</optgroup>`;
+  return html;
 }
+
+// The 16-role roster: enable/disable + assign a model or tier per role.
+function renderRoster() {
+  $("roster").innerHTML = (state.roster || []).map(r =>
+    `<div class="rmrow">` +
+    `<div class="tog rtog ${r.enabled ? "on" : ""}" data-role="${esc(r.id)}"><span></span></div>` +
+    `<span class="rn" title="${esc(r.id)}">${esc(r.id)}</span>` +
+    `<select data-role="${esc(r.id)}">${modelOptions(r.assigned)}</select></div>`
+  ).join("");
+  for (const t of $("roster").querySelectorAll(".rtog")) t.onclick = async () => {
+    const next = !t.classList.contains("on");
+    await api("/api/roster", { role: t.dataset.role, enabled: next });
+    await loadState();
+    addLog("config", t.dataset.role + (next ? " enabled" : " disabled"));
+  };
+  for (const s of $("roster").querySelectorAll("select")) s.onchange = async () => {
+    await api("/api/roster", { role: s.dataset.role, model: s.value });
+    await loadState();
+    addLog("config", s.dataset.role + " → " + short(s.value));
+  };
+}
+function renderApiKeys() {
+  $("apiKeys").innerHTML = (state.providers || []).map((p, i) =>
+    `<div class="keyrow"><span class="kdot ${p.detected ? "on" : ""}"></span>` +
+    `<span class="kl">${esc(p.label)}</span>` +
+    `<input type="password" data-p="${esc(p.id)}" placeholder="${p.detected ? "•••• set" : p.env}" autocomplete="off">` +
+    `<button data-p="${esc(p.id)}">Save</button></div>`
+  ).join("");
+  for (const b of $("apiKeys").querySelectorAll("button")) b.onclick = async () => {
+    const inp = $("apiKeys").querySelector(`input[data-p="${b.dataset.p}"]`);
+    const key = inp.value.trim(); if (!key) return;
+    await api("/api/key", { provider: b.dataset.p, key });
+    inp.value = ""; await loadState();
+    addLog("config", b.dataset.p + " key saved");
+  };
+}
+
+/* ---- agent views ----
+   participants() is the workflow's cast: the enabled pipeline roles PLUS any
+   specialist that actually ran (from the event stream), inserted before the
+   reviewer. This is what fixes the "chaotic when roles are added" problem —
+   the view is driven by who really participates, not a fixed 5, and the flow
+   below scales to any number of them. */
+let zoom = 1;
+let roleModel = {};   // name -> model, filled from run events (overrides roster)
+
+function rosterModelOf(name) {
+  const r = (state.roster || []).find(x => x.id === name);
+  return roleModel[name] || (r && r.model) || "";
+}
+
+function participants() {
+  if (!state || !state.relay) {
+    return [{ name: "agent", model: state ? state.model_short : "" }];
+  }
+  const pipeline = state.roles.filter(r => r.enabled).map(r => ({ name: r.name, model: r.model }));
+  const known = new Set(pipeline.map(p => p.name));
+  // The configured team is visible even before a run: enabled roster
+  // specialists, plus any that actually ran this run.
+  const names = new Set([...(state.specialists || []), ...Object.keys(status)]);
+  const extras = [...names].filter(k => !known.has(k)).map(k => ({ name: k, model: rosterModelOf(k) }));
+  if (!extras.length) return pipeline;
+  const ri = pipeline.findIndex(p => p.name === "reviewer");
+  return ri >= 0 ? [...pipeline.slice(0, ri), ...extras, ...pipeline.slice(ri)] : [...pipeline, ...extras];
+}
+
 function renderCards() {
-  const roles = activeRoles();
+  const roles = participants();
   $("agentCount").textContent = roles.length;
   $("cards").innerHTML = roles.map(r => {
     const st = status[r.name] || "idle";
@@ -509,94 +679,41 @@ function renderCards() {
     const act = activity[r.name] || "waiting";
     return `<div class="card ${cls}"><div class="row"><span class="name">${esc(r.name)}</span>` +
       `<span class="pill"><i></i>${pill}</span></div>` +
-      `<div class="desc">${esc(DESC[r.name] || "")} · ${esc(r.model)}</div>` +
+      `<div class="desc">${esc(DESC[r.name] || "specialist")}${r.model ? " · " + esc(short(r.model)) : ""}</div>` +
       `<div class="act">${esc(act)}</div></div>`;
   }).join("");
 }
-let zoom = 0.85;
-const NW = 186, NH = 64, GW = 900, GH = 440;
 
-function edgePath(a, b) {  // horizontal cubic bezier between node centers
-  const ax = a.x + NW / 2, ay = a.y + NH / 2, bx = b.x + NW / 2, by = b.y + NH / 2;
-  const dx = (bx - ax) * 0.5;
-  return `M${ax} ${ay} C ${ax + dx} ${ay} ${bx - dx} ${by} ${bx} ${by}`;
-}
-
-function renderGraph() {
+// A clean VERTICAL flow: one node per participant, joined by a spine, with the
+// active node glowing. Scales to any count — never cramped, never chaotic.
+function renderFlow() {
   const stage = $("stage"); if (!stage) return;
   const relay = state && state.relay;
-  const roles = activeRoles();
-  const pos = {};
-  if (!relay) {
-    pos[roles[0].name] = { x: (GW - NW) / 2, y: (GH - NH) / 2 };
-  } else {
-    const n = roles.length, firstX = 60, lastX = GW - 60 - NW;
-    const step = n > 1 ? (lastX - firstX) / (n - 1) : 0;
-    roles.forEach((r, i) => {
-      const t = n > 1 ? i / (n - 1) : 0.5;
-      pos[r.name] = { x: firstX + i * step, y: 250 - 42 * Math.sin(t * Math.PI) };  // gentle arc
-    });
-  }
-  const orch = relay ? { x: GW / 2 - NW / 2, y: 34 } : null;
-  const activeName = (roles.find(r => status[r.name] === "active") || {}).name;
+  const roles = participants();
+  const rows = [];
+  if (relay) rows.push({ name: "orchestrator", desc: "coordinates the relay", orch: true });
+  roles.forEach(r => rows.push({ name: r.name, desc: DESC[r.name] || "specialist", model: r.model }));
 
-  let paths = "", pulses = "", labels = "";
-  if (relay) {
-    paths += `<path d="${edgePath(orch, pos[roles[0].name])}" stroke="color-mix(in srgb, var(--accent) 24%, var(--border))" stroke-width="1.3" fill="none" opacity=".7"/>`;
-    for (let i = 0; i < roles.length - 1; i++) {
-      const d = edgePath(pos[roles[i].name], pos[roles[i + 1].name]);
-      if (roles[i + 1].name === activeName) {
-        paths += `<path d="${d}" stroke="var(--accent)" stroke-width="6" fill="none" opacity=".14" style="filter:blur(3.5px)"/>`;
-        paths += `<path d="${d}" stroke="var(--accent)" stroke-width="1.8" fill="none" opacity=".55" marker-end="url(#arrowA)"/>`;
-        pulses += `<div class="pulse" style="offset-path:path('${d}');animation:pulse 1.7s linear infinite"></div>`;
-        pulses += `<div class="pulse" style="offset-path:path('${d}');animation:pulse 1.7s linear infinite .85s"></div>`;
-      } else {
-        paths += `<path d="${d}" stroke="#2E2F36" stroke-width="1.5" fill="none" marker-end="url(#arrow)"/>`;
-      }
-    }
-    // feedback loop: reviewer → coder (retry on failure)
-    const ci = roles.findIndex(r => r.name === "coder"), ri = roles.length - 1;
-    if (ci >= 0 && ri > ci) {
-      const rc = pos[roles[ri].name], cc = pos[roles[ci].name];
-      const rx = rc.x + NW / 2, ry = rc.y + NH, cx = cc.x + NW / 2, cy = cc.y + NH;
-      const dip = Math.max(ry, cy) + 90;
-      paths += `<path d="M${rx} ${ry} C ${rx} ${dip} ${cx} ${dip} ${cx} ${cy}" stroke="#34353C" stroke-width="1.4" stroke-dasharray="2 6" fill="none" opacity=".7" marker-end="url(#arrow)"/>`;
-      labels += `<div class="flabel" style="left:${(rx + cx) / 2}px;top:${dip - 6}px">retry on failure</div>`;
-    }
-  }
-
-  function nodeHtml(name, p, forceCls) {
-    const st = status[name] || "idle";
-    const cls = forceCls || (st === "active" ? "active" : st === "done" ? "done" : (busy ? "off" : ""));
-    const ring = cls === "active" ? '<span class="cardring"></span>' : "";
-    const foot = (name === activeName && activity[name])
-      ? `<div class="gfoot"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="#6E6F77" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:0 0 auto"><path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V9z"></path><path d="M13 3v6h6"></path></svg>${esc(activity[name])}</div>`
-      : "";
-    return `<div class="gnode ${cls}" style="left:${p.x}px;top:${p.y}px">${ring}` +
-      `<div class="ghead"><div class="gi">${esc(GLYPH[name] || "●")}</div>` +
-      `<div style="min-width:0"><div class="gn">${esc(name)}</div><div class="gs">${esc(DESC[name] || "")}</div></div>` +
-      `<div class="gdot"><i></i></div></div>${foot}</div>`;
-  }
-
-  let nodes = "";
-  if (relay) {
-    nodes += `<div class="gnode orch" style="left:${orch.x}px;top:${orch.y}px">` +
-      `<div class="ghead"><div class="gi">◈</div>` +
-      `<div style="min-width:0"><div class="gn">orchestrator</div><div class="gs">coordinates the relay</div></div>` +
-      `<div class="gdot"><i></i>${busy ? '<span style="position:absolute;inset:0;border-radius:50%;border:1px solid var(--accent);animation:ring 2.6s ease-out infinite"></span>' : ""}</div></div></div>`;
-  }
-  roles.forEach(r => { nodes += nodeHtml(r.name, pos[r.name]); });
-
-  stage.style.width = GW + "px"; stage.style.height = GH + "px";
+  stage.style.width = "300px"; stage.style.height = "auto";
   stage.style.transform = `scale(${zoom})`;
-  stage.innerHTML =
-    `<svg width="${GW}" height="${GH}" style="position:absolute;inset:0;overflow:visible;z-index:1"><defs>` +
-    `<marker id="arrow" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1.5 1.5 L7.5 5 L1.5 8.5" fill="none" stroke="#3C3D45" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></marker>` +
-    `<marker id="arrowA" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse"><path d="M1.5 1.5 L7.5 5 L1.5 8.5" fill="none" stroke="var(--accent)" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></marker>` +
-    `</defs>${paths}</svg>${pulses}${labels}${nodes}`;
+  stage.innerHTML = rows.map((row, i) => {
+    const st = row.orch ? (busy ? "active" : "idle") : (status[row.name] || "idle");
+    const cls = st === "active" ? "active" : st === "done" ? "done" : (busy && !row.orch ? "off" : "");
+    const glyph = row.orch ? "◈" : (GLYPH[row.name] || "●");
+    const spine = i < rows.length - 1
+      ? `<div class="vspine ${st === "done" ? "done" : ""}"></div>` : "";
+    const act = (!row.orch && status[row.name] === "active" && activity[row.name])
+      ? `<div class="vact">${esc(activity[row.name])}</div>` : "";
+    const model = row.model ? `<span class="vmodel">${esc(short(row.model))}</span>` : "";
+    return `<div class="vnode ${cls} ${row.orch ? "orch" : ""}">` +
+      `<div class="vgi">${esc(glyph)}${st === "active" ? '<span class="vring"></span>' : ""}</div>` +
+      `<div class="vbody"><div class="vhead"><span class="vn">${esc(row.name)}</span>${model}</div>` +
+      `<div class="vdesc">${esc(row.desc)}</div>${act}</div>` +
+      `<span class="vdot"></span></div>${spine}`;
+  }).join("");
 }
 function updateProgress() {
-  const roles = activeRoles();
+  const roles = participants();
   const done = roles.filter(r => (status[r.name] || "idle") === "done").length;
   const anyActive = roles.some(r => status[r.name] === "active");
   const pct = busy ? Math.min(95, Math.round((done + (anyActive ? 0.5 : 0)) / roles.length * 100))
@@ -626,7 +743,7 @@ function setBusy(b) {
   $("runLabel").className = "label" + (b ? " on" : "");
   $("send").disabled = b; $("stopBtn").disabled = !b;
   if (!b) for (const k in status) if (status[k] === "active") status[k] = "done";
-  renderCards(); renderGraph(); updateProgress();
+  renderCards(); renderFlow(); updateProgress();
 }
 
 function handle(ev) {
@@ -637,6 +754,7 @@ function handle(ev) {
   } else if (ev.kind === "role") {
     for (const k in status) if (status[k] === "active") status[k] = "done";
     status[ev.agent] = "active"; activity[ev.agent] = "started (" + ev.model + ")";
+    roleModel[ev.agent] = ev.model;   // remember the specialist's model for the flow
     addLog(ev.agent, "started · " + ev.model);
   } else if (ev.kind === "text") {
     status[ev.agent] = "active"; addMsg("", ev.agent, ev.text);
@@ -657,7 +775,7 @@ function handle(ev) {
   } else if (ev.kind === "error") {
     addMsg("err", "error", ev.text); addLog("error", ev.text, "bad");
   }
-  renderCards(); renderGraph(); updateProgress();
+  renderCards(); renderFlow(); updateProgress();
 }
 
 async function poll() {
@@ -677,7 +795,7 @@ async function loadState() {
   $("stModel").textContent = state.model_short;
   mode = state.mode;
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.m === mode);
-  renderModels(); renderSettings(); renderCards(); renderGraph();
+  renderModels(); renderConfig(); renderSettings(); renderCards(); renderFlow();
 }
 
 $("modes").addEventListener("click", (e) => {
@@ -691,7 +809,7 @@ $("newBtn").onclick = async () => {
     $("goal").innerHTML = '<span style="color:var(--t4)">no run yet</span>';
     for (const k in status) { delete status[k]; delete activity[k]; }
     $("stElapsed").textContent = "—"; $("stTokens").textContent = "—";
-    renderCards(); renderGraph(); updateProgress(); }
+    renderCards(); renderFlow(); updateProgress(); }
 };
 $("termToggle").onclick = () => $("term").classList.toggle("collapsed");
 function setZoom(z) { zoom = Math.max(0.5, Math.min(1.3, z)); $("zVal").textContent = Math.round(zoom * 100) + "%";

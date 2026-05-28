@@ -545,7 +545,21 @@ class LLM:
             return exc
         name = type(exc).__name__
         detail = str(exc).strip().splitlines()[0] if str(exc).strip() else name
-        return LLMError(f"Model call failed for '{model}' ({name}): {detail}")
+        msg = f"Model call failed for '{model}' ({name}): {detail}"
+        if "AuthenticationError" in name:
+            provider = _resolve_provider(model)
+            if provider:
+                msg += (
+                    f"\nYour {provider} API key was rejected — it may have been "
+                    f"revoked or rotated. Get a fresh key from the {provider} "
+                    f"dashboard, then run: relaycli config set-key {provider}"
+                )
+            else:
+                msg += (
+                    "\nYour API key was rejected — it may have been revoked or "
+                    "rotated. Update it with: relaycli config set-key <provider>"
+                )
+        return LLMError(msg)
 
 
 def _chunk_text(chunk: Any) -> str:

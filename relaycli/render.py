@@ -339,6 +339,8 @@ def render_help(console: Console) -> None:
     table.add_row("/agents \\[r on|off]", "show relay agents; toggle explorer/tester")
     table.add_row("/skill \\[name]", "toggle a skill for this session (tdd, debug, ponytail, …)")
     table.add_row("/skills", "list available skills and where they come from")
+    table.add_row("/config", "roles, per-role models & provider keys (persistent config)")
+    table.add_row("/settings", "general preferences: mode, theme, context limit")
     table.add_row("/diff", "show uncommitted changes (git diff)")
     table.add_row("/clear", "reset the conversation")
     table.add_row("/help", "show this help  (aliases: help, ?)")

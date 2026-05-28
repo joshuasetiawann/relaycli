@@ -28,6 +28,11 @@ app = typer.Typer(
 
 console = Console()
 
+# `relaycli config …` — role/model/tier/key management (see config_cli).
+from relaycli.config_cli import config_app  # noqa: E402
+
+app.add_typer(config_app, name="config")
+
 
 def _apply_overrides(settings: Settings, model: str | None, mode: str | None) -> None:
     if model:
@@ -163,44 +168,11 @@ def web(
 
 
 @app.command()
-def config() -> None:
-    """Show the active configuration and which provider keys are detected."""
-    settings = get_settings()
+def settings() -> None:
+    """Open the interactive Settings screen (general preferences only)."""
+    from relaycli.config_menu import run_settings
 
-    table = Table(title="RelayCLI configuration", show_header=True, header_style="bold")
-    table.add_column("setting", style="cyan", no_wrap=True)
-    table.add_column("value")
-    table.add_row("model", escape(str(settings.model)))
-    table.add_row("permission_mode", str(settings.permission_mode))
-    table.add_row("max_iterations", str(settings.max_iterations))
-    table.add_row("token_budget", str(settings.token_budget))
-    table.add_row("relay_enabled", str(settings.relay_enabled))
-    table.add_row("max_review_cycles", str(settings.max_review_cycles))
-    table.add_row(
-        "config file", str(CONFIG_FILE) + ("" if CONFIG_FILE.exists() else "  (not present)")
-    )
-    console.print(table)
-
-    from relaycli.router import routing_table
-
-    rtable = Table(title="Relay routing", show_header=True, header_style="bold")
-    rtable.add_column("role", style="cyan", no_wrap=True)
-    rtable.add_column("model")
-    for role, resolved in routing_table(settings).items():
-        override = getattr(settings, f"{role.value}_model")
-        note = "" if override else "  [dim](= model)[/dim]"
-        rtable.add_row(str(role), f"{escape(resolved)}{note}")
-    console.print(rtable)
-
-    ptable = Table(title="Providers", show_header=True, header_style="bold")
-    ptable.add_column("provider", style="cyan", no_wrap=True)
-    ptable.add_column("status")
-    for name, ok in settings.detected_providers().items():
-        if name == "ollama":
-            ptable.add_row(name, "[blue]no key required[/blue]")
-        else:
-            ptable.add_row(name, "[green]detected[/green]" if ok else "[dim]missing[/dim]")
-    console.print(ptable)
+    run_settings(console)
 
 
 @app.command()

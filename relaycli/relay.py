@@ -31,6 +31,8 @@ from relaycli.config import Settings, get_settings
 from relaycli.context import ProjectContext
 from relaycli.llm import LLM, Usage
 from relaycli.permissions import PermissionManager
+from relaycli.appconfig import load_app_config
+from relaycli.roster import enabled_specialists, is_assignable, specialist_runtime
 from relaycli.router import Role, resolve_model
 from relaycli.tools import ToolRegistry, default_registry, planner_registry, reviewer_registry
 
@@ -165,6 +167,22 @@ def parse_tasks(plan: str) -> list[str]:
     return [m.group(1).strip() for m in _TASK_LINE_RE.finditer(plan or "")][:_MAX_TASKS]
 
 
+# A numbered step, optionally prefixed with a specialist role in brackets:
+#   "1. [backend] add the JWT util"  ->  ("backend", "add the JWT util")
+_TAGGED_TASK_RE = re.compile(
+    r"^\s*\d+[.)]\s*(?:\[([A-Za-z_-]+)\]\s*)?(.*\S)", re.MULTILINE
+)
+
+
+def parse_tagged_tasks(plan: str) -> list[tuple[str | None, str]]:
+    """Numbered steps with an optional ``[role]`` tag → (role_id|None, text)."""
+    out: list[tuple[str | None, str]] = []
+    for m in _TAGGED_TASK_RE.finditer(plan or ""):
+        role = (m.group(1) or "").strip().lower() or None
+        out.append((role, m.group(2).strip()))
+    return out[:_MAX_TASKS]
+
+
 _VERDICT_LINE_RE = re.compile(r"^\s*VERDICT:\s*(approve|revise)\b", re.IGNORECASE | re.MULTILINE)
 _VERDICT_ANY_RE = re.compile(r"VERDICT:\s*(approve|revise)", re.IGNORECASE)
 
@@ -246,6 +264,13 @@ class Relay:
         # the work; advisory roles keep their tightly-scoped prompts.
         self.skills_block = skills_block
         self.should_stop = should_stop
+        self._app_config = None  # loaded lazily; roster drives specialist routing
+
+    @property
+    def app_config(self):
+        if self._app_config is None:
+            self._app_config = load_app_config()
+        return self._app_config
 
     def run(self, request: str, *, observer: RelayObserver | None = None) -> RelayResult:
         observer = observer or RelayObserver()
@@ -275,7 +300,7 @@ class Relay:
     def _run_role(
         self,
         agent: Agent,
-        role: Role,
+        role: "Role | str",  # a pipeline Role, or a roster role id for a specialist task
         request: str,
         cycle: int,
         observer: RelayObserver,
@@ -288,23 +313,55 @@ class Relay:
         result.usage = result.usage.add(run.usage)
         return role_run
 
+    def _specialist_agent(self, role_id: str) -> Agent:
+        """A fresh coder-capable agent running the roster role ``role_id``.
+
+        The role only changes the system prompt and the model — it always
+        gets the full tool registry, because any implementer role needs to
+        read, edit, and run.
+        """
+        rt = specialist_runtime(self.settings, self.app_config, role_id)
+        return Agent(
+            self.settings,
+            console=self.console,
+            project=self.project,
+            permissions=self.permissions,
+            registry=default_registry(),
+            llm=self.llm,
+            prompt_template=rt.template,
+            model=rt.model,
+            skills_block=self.skills_block,
+            should_stop=self.should_stop,
+        )
+
     def _run_tasks(
         self,
         request: str,
         plan: str,
-        tasks: list[str],
+        tagged: list[tuple[str | None, str]],
         observer: RelayObserver,
         result: RelayResult,
     ) -> str | None:
-        """Run one FRESH coder agent per plan task, sequentially.
+        """Run one FRESH agent per plan task, routed to its specialist role.
 
-        Each agent gets a clean context window: the request, the full plan,
-        the previous tasks' reports, and exactly one task to own. Returns the
-        combined report, or None after recording an aborting failure.
+        Each task may name a roster role (``[backend]``); enabled roles run
+        with their own prompt + resolved model, everything else falls back to
+        the Coder. Each agent gets a clean context window: the request, the
+        full plan, the previous tasks' reports, and exactly one task to own.
+        Returns the combined report, or None after an aborting failure.
         """
         reports: list[str] = []
-        for i, task in enumerate(tasks):
-            coder = self._agent(Role.coder, CODER_TEMPLATE, default_registry())
+        for i, (role_id, task) in enumerate(tagged):
+            if role_id and is_assignable(self.app_config, role_id):
+                agent = self._specialist_agent(role_id)
+                run_role: object = role_id
+            else:
+                if role_id:
+                    result.notes.append(
+                        f"Task {i + 1}: specialist '{role_id}' is not enabled — ran Coder."
+                    )
+                agent = self._agent(Role.coder, CODER_TEMPLATE, default_registry())
+                run_role = Role.coder
             prev = ""
             if reports:
                 prev = "\n\n" + "\n\n".join(
@@ -313,10 +370,10 @@ class Relay:
             task_request = (
                 f"User request:\n{request}\n\n"
                 f"Full plan:\n{plan}{prev}\n\n"
-                f"Your assignment is ONLY task {i + 1} of {len(tasks)}:\n{task}\n\n"
+                f"Your assignment is ONLY task {i + 1} of {len(tagged)}:\n{task}\n\n"
                 f"Do this one step now — other tasks are handled by other agents."
             )
-            run = self._run_role(coder, Role.coder, task_request, 0, observer, result)
+            run = self._run_role(agent, run_role, task_request, 0, observer, result)
             if run.result.stopped_reason != "done":
                 result.final_text = run.result.final_text
                 result.stopped_reason = run.result.stopped_reason
@@ -324,7 +381,7 @@ class Relay:
             reports.append(run.result.final_text.strip())
         return "\n\n".join(
             f"Task {i + 1} ({task}):\n{report}"
-            for i, (task, report) in enumerate(zip(tasks, reports))
+            for i, ((_role, task), report) in enumerate(zip(tagged, reports))
         )
 
     def _pipeline(self, request: str, observer: RelayObserver, result: RelayResult) -> None:
@@ -349,6 +406,19 @@ class Relay:
                     "Explorer failed; planning without a context brief."
                 )
 
+        # Task-split: let the Planner delegate each step to a specialist by
+        # prefixing it with the role in brackets, drawn from the enabled roster.
+        if self.settings.relay_split_tasks:
+            specialists = enabled_specialists(self.app_config)
+            if specialists:
+                planner_request += (
+                    "\n\nThis run splits the plan into per-task agents. Write numbered "
+                    "steps; where a step suits a specialist, prefix it with that role "
+                    "in brackets, e.g. '1. [backend] add the token helper'. Available "
+                    f"specialists: {', '.join(specialists)}. Leave a step untagged to "
+                    "use the general Coder."
+                )
+
         # 1. Plan. Nothing has been modified yet, so any failure aborts cleanly.
         plan_run = self._run_role(planner, Role.planner, planner_request, 0, observer, result)
         plan = plan_run.result.final_text.strip()
@@ -368,24 +438,24 @@ class Relay:
         )
 
         # Task-split mode (opt-in): each numbered plan step is owned by a
-        # fresh coder agent with a clean context window.
-        tasks: list[str] = []
+        # fresh agent, routed to the specialist role the step names.
+        tagged: list[tuple[str | None, str]] = []
         if self.settings.relay_split_tasks:
-            tasks = parse_tasks(plan)
-            if len(tasks) < 2:
+            tagged = parse_tagged_tasks(plan)
+            if len(tagged) < 2:
                 result.notes.append(
                     "Plan has no numbered tasks to split; running a single Coder."
                 )
-                tasks = []
-            result.tasks = tasks
+                tagged = []
+            result.tasks = [t for _role, t in tagged]
 
         for cycle in range(self.settings.max_review_cycles + 1):
             result.cycles = cycle
 
-            # 2. Code — one coder per task (first cycle only), or the classic
-            #    single persistent coder.
-            if tasks and cycle == 0:
-                code_report = self._run_tasks(request, plan, tasks, observer, result)
+            # 2. Code — one specialist agent per task (first cycle only), or
+            #    the classic single persistent coder.
+            if tagged and cycle == 0:
+                code_report = self._run_tasks(request, plan, tagged, observer, result)
                 if code_report is None:
                     return
             else:
@@ -476,7 +546,7 @@ class Relay:
                 "feedback, then report what you changed:\n\n"
                 + review_run.result.final_text
             )
-            if tasks:
+            if tagged:
                 # The fixer coder is fresh (task agents owned cycle 0):
                 # give it the full context, not just the feedback.
                 coder_request = (

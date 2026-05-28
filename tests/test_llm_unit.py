@@ -155,3 +155,39 @@ def test_credential_kwargs_unknown_model_raises():
     llm = LLM(Settings())
     with pytest.raises(LLMError):
         llm._credential_kwargs("not-a-real-provider/zzz-model")
+
+
+def test_wrap_error_auth_failure_gives_actionable_hint():
+    from relaycli.config import Settings
+
+    class AuthenticationError(Exception):
+        pass
+
+    llm = LLM(Settings())
+    err = llm._wrap_error(
+        AuthenticationError('OpenrouterException - {"error":{"message":"User not found.","code":401}}'),
+        "openrouter/cohere/north-mini-code:free",
+    )
+    msg = str(err)
+    assert "rejected" in msg
+    assert "relaycli config set-key openrouter" in msg
+
+
+def test_wrap_error_auth_failure_unknown_provider_still_hints():
+    from relaycli.config import Settings
+
+    class AuthenticationError(Exception):
+        pass
+
+    llm = LLM(Settings())
+    msg = str(llm._wrap_error(AuthenticationError("401"), "not-a-real-provider/zzz"))
+    assert "rejected" in msg
+
+
+def test_wrap_error_non_auth_unchanged():
+    from relaycli.config import Settings
+
+    llm = LLM(Settings())
+    msg = str(llm._wrap_error(TimeoutError("took too long"), "openrouter/x/y"))
+    assert "rejected" not in msg
+    assert "Model call failed for 'openrouter/x/y'" in msg

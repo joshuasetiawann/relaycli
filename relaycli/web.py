@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -141,10 +142,56 @@ class WebSession:
             "tasks": s.relay_split_tasks,
             "split_tasks": s.relay_split_tasks,
             "roles": roles,
+            "role_models": [
+                {
+                    "role": r,
+                    "enabled": role_enabled(s, Role(r)),
+                    "assigned": getattr(s, f"{r}_model"),
+                    "resolved": short_model_name(resolve_model(s, Role(r))),
+                }
+                for r in self.ROLES
+            ],
+            "providers": self._provider_status(),
+            # Roster specialists a task can be delegated to in task-split mode.
+            "specialists": self._enabled_specialists(),
+            # The full 16-role roster (from config.toml) for the Configuration
+            # panel: each role's enabled state, assignment, and resolved model.
+            "roster": self._roster(),
             "skills": sorted(discover_skills(self.project.root)),
             "preflight": preflight_settings(s),
             "busy": self.busy,
         }
+
+    def _enabled_specialists(self) -> list[str]:
+        from relaycli.roster import enabled_specialists
+
+        return enabled_specialists()
+
+    def _roster(self) -> list[dict]:
+        from relaycli.appconfig import effective_roles, load_app_config
+
+        return [
+            {"id": r.id, "name": r.display_name, "enabled": r.enabled,
+             "assigned": r.assigned, "model": r.model}
+            for r in effective_roles(load_app_config())
+        ]
+
+    def set_roster(self, role: str, enabled=None, model=None) -> bool:
+        """Enable/disable a roster role and/or assign its model (persisted)."""
+        from relaycli.appconfig import RoleConfig, load_app_config, save_app_config
+        from relaycli.roles import builtin_role
+
+        if builtin_role(role) is None:
+            return False
+        cfg = load_app_config()
+        rc = cfg.roles.get(role) or RoleConfig()
+        if enabled is not None:
+            rc.enabled = bool(enabled)
+        if model is not None:
+            rc.model = (model.strip() or None)
+        cfg.roles[role] = rc
+        save_app_config(cfg)
+        return True
 
     # The model catalog shown in the top-bar config menu, grouped by
     # provider: six direct providers (2 each) plus OpenRouter (8, all
@@ -259,6 +306,53 @@ class WebSession:
             return False
         setattr(self.settings, field, bool(value))
         return True
+
+    # Each relay role can run a different specialist model. "" clears the
+    # override so the role falls back to the base model.
+    ROLES = ("explorer", "planner", "coder", "tester", "reviewer")
+
+    def set_role_model(self, role: str, model: str) -> bool:
+        if role not in self.ROLES:
+            return False
+        setattr(self.settings, f"{role}_model", model.strip() or None)
+        return True
+
+    # Provider credentials the UI can set at runtime. attr = the Settings
+    # field LiteLLM reads directly (6 managed providers); env = the variable
+    # LiteLLM reads itself for the rest (DeepSeek / Qwen / GLM).
+    PROVIDERS = (
+        ("openai", "OpenAI", "openai_api_key", "OPENAI_API_KEY"),
+        ("anthropic", "Anthropic", "anthropic_api_key", "ANTHROPIC_API_KEY"),
+        ("gemini", "Gemini", "gemini_api_key", "GEMINI_API_KEY"),
+        ("deepseek", "DeepSeek", None, "DEEPSEEK_API_KEY"),
+        ("dashscope", "Qwen · DashScope", None, "DASHSCOPE_API_KEY"),
+        ("zhipu", "GLM · Zhipu", None, "ZHIPUAI_API_KEY"),
+        ("groq", "Groq", "groq_api_key", "GROQ_API_KEY"),
+        ("mistral", "Mistral", "mistral_api_key", "MISTRAL_API_KEY"),
+        ("openrouter", "OpenRouter", "openrouter_api_key", "OPENROUTER_API_KEY"),
+    )
+
+    def set_key(self, provider: str, key: str) -> bool:
+        key = (key or "").strip()
+        for pid, _label, attr, env in self.PROVIDERS:
+            if pid != provider:
+                continue
+            if attr is not None:
+                setattr(self.settings, attr, key or None)
+            if key:
+                os.environ[env] = key
+            else:
+                os.environ.pop(env, None)
+            return True
+        return False
+
+    def _provider_status(self) -> list[dict]:
+        out = []
+        for pid, label, attr, env in self.PROVIDERS:
+            detected = (bool(getattr(self.settings, attr, None)) if attr
+                        else bool(os.environ.get(env)))
+            out.append({"id": pid, "label": label, "env": env, "detected": detected})
+        return out
 
     def stop(self) -> None:
         """Ask the in-flight run to halt after its current step (idempotent)."""
@@ -412,6 +506,16 @@ def make_handler(session: WebSession):
                 self._json({"ok": True, "model": session.settings.model})
             elif path == "/api/flag":
                 ok = session.set_flag(data.get("name") or "", bool(data.get("on")))
+                self._json({"ok": ok}, status=200 if ok else 400)
+            elif path == "/api/role-model":
+                ok = session.set_role_model(data.get("role") or "", data.get("model") or "")
+                self._json({"ok": ok}, status=200 if ok else 400)
+            elif path == "/api/key":
+                ok = session.set_key(data.get("provider") or "", data.get("key") or "")
+                self._json({"ok": ok}, status=200 if ok else 400)
+            elif path == "/api/roster":
+                ok = session.set_roster(
+                    data.get("role") or "", data.get("enabled"), data.get("model"))
                 self._json({"ok": ok}, status=200 if ok else 400)
             elif path == "/api/send":
                 text = (data.get("text") or "").strip()

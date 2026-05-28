@@ -46,6 +46,8 @@ SLASH_COMMANDS: dict[str, tuple[str, str]] = {
     "agents": ("[r on|off]", "show relay agents; toggle explorer/tester"),
     "skill": ("[name]", "toggle a skill on/off for this session"),
     "skills": ("", "list available skills (● = active)"),
+    "config": ("", "roles, per-role models & provider keys (persistent)"),
+    "settings": ("", "general preferences (mode, theme, context)"),
     "diff": ("", "show uncommitted changes (git diff)"),
     "clear": ("", "reset the conversation"),
     "help": ("", "show all commands and keys"),
@@ -435,6 +437,12 @@ class Repl:
             self._cmd_skill(arg)
         elif cmd == "skills":
             self._cmd_skills()
+        elif cmd == "config":
+            from relaycli.config_menu import run_configuration
+            run_configuration(self.console)
+        elif cmd == "settings":
+            from relaycli.config_menu import run_settings
+            run_settings(self.console)
         elif cmd == "diff":
             self._cmd_diff()
         elif cmd == "clear":
@@ -533,9 +541,20 @@ class Repl:
         relay_state = "on" if self.settings.relay_enabled else "off"
         split_state = "on" if self.settings.relay_split_tasks else "off"
         self.console.print(
-            f"[dim]relay {relay_state} · task-split {split_state} (one fresh coder "
-            f"per plan task) · /agents explorer|tester|tasks on|off[/dim]"
+            f"[dim]relay {relay_state} · task-split {split_state} (delegates each "
+            f"plan task to a specialist) · /agents explorer|tester|tasks on|off[/dim]"
         )
+        # In task-split mode the Planner can hand a step to any enabled roster
+        # specialist; show which are available (configure via /config).
+        if self.settings.relay_split_tasks:
+            from relaycli.roster import enabled_specialists
+
+            specialists = enabled_specialists()
+            if specialists:
+                self.console.print(
+                    f"[dim]specialists (task-split): {escape(', '.join(specialists))}"
+                    f"  · enable more with /config[/dim]"
+                )
 
     def _skills_block(self) -> str:
         from relaycli.skills import skills_prompt_block

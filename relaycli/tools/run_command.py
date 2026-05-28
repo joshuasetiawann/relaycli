@@ -35,6 +35,11 @@ _SENSITIVE_ENV: frozenset[str] = frozenset(
         "GROQ_API_KEY",
         "MISTRAL_API_KEY",
         "OPENROUTER_API_KEY",
+        # Providers whose keys the web UI can set at runtime (LiteLLM reads
+        # these from the env); scrub them so a spawned command can't read back.
+        "DEEPSEEK_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "ZHIPUAI_API_KEY",
         "RELAYCLI_OPENAI_API_KEY",
         "RELAYCLI_ANTHROPIC_API_KEY",
         "RELAYCLI_GEMINI_API_KEY",
