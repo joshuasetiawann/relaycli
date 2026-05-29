@@ -372,3 +372,76 @@ def test_role_model_and_key_endpoints():
         assert session.settings.anthropic_api_key == "sk-ant-web"
     finally:
         server.shutdown(); server.server_close()
+
+
+# --- /desktop: background server -------------------------------------------
+def test_serve_background_starts_and_serves(monkeypatch, tmp_path):
+    import json
+    import urllib.request
+
+    monkeypatch.chdir(tmp_path)
+    from relaycli.config import Settings
+    from relaycli.web import serve_background
+
+    server, url = serve_background(Settings(), port=0)
+    try:
+        with urllib.request.urlopen(f"{url}/api/state", timeout=10) as resp:
+            state = json.loads(resp.read().decode())
+        assert "model" in state
+        assert url.startswith("http://127.0.0.1:")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_serve_background_port_busy_falls_back(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    from relaycli.config import Settings
+    from relaycli.web import serve_background
+
+    s1, url1 = serve_background(Settings(), port=0)
+    busy_port = int(url1.rsplit(":", 1)[1])
+    s2, url2 = serve_background(Settings(), port=busy_port)
+    try:
+        assert url1 != url2  # second server picked an ephemeral port
+    finally:
+        for s in (s1, s2):
+            s.shutdown()
+            s.server_close()
+
+
+def test_allow_hosts_extends_guard(monkeypatch, tmp_path):
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    monkeypatch.chdir(tmp_path)
+    from relaycli.config import Settings
+    from relaycli.web import WebSession, make_handler
+
+    session = WebSession(Settings())
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", 0), make_handler(session, {"myhost.lan"})
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    port = server.server_address[1]
+    try:
+        # allowed extra Host passes
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/state", headers={"Host": "myhost.lan"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            assert json.loads(resp.read().decode())["model"]
+        # anything else is still rejected (DNS rebinding)
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/state", headers={"Host": "evil.com"}
+        )
+        try:
+            urllib.request.urlopen(req, timeout=10)
+            raise AssertionError("evil host was accepted")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 421
+    finally:
+        server.shutdown()
+        server.server_close()

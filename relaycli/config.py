@@ -130,6 +130,13 @@ class Settings(BaseSettings):
         ge=1_000,
         description="Approximate token budget before the session trims history.",
     )
+    skills_auto: bool = Field(
+        default=True,
+        description=(
+            "Auto-activate matching builtin/user skills per request "
+            "(keyword triggers, announced in the UI; /skill auto on|off)."
+        ),
+    )
 
     # --- Relay pipeline (Planner → Coder → Reviewer) ---------------------
     relay_enabled: bool = Field(

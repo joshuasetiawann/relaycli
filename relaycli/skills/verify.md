@@ -1,6 +1,7 @@
 ---
 name: verify
 description: Evidence before completion claims — run it, show it (after obra/superpowers)
+triggers: verify, verifikasi, pastikan, buktikan, prove, cek ulang, make sure
 ---
 Never claim something works without evidence from this session.
 

@@ -14,6 +14,28 @@ from relaycli.permissions import PermissionManager
 from relaycli.tools.base import ToolContext
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_mcp_servers(monkeypatch):
+    """Never let a developer's real [mcp] config spawn server processes in
+    tests. MCP tests build their own MCPServerConfig / stub this back."""
+    import relaycli.mcp as mcp
+
+    monkeypatch.setattr(mcp, "enabled_servers", lambda: {})
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_global_memory(tmp_path_factory, monkeypatch):
+    """Point global memory at a per-test temp file so the developer's real
+    ~/.relaycli/memory.md never leaks into test prompts (and tests never
+    write to it)."""
+    import relaycli.memory as memory
+
+    fake = tmp_path_factory.mktemp("memory") / "memory.md"
+    monkeypatch.setattr(memory, "GLOBAL_MEMORY", fake)
+    yield
+
+
 @pytest.fixture
 def sample_project(tmp_path: Path) -> Path:
     """A small sample project tree used by the tool tests."""

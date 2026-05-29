@@ -33,6 +33,11 @@ from relaycli.config_cli import config_app  # noqa: E402
 
 app.add_typer(config_app, name="config")
 
+# `relaycli mcp …` — MCP connector management (see mcp_cli).
+from relaycli.mcp_cli import mcp_app  # noqa: E402
+
+app.add_typer(mcp_app, name="mcp")
+
 
 def _apply_overrides(settings: Settings, model: str | None, mode: str | None) -> None:
     if model:
@@ -108,6 +113,16 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         settings.permission_mode, console=console, assume_yes=assume_yes
     )
 
+    skills_block = ""
+    if settings.skills_auto:
+        from relaycli.skills import auto_match, discover_skills, skills_prompt_block
+
+        skills = discover_skills(project.root)
+        auto_names = auto_match(skills, request)
+        for name in auto_names:
+            console.print(f"[dim]✦ auto-skill: [cyan]{escape(name)}[/cyan][/dim]")
+        skills_block = skills_prompt_block([skills[n] for n in auto_names])
+
     render_status_line(console, settings, project.root, key_status(settings))
     if settings.permission_mode is PermissionMode.full_auto:
         console.print(
@@ -126,7 +141,8 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         render_routing_banner(console, settings)
         console.print()
         relay_pipeline = Relay(
-            settings, console=console, project=project, permissions=permissions
+            settings, console=console, project=project, permissions=permissions,
+            skills_block=skills_block,
         )
         observer = RelayRichObserver(console)
         try:
@@ -141,7 +157,14 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
             raise typer.Exit(code=1)
         return
 
-    agent = Agent(settings, console=console, project=project, permissions=permissions)
+    from relaycli.mcp import extend_registry
+    from relaycli.tools import default_registry
+
+    agent = Agent(
+        settings, console=console, project=project, permissions=permissions,
+        skills_block=skills_block,
+        registry=extend_registry(default_registry(), console=console),
+    )
     reporter = RichReporter(console)
 
     try:
@@ -159,12 +182,52 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
 
 @app.command()
 def web(
-    port: int = typer.Option(8484, "--port", help="Port on 127.0.0.1 to serve."),
+    port: int = typer.Option(8484, "--port", help="Port to serve on."),
+    open_browser: bool = typer.Option(
+        False, "--open", help="Open the browser automatically."
+    ),
+    host: str = typer.Option(
+        "127.0.0.1", "--host",
+        help="Bind address. 0.0.0.0 exposes the agent — trusted networks only "
+             "(intended for Docker with a 127.0.0.1-mapped port).",
+    ),
+    allow_host: list[str] = typer.Option(
+        [], "--allow-host",
+        help="Extra Host/Origin hostname to accept (repeatable), e.g. a LAN name.",
+    ),
 ) -> None:
-    """Open the RelayCLI desktop UI in your browser (loopback only)."""
+    """Serve the RelayCLI desktop UI (loopback only by default)."""
     from relaycli.web import serve
 
-    serve(get_settings(), port)
+    serve(
+        get_settings(), port, open_browser=open_browser,
+        host=host, allow_hosts=set(allow_host),
+    )
+
+
+@app.command()
+def desktop(
+    port: int = typer.Option(8484, "--port", help="Port on 127.0.0.1 to serve."),
+) -> None:
+    """Open the RelayCLI desktop UI in your browser (alias of `web --open`)."""
+    from relaycli.web import serve
+
+    serve(get_settings(), port, open_browser=True)
+
+
+@app.command()
+def memory() -> None:
+    """Show the agent's long-term memory (global + this project)."""
+    from relaycli import memory as mem
+
+    for label, path in (
+        ("global", mem.GLOBAL_MEMORY),
+        ("project", mem.project_memory_path(Path(os.getcwd()))),
+    ):
+        text = mem.read_memory(path)
+        console.print(f"[bold]{label}[/bold] [dim]{escape(str(path))}[/dim]")
+        console.print(escape(text) if text else "[dim](empty)[/dim]")
+        console.print()
 
 
 @app.command()
@@ -173,6 +236,19 @@ def settings() -> None:
     from relaycli.config_menu import run_settings
 
     run_settings(console)
+
+
+@app.command()
+def doctor(
+    offline: bool = typer.Option(
+        False, "--offline", help="Skip checks that need the network."
+    ),
+) -> None:
+    """Check that this install is healthy and production-ready."""
+    from relaycli.doctor import render_checks, run_checks
+
+    checks = run_checks(get_settings(), Path(os.getcwd()), live=not offline)
+    raise typer.Exit(code=render_checks(console, checks))
 
 
 @app.command()

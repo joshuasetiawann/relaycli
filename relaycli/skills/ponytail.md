@@ -1,6 +1,7 @@
 ---
 name: ponytail
 description: Write the least code that correctly solves the task (after DietrichGebert/ponytail, MIT)
+triggers: refactor, cleanup, simplify, sederhanakan, rapikan, bersihkan
 ---
 Write the least code that correctly solves the task.
 

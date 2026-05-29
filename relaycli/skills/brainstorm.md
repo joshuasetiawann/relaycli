@@ -1,6 +1,7 @@
 ---
 name: brainstorm
 description: Understand intent and scope before building (after obra/superpowers)
+triggers: brainstorm, ide, konsep, rancang, rencanakan, architecture, arsitektur
 ---
 Understand what is actually wanted before writing code.
 

@@ -48,6 +48,9 @@ SLASH_COMMANDS: dict[str, tuple[str, str]] = {
     "skills": ("", "list available skills (● = active)"),
     "config": ("", "roles, per-role models & provider keys (persistent)"),
     "settings": ("", "general preferences (mode, theme, context)"),
+    "memory": ("", "show long-term memory (global + project)"),
+    "desktop": ("", "open the desktop web UI in your browser"),
+    "mcp": ("", "show MCP connectors and their tools"),
     "diff": ("", "show uncommitted changes (git diff)"),
     "clear": ("", "reset the conversation"),
     "help": ("", "show all commands and keys"),
@@ -152,16 +155,21 @@ class Repl:
         self.console = console or Console()
         self.project = ProjectContext(Path.cwd())
         self.permissions = PermissionManager(settings.permission_mode, console=self.console)
+        from relaycli.mcp import extend_registry
+        from relaycli.tools import default_registry
+
         self.agent = Agent(
             settings,
             console=self.console,
             project=self.project,
             permissions=self.permissions,
+            registry=extend_registry(default_registry(), console=self.console),
         )
         from relaycli.skills import discover_skills
 
         self.skills = discover_skills(self.project.root)
         self.active_skills: list[str] = []  # activation order = prompt order
+        self._desktop_url: str | None = None  # set once /desktop starts the server
 
     # -- entry -----------------------------------------------------------
     def run(self) -> None:
@@ -220,7 +228,7 @@ class Repl:
             key_bindings=kb,
             multiline=True,
             completer=SlashCompleter(
-                arg_providers={"skill": lambda: sorted(self.skills)}
+                arg_providers={"skill": lambda: sorted(self.skills) + ["auto"]}
             ),
             complete_while_typing=True,
             bottom_toolbar=self._toolbar,
@@ -361,11 +369,25 @@ class Repl:
                 "[dim]loading provider libraries — the first call can take a while…[/dim]"
             )
 
+    def _auto_skills_for(self, request: str) -> list[str]:
+        """Per-request auto-activated skill names (announced, never silent)."""
+        if not self.settings.skills_auto:
+            return []
+        from relaycli.skills import auto_match
+
+        names = auto_match(self.skills, request, active=tuple(self.active_skills))
+        for name in names:
+            self.console.print(f"[dim]✦ auto-skill: [cyan]{escape(name)}[/cyan][/dim]")
+        return names
+
     def _run_agent(self, request: str) -> None:
+        auto = self._auto_skills_for(request)
         if self.settings.relay_enabled:
-            self._run_relay(request)
+            self._run_relay(request, auto_skills=auto)
             return
         self._warm_note()
+        if auto:
+            self.agent.set_skills_block(self._skills_block(extra=auto))
         reporter = RichReporter(self.console)
         try:
             result = self.agent.run(request, reporter=reporter)
@@ -374,10 +396,12 @@ class Repl:
             return
         finally:
             reporter.close()  # an error/Ctrl-C must not leave the spinner live
+            if auto:  # auto picks last one request; manual toggles persist
+                self.agent.set_skills_block(self._skills_block())
         render_task_summary(self.console, result, reporter.tools_used)
         self._maybe_setup_hint(result)
 
-    def _run_relay(self, request: str) -> None:
+    def _run_relay(self, request: str, auto_skills: list[str] | None = None) -> None:
         from relaycli.relay import Relay
         from relaycli.render import RelayRichObserver, render_relay_summary
 
@@ -387,7 +411,8 @@ class Repl:
         # pipeline (the constructor is cheap; roles are built per run).
         relay = Relay(
             self.settings, console=self.console, project=self.project,
-            permissions=self.permissions, skills_block=self._skills_block(),
+            permissions=self.permissions,
+            skills_block=self._skills_block(extra=auto_skills or ()),
         )
         observer = RelayRichObserver(self.console)
         try:
@@ -443,6 +468,12 @@ class Repl:
         elif cmd == "settings":
             from relaycli.config_menu import run_settings
             run_settings(self.console)
+        elif cmd == "memory":
+            self._cmd_memory()
+        elif cmd == "desktop":
+            self._cmd_desktop()
+        elif cmd == "mcp":
+            self._cmd_mcp()
         elif cmd == "diff":
             self._cmd_diff()
         elif cmd == "clear":
@@ -556,14 +587,18 @@ class Repl:
                     f"  · enable more with /config[/dim]"
                 )
 
-    def _skills_block(self) -> str:
+    def _skills_block(self, extra: tuple[str, ...] | list[str] = ()) -> str:
         from relaycli.skills import skills_prompt_block
 
-        return skills_prompt_block([self.skills[n] for n in self.active_skills])
+        names = list(self.active_skills) + [n for n in extra if n not in self.active_skills]
+        return skills_prompt_block([self.skills[n] for n in names if n in self.skills])
 
     def _cmd_skill(self, name: str) -> None:
         if not name:
             self._cmd_skills()
+            return
+        if name.split()[0] == "auto":
+            self._cmd_skill_auto(name.split()[1:])
             return
         skill = self.skills.get(name)
         if skill is None:
@@ -580,6 +615,28 @@ class Repl:
         self.agent.set_skills_block(self._skills_block())
         self.console.print(f"skill {escape(name)} → {state}")
 
+    def _cmd_skill_auto(self, args: list[str]) -> None:
+        """`/skill auto [on|off]` — toggle per-request skill auto-activation."""
+        if not args:
+            state = "on" if self.settings.skills_auto else "off"
+            self.console.print(f"skill auto: [cyan]{state}[/cyan]")
+            return
+        if args[0] not in ("on", "off"):
+            self.console.print("[red]Usage:[/red] /skill auto \\[on|off]")
+            return
+        value = args[0] == "on"
+        self.settings.skills_auto = value
+        # Persist as a flat config.toml key (same path relay_enabled uses).
+        try:
+            from relaycli.appconfig import load_app_config, save_app_config
+
+            cfg = load_app_config()
+            cfg._raw["skills_auto"] = value
+            save_app_config(cfg)
+        except OSError:
+            pass  # session toggle still applies
+        self.console.print(f"skill auto → [cyan]{args[0]}[/cyan]")
+
     def _cmd_skills(self) -> None:
         from rich.table import Table
 
@@ -595,10 +652,86 @@ class Repl:
             dot = "[green]●[/green]" if name in self.active_skills else "[dim]○[/dim]"
             table.add_row(f"{dot} {escape(name)}", skill.source, escape(skill.description))
         self.console.print(table)
+        auto_state = "on" if self.settings.skills_auto else "off"
         self.console.print(
-            "[dim]/skill <name> toggles · active skills steer the agent (and the "
-            "relay coder) · drop your own .md in ~/.relaycli/skills/[/dim]"
+            f"[dim]/skill <name> toggles · auto-activation {auto_state} "
+            f"(/skill auto on|off) · active skills steer the agent (and the "
+            f"relay coder) · drop your own .md in ~/.relaycli/skills/[/dim]"
         )
+
+    def _cmd_mcp(self) -> None:
+        from relaycli.mcp import server_status
+
+        rows = server_status()
+        if not rows:
+            self.console.print(
+                "[dim]no MCP connectors configured — add one with "
+                "[cyan]relaycli mcp add <preset>[/cyan] (see relaycli mcp list).[/dim]"
+            )
+            return
+        from rich.table import Table
+
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("server", no_wrap=True)
+        table.add_column("state", no_wrap=True)
+        table.add_column("tools", no_wrap=True)
+        table.add_column("command")
+        for row in rows:
+            style = {"running": "green", "failed": "red"}.get(row["state"], "dim")
+            table.add_row(
+                escape(row["name"]),
+                f"[{style}]{row['state']}[/{style}]",
+                str(row["tools"]),
+                f"[dim]{escape(row['command'])}[/dim]",
+            )
+        self.console.print(table)
+        self.console.print(
+            "[dim]tools appear to the agent as mcp_<server>_<tool> · every call "
+            "asks first (like run_command) · manage with relaycli mcp[/dim]"
+        )
+
+    def _cmd_desktop(self) -> None:
+        """Start (once) the desktop web UI on a daemon thread and open it."""
+        from relaycli.web import _open_browser, serve_background
+
+        if self._desktop_url is None:
+            try:
+                _server, self._desktop_url = serve_background(self.settings)
+            except OSError as exc:
+                self.console.print(f"[red]desktop failed to start:[/red] {exc}")
+                return
+        _open_browser(self._desktop_url)
+        self.console.print(
+            f"desktop → [cyan]{self._desktop_url}[/cyan]  "
+            f"[dim](loopback only · shares this session's settings · "
+            f"stays up until you quit)[/dim]"
+        )
+
+    def _cmd_memory(self) -> None:
+        from relaycli import memory
+
+        shown = False
+        for label, path in (
+            ("global", memory.GLOBAL_MEMORY),
+            ("project", memory.project_memory_path(self.project.root)),
+        ):
+            text = memory.read_memory(path)
+            if not text:
+                continue
+            shown = True
+            self.console.print(f"[bold]{label}[/bold] [dim]{escape(str(path))}[/dim]")
+            self.console.print(escape(text))
+            self.console.print()
+        if not shown:
+            self.console.print(
+                "[dim]memory is empty — the agent saves facts with the remember "
+                "tool, or edit the files yourself:[/dim]"
+            )
+            self.console.print(f"[dim]  global   {escape(str(memory.GLOBAL_MEMORY))}[/dim]")
+            self.console.print(
+                f"[dim]  project  "
+                f"{escape(str(memory.project_memory_path(self.project.root)))}[/dim]"
+            )
 
     def _cmd_diff(self) -> None:
         if not (self.project.root / ".git").exists():

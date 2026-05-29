@@ -1,6 +1,7 @@
 ---
 name: tdd
 description: Red-green loop — failing test first, minimal code to pass (after obra/superpowers)
+triggers: test, tests, tdd, pytest, unittest, coverage, tes, testing
 ---
 Practice strict test-driven development.
 

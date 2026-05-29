@@ -158,9 +158,15 @@ class WebSession:
             # panel: each role's enabled state, assignment, and resolved model.
             "roster": self._roster(),
             "skills": sorted(discover_skills(self.project.root)),
+            "mcp": self._mcp_status(),
             "preflight": preflight_settings(s),
             "busy": self.busy,
         }
+
+    def _mcp_status(self) -> list[dict]:
+        from relaycli.mcp import server_status
+
+        return server_status()
 
     def _enabled_specialists(self) -> list[str]:
         from relaycli.roster import enabled_specialists
@@ -431,7 +437,11 @@ class WebSession:
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
-def make_handler(session: WebSession):
+def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
+    # Docker/LAN deployments may allow extra hostnames explicitly
+    # (`relaycli web --allow-host`); loopback is always allowed.
+    allowed = _LOOPBACK_HOSTS | {h.lower() for h in (allowed_hosts or set())}
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args) -> None:  # quiet server log
             pass
@@ -440,17 +450,17 @@ def make_handler(session: WebSession):
         # against us: a malicious site can DNS-rebind its domain to
         # 127.0.0.1 (Host: evil.com reaches us), and a text/plain form POST
         # crosses origins without a CORS preflight. Reject any Host that is
-        # not a loopback literal, and any state-changing request whose
-        # Origin (when present) is not loopback.
+        # not a loopback literal (or explicitly allowed), and any
+        # state-changing request whose Origin (when present) is not allowed.
         def _host_ok(self) -> bool:
             host = urlparse(f"//{self.headers.get('Host') or ''}").hostname
-            return host in _LOOPBACK_HOSTS
+            return host in allowed
 
         def _origin_ok(self) -> bool:
             origin = self.headers.get("Origin")
             if not origin:
                 return True  # non-browser client (curl); Host is checked
-            return urlparse(origin).hostname in _LOOPBACK_HOSTS
+            return urlparse(origin).hostname in allowed
 
         def _json(self, obj, status: int = 200) -> None:
             body = json.dumps(obj).encode("utf-8")
@@ -532,18 +542,64 @@ def make_handler(session: WebSession):
     return Handler
 
 
-def serve(settings: Settings, port: int = 8484) -> None:
-    """Serve the desktop UI on loopback until Ctrl-C."""
+def serve(
+    settings: Settings,
+    port: int = 8484,
+    *,
+    open_browser: bool = False,
+    host: str = "127.0.0.1",
+    allow_hosts: set[str] | None = None,
+) -> None:
+    """Serve the desktop UI until Ctrl-C (loopback by default)."""
     session = WebSession(settings)
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(session))
+    server = ThreadingHTTPServer((host, port), make_handler(session, allow_hosts))
     console = Console()
+    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
+    scope = "loopback only" if host in _LOOPBACK_HOSTS else f"bound to {host}"
     console.print(
-        f"[bold]RelayCLI desktop[/bold] → [cyan]http://127.0.0.1:{port}[/cyan]  "
-        f"[dim](loopback only · Ctrl-C to stop)[/dim]"
+        f"[bold]RelayCLI desktop[/bold] → [cyan]{url}[/cyan]  "
+        f"[dim]({scope} · Ctrl-C to stop)[/dim]"
     )
+    if host not in _LOOPBACK_HOSTS:
+        console.print(
+            "[bold yellow]⚠ non-loopback bind:[/bold yellow] anyone who can reach "
+            "this port controls an agent with YOUR permissions — use only on "
+            "trusted networks (or keep the container port mapped to 127.0.0.1)."
+        )
+    if open_browser:
+        _open_browser(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         console.print("\n[dim]bye.[/dim]")
     finally:
         server.server_close()
+
+
+def _open_browser(url: str) -> None:
+    """Open ``url`` in the default browser without ever crashing the caller."""
+    import threading
+    import webbrowser
+
+    # webbrowser.open can block on some launchers; a daemon thread keeps the
+    # server (or REPL) responsive either way.
+    threading.Thread(target=lambda: webbrowser.open(url), daemon=True).start()
+
+
+def serve_background(settings: Settings, port: int = 8484) -> tuple[ThreadingHTTPServer, str]:
+    """Start the desktop UI on a daemon thread; returns (server, url).
+
+    Used by the REPL's /desktop so the terminal session stays usable while
+    the browser UI runs. Binding failures (port busy) fall back to an
+    ephemeral port rather than raising.
+    """
+    import threading
+
+    session = WebSession(settings)
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(session))
+    except OSError:
+        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, url

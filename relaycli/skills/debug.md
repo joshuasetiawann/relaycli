@@ -1,6 +1,7 @@
 ---
 name: debug
 description: Root-cause-first debugging — no fixes before understanding (after obra/superpowers)
+triggers: bug, bugs, error, errors, crash, traceback, exception, broken, fails, failing, fix, benerin, perbaiki, kenapa, gagal, rusak
 ---
 No fixes without root cause investigation first.
 

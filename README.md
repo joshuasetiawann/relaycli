@@ -20,6 +20,24 @@ interactive terminal session.
   edit and every command.
 - **Relay pipeline** (optional multi-agent mode): Planner → Coder → Reviewer
   with per-role model routing and a bounded review/revise loop.
+- **Skills that activate themselves**: built-in working styles (tdd, debug,
+  verify, frontend-taste, …) switch on automatically when a request matches
+  their triggers — always announced, never silent (`/skill auto off` to opt
+  out).
+- **Long-term memory**: the agent saves durable facts with the `remember`
+  tool to `~/.relaycli/memory.md` (global) and `.relaycli/memory.md`
+  (per-project) and reads them at the start of every session. `/memory` shows
+  them; they're plain markdown you can edit.
+- **MCP connectors**: attach external tool servers (GitHub, Postgres, fetch,
+  filesystem, a real browser, or anything speaking MCP over stdio) with
+  `relaycli mcp add <preset>` — their tools appear to the agent alongside the
+  native ones, every call permission-gated like a command.
+- **Desktop web UI**: `relaycli desktop` (or `/desktop` from the REPL) opens
+  a loopback-only browser UI with the live agent pipeline, per-role models,
+  and API-key management.
+- **`relaycli doctor`**: one command that verifies keys (live), config file
+  permissions, model routing, connector runtimes, and the classic
+  `.env`-vs-config key-drift trap.
 - **Safety rails**: paths confined to the project root, `.gitignore`
   respected, secret files (`.env`, credentials) never auto-read, provider keys
   scrubbed from spawned command environments. Details in
@@ -102,7 +120,11 @@ wasn't, a setup panel lists the exact fixes (it doesn't block the session).
 | `/relay [on\|off]` | toggle the Planner → Coder → Reviewer pipeline |
 | `/agents [r on\|off]` | show relay agents; toggle the optional explorer/tester |
 | `/skill [name]` | toggle a skill for this session (tdd, debug, ponytail, …) |
+| `/skill auto [on\|off]` | toggle per-request skill auto-activation |
 | `/skills` | list available skills and their sources |
+| `/memory` | show long-term memory (global + project) |
+| `/mcp` | show MCP connectors and their tools |
+| `/desktop` | open the desktop web UI in your browser |
 | `/config` | roles, per-role models & provider keys (persistent config) |
 | `/settings` | general preferences: mode, theme, context limit |
 | `/diff` | show working-tree changes (`git diff`) |
@@ -121,12 +143,49 @@ belong on the `relaycli` command line.
 
 ### Skills
 
-A skill is a small markdown file that steers how the agent works — toggled
-per session with `/skill <name>`, never auto-activated. Built-ins:
+A skill is a small markdown file that steers how the agent works. Built-ins:
 `ponytail` (least-code discipline), `tdd`, `debug`, `brainstorm`, `verify`,
-`frontend-taste`. Add your own to `~/.relaycli/skills/` (or a project's
-`.relaycli/skills/`) as `name.md` with a `---` header carrying `name:` and
-`description:`. Active skills also steer the relay coder.
+`frontend-taste`. Toggle one per session with `/skill <name>` — or let them
+activate themselves: built-in and user skills carry `triggers:` keywords
+(English + Indonesian), and when a request matches, the best one or two
+switch on for that request with a visible `✦ auto-skill:` line. Pure keyword
+matching — no extra model call. `/skill auto off` disables it.
+
+Add your own to `~/.relaycli/skills/` (or a project's `.relaycli/skills/`)
+as `name.md` with a `---` header carrying `name:`, `description:` and
+optional `triggers:`. Active skills also steer the relay coder.
+**Project** skills are never auto-activated — a cloned repo can offer a
+skill but cannot silently steer the agent.
+
+### Memory
+
+The agent keeps durable notes across sessions in two plain markdown files:
+`~/.relaycli/memory.md` (global: your preferences, environment quirks) and
+`<project>/.relaycli/memory.md` (project conventions, gotchas). It saves
+facts itself with the `remember` tool — gated like an edit, so `suggest`
+mode asks first — and reads both files into its context every session
+(size-capped). `/memory` or `relaycli memory` shows them; edit or delete
+the files freely.
+
+### MCP connectors
+
+RelayCLI speaks the Model Context Protocol (stdio). Connect external tool
+servers and the agent can use their tools like native ones:
+
+```bash
+relaycli mcp list                 # configured servers + available presets
+relaycli mcp add github           # preset (uses GITHUB_TOKEN via env:)
+relaycli mcp add fetch            # web pages as markdown (needs uvx)
+relaycli mcp add mydb --command "npx -y @modelcontextprotocol/server-postgres env:DATABASE_URL"
+relaycli mcp test github          # start it once and list its tools
+relaycli mcp remove github
+```
+
+Servers live in `~/.relaycli/config.toml` under `[mcp.<name>]`; `env:VAR`
+values resolve at start time so secrets stay out of the file. Tools appear
+as `mcp_<server>_<tool>` and **every call asks for approval** exactly like
+`run_command` (full-auto skips prompts, as always). `/mcp` shows status
+inside the REPL.
 
 ### Agents
 
@@ -172,6 +231,10 @@ relaycli --mode auto-edit    # override the permission mode at launch
 relaycli -p "..." -y         # auto-approve prompts in non-interactive runs
 relaycli --relay             # run through the relay pipeline (also with -p)
 relaycli config              # active config, relay routing, detected providers
+relaycli doctor              # health checks (keys live-verified, perms, routing)
+relaycli memory              # show long-term memory
+relaycli mcp list            # MCP connectors and presets
+relaycli desktop             # desktop web UI in the browser (loopback only)
 relaycli version             # print the version
 ```
 

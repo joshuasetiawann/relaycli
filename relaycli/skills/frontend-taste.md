@@ -1,6 +1,7 @@
 ---
 name: frontend-taste
 description: Anti-generic UI rules — spacing, hierarchy, restraint (after joshuasetiawann/taste-skill)
+triggers: ui, css, design, desain, tampilan, frontend, website, landing, layout, komponen, animasi, animation, styling, halaman
 ---
 Build interfaces that don't look like a template.
 

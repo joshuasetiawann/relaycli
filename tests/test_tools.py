@@ -195,7 +195,8 @@ def test_default_registry_has_all_tools():
     reg = default_registry()
     assert set(reg.names()) == {"list_dir", "find_files", "read_file", "search",
                                 "write_file", "edit_file", "run_command",
-                                "run_background", "check_process", "stop_process"}
+                                "run_background", "check_process", "stop_process",
+                                "remember"}
     # the throwaway get_time tool is gone
     assert "get_time" not in reg.names()
 

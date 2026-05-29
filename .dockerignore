@@ -1,0 +1,13 @@
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+tests
+docs
+.env
+.env.*
+*.kate-swp
+.github
+docker-compose.yml
+Dockerfile

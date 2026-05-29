@@ -148,6 +148,7 @@ def default_registry() -> ToolRegistry:
         find_files as _find_files,
         list_dir as _list_dir,
         read_file as _read_file,
+        remember as _remember,
         run_command as _run_command,
         search as _search,
         write_file as _write_file,
@@ -155,7 +156,7 @@ def default_registry() -> ToolRegistry:
 
     reg = ToolRegistry()
     for module in (_list_dir, _find_files, _read_file, _search, _write_file,
-                   _edit_file, _run_command, _background):
+                   _edit_file, _run_command, _background, _remember):
         module.register(reg)
     return reg
 
