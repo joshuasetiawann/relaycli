@@ -445,3 +445,131 @@ def test_allow_hosts_extends_guard(monkeypatch, tmp_path):
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ── fixes: TOCTOU busy-check, MCP + auto-skills wiring on the web surface ──
+def test_send_rejects_while_busy():
+    session = WebSession(_settings(), llm=FakeLLM([_resp("ok")]))
+    assert session.send("first") is True
+    assert session.send("second") is False  # rejected while the first run is live
+    session._thread.join(timeout=30)
+
+
+def test_send_concurrent_calls_start_at_most_one_run():
+    """Two near-simultaneous POST /api/send (double-click, two tabs) must not
+    both start a run — the busy-check-and-start must be atomic."""
+    import time as _time
+
+    class SlowLLM(FakeLLM):
+        def complete(self, *a, **kw):
+            _time.sleep(0.2)
+            return super().complete(*a, **kw)
+
+    session = WebSession(_settings(), llm=SlowLLM([_resp("ok"), _resp("ok")]))
+    results = []
+    barrier = threading.Barrier(2)
+
+    def call():
+        barrier.wait(timeout=5)
+        results.append(session.send("go"))
+
+    threads = [threading.Thread(target=call) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+    assert sorted(results) == [False, True]
+    session._thread.join(timeout=30)
+    user_events = [e for e in session.events_since(0) if e["kind"] == "user"]
+    assert len(user_events) == 1  # only the winning call appended a request
+
+
+def test_web_run_wires_mcp_tools(monkeypatch, tmp_path):
+    import sys as _sys
+
+    import relaycli.agent as agent_mod
+    import relaycli.mcp as mcp_mod
+
+    fake_server = str(
+        __import__("pathlib").Path(__file__).parent / "fake_mcp_server.py"
+    )
+    monkeypatch.setattr(
+        mcp_mod, "enabled_servers",
+        lambda: {"fake": mcp_mod.MCPServerConfig(
+            name="fake", command=[_sys.executable, fake_server]
+        )},
+    )
+    captured = {}
+    orig_init = agent_mod.Agent.__init__
+
+    def capture_init(self, *a, **kw):
+        captured["registry"] = kw.get("registry")
+        return orig_init(self, *a, **kw)
+
+    monkeypatch.setattr(agent_mod.Agent, "__init__", capture_init)
+    try:
+        session = WebSession(_settings(), llm=FakeLLM([_resp("ok")]))
+        session.send("halo")
+        session._thread.join(timeout=30)
+        assert captured["registry"] is not None
+        assert "mcp_fake_echo" in captured["registry"].names()
+    finally:
+        mcp_mod.shutdown_all()
+
+
+def test_web_run_applies_auto_skills(monkeypatch):
+    import relaycli.skills as skills_mod
+
+    monkeypatch.setattr(skills_mod, "auto_match", lambda skills, text, **kw: ["debug"])
+    session = WebSession(_settings(), llm=FakeLLM([_resp("ok")]))
+    session.send("fix this crash")
+    session._thread.join(timeout=30)
+    notes = [e["text"] for e in session.events_since(0) if e["kind"] == "note"]
+    assert any("auto-skill: debug" in n for n in notes)
+
+
+def test_web_run_skills_auto_off_skips_matching(monkeypatch):
+    import relaycli.skills as skills_mod
+
+    called = []
+    monkeypatch.setattr(
+        skills_mod, "auto_match",
+        lambda *a, **kw: called.append(1) or ["debug"],
+    )
+    session = WebSession(_settings(skills_auto=False), llm=FakeLLM([_resp("ok")]))
+    session.send("fix this crash")
+    session._thread.join(timeout=30)
+    assert not called
+
+
+def test_serve_prints_actual_bound_port_not_requested(monkeypatch, tmp_path, capsys):
+    """`relaycli web --port 0` (pick any free port) must report the real
+    bound port, not a literal 'http://127.0.0.1:0'."""
+    import threading as _threading
+
+    from rich.console import Console as _Console
+    import relaycli.web as web_mod
+
+    monkeypatch.chdir(tmp_path)
+    printed = {}
+    orig_console = web_mod.Console
+
+    class CapturingConsole(_Console):
+        def print(self, *args, **kwargs):
+            printed["text"] = printed.get("text", "") + " ".join(str(a) for a in args)
+            return super().print(*args, **kwargs)
+
+    monkeypatch.setattr(web_mod, "Console", CapturingConsole)
+    from relaycli.config import Settings
+
+    t = _threading.Thread(
+        target=web_mod.serve, args=(Settings(),), kwargs={"port": 0}, daemon=True
+    )
+    t.start()
+    import time as _time
+    deadline = _time.time() + 5
+    while "text" not in printed and _time.time() < deadline:
+        _time.sleep(0.05)
+    assert "text" in printed, "serve() never printed its startup line"
+    assert ":0" not in printed["text"].split("→")[-1].split()[0]
+    assert "http://127.0.0.1:" in printed["text"]

@@ -89,3 +89,15 @@ def test_render_checks_exit_codes():
     assert render_checks(console, [Check("a", doctor.FAIL, "boom")]) == 1
     out = console.file.getvalue()
     assert "failed" in out and "all good" in out
+
+
+def test_openrouter_key_probe_non_json_response_does_not_crash():
+    """A 200 with a non-JSON/undecodable body must SKIP, not raise."""
+    s = Settings(OPENROUTER_API_KEY="sk-or-live")
+
+    def bad_prober(key):
+        import json
+        json.loads("not json")  # raises JSONDecodeError (a ValueError)
+
+    check = check_openrouter_key(s, prober=bad_prober)
+    assert check.status == doctor.SKIP

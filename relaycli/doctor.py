@@ -72,6 +72,12 @@ def check_openrouter_key(
         status, detail = prober(key)
     except OSError as exc:
         return Check("openrouter key", SKIP, f"offline? ({exc})")
+    except ValueError as exc:
+        # A 200 whose body isn't valid JSON/UTF-8 (captive portal, proxy
+        # interception, CDN error page) raises JSONDecodeError or
+        # UnicodeDecodeError — both ValueError subclasses. A health check
+        # must never crash on a malformed upstream response.
+        return Check("openrouter key", SKIP, f"unreadable response ({exc})")
     if status == 200:
         return Check("openrouter key", OK, f"live-verified ({detail})" if detail else "live-verified")
     if status == 401:

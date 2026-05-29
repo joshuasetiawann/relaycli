@@ -57,16 +57,18 @@ Running your own Ollama instead? `export OLLAMA_BASE_URL=http://host.docker.inte
 
 ### Postgres
 
-`DATABASE_URL` is pre-wired to the compose service
-(`postgresql://relay:relay@postgres:5432/relay`; override the password with
-`POSTGRES_PASSWORD`). Give the agent SQL access through the MCP connector:
+`DATABASE_URL` has no baked-in default — set it once the `postgres` profile
+is up (its hostname only resolves inside the compose network), so the
+container never silently carries a URL pointing nowhere:
 
 ```bash
+docker compose --profile postgres up -d
+export DATABASE_URL=postgresql://relay:relay@postgres:5432/relay   # or your own POSTGRES_PASSWORD
 docker compose run --rm relaycli mcp add postgres
 docker compose run --rm relaycli mcp test postgres
 ```
 
-Using your own database? Just export your own `DATABASE_URL`.
+Using your own database? Just export its `DATABASE_URL` instead.
 
 ### n8n
 

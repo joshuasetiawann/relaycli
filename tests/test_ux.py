@@ -94,6 +94,22 @@ def test_slash_help_lists_commands():
     assert "/model" in text and "/mode" in text and "/diff" in text
 
 
+def test_slash_help_matches_slash_commands_registry():
+    """render_help() must document every entry in SLASH_COMMANDS — the two
+    are meant to stay in lockstep (see the comment above SLASH_COMMANDS).
+    'quit' is a documented alias of /exit (its own SLASH_COMMANDS entry says
+    so) rather than a separate row, so it's exempt."""
+    from relaycli.repl import SLASH_COMMANDS
+
+    repl, console = _repl()
+    repl._handle_slash("/help")
+    text = _out(console)
+    for cmd in SLASH_COMMANDS:
+        if cmd == "quit":
+            continue
+        assert f"/{cmd}" in text, f"/{cmd} is missing from /help"
+
+
 def test_slash_diff_no_crash():
     # In this repo .git exists; in a fresh dir it falls back gracefully.
     repl, console = _repl()
@@ -697,8 +713,23 @@ def test_toolbar_shows_live_session_status():
     repl, _ = _hermetic_repl(model="gpt-4o-mini")
     assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help "
     repl.settings.relay_enabled = True
-    repl.settings.permission_mode = PermissionMode.full_auto
+    repl._cmd_mode("full-auto")  # the real channel: updates settings + permissions together
     assert repl._toolbar() == " gpt-4o-mini · full-auto · relay on · /help "
+
+
+def test_toolbar_reflects_enforced_mode_not_a_bare_settings_mutation():
+    """The toolbar (and /mode with no argument) must show what THIS session's
+    PermissionManager actually enforces, not whatever the shared Settings
+    object last held — /desktop mutates settings.permission_mode from a
+    different session, and that must never desync the REPL's own display
+    from what it's actually enforcing (see _toolbar's docstring)."""
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help "
+    repl.settings.permission_mode = PermissionMode.full_auto  # e.g. the web UI's toggle
+    assert repl.permissions.mode is PermissionMode.suggest    # unaffected: still enforced
+    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help "
+    repl._handle_slash("/mode")
+    assert "suggest" in _out(console)
 
 
 # --- instant startup (lazy LiteLLM) ----------------------------------------
@@ -749,3 +780,28 @@ def test_key_status_bare_claude_model():
     assert key_status(_hermetic(model="claude-3-5-sonnet-latest")) == "missing"
     assert key_status(_hermetic(model="claude-3-5-sonnet-latest",
                                 ANTHROPIC_API_KEY="sk-ant")) == "detected"
+
+
+def test_repl_startup_announces_mcp_connection_before_blocking(monkeypatch):
+    """A configured MCP server can block the constructor for up to ~2
+    minutes (cold npx download, hung handshake). The user must see why,
+    not stare at a blank terminal."""
+    import relaycli.mcp as mcp_mod
+
+    monkeypatch.setattr(
+        mcp_mod, "enabled_servers",
+        lambda: {"github": object(), "fetch": object()},
+    )
+    monkeypatch.setattr(mcp_mod, "extend_registry", lambda reg, **kw: reg)
+    repl, console = _repl()
+    text = _out(console)
+    assert "connecting to 2 MCP connector" in text
+    assert "github" in text and "fetch" in text
+
+
+def test_repl_startup_silent_when_no_mcp_servers(monkeypatch):
+    import relaycli.mcp as mcp_mod
+
+    monkeypatch.setattr(mcp_mod, "enabled_servers", lambda: {})
+    repl, console = _repl()
+    assert "MCP connector" not in _out(console)

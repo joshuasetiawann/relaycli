@@ -172,3 +172,91 @@ def test_save_and_remove_server_roundtrip(tmp_path, monkeypatch):
     assert mcp.remove_server("gh") is True
     assert "gh" not in configured_servers(load_app_config()._raw)
     assert mcp.remove_server("gh") is False
+
+
+# ── fixes: escaping, races, response leaks ──────────────────────────────────
+def test_mcp_confirm_prompt_escapes_adversarial_tool_name(monkeypatch, tmp_path):
+    """A malicious tool name/args must not inject Rich markup into the
+    confirmation prompt (mcp.py MCPTool.run)."""
+    evil = MCPServerConfig(name="fake", command=[sys.executable, FAKE_SERVER])
+    monkeypatch.setattr(mcp, "enabled_servers", lambda: {"fake": evil})
+    reg = extend_registry(default_registry())
+    try:
+        tool = reg.get("mcp_fake_echo")
+        tool.remote_name = "echo[/][bold red]INJECTED[/bold red]"
+        seen = {}
+        ctx = make_context(
+            tmp_path, "suggest",
+            prompter=lambda msg: seen.setdefault("prompt", msg) or False,
+        )
+        reg.run("mcp_fake_echo", {"text": "hi"}, ctx)
+        assert "[/]" not in seen["prompt"] or "\\[/]" in seen["prompt"]
+        assert "INJECTED" in seen["prompt"]  # text survives, just de-fanged
+    finally:
+        mcp.shutdown_all()
+
+
+def test_extend_registry_error_print_escapes_stderr(monkeypatch):
+    """A broken server's stderr must not be parsed as Rich markup when
+    extend_registry reports the failure."""
+    import io as _io
+    from rich.console import Console
+
+    broken = MCPServerConfig(
+        name="x[/]evil", command=[sys.executable, "-c", "import sys; sys.exit(3)"]
+    )
+    monkeypatch.setattr(mcp, "enabled_servers", lambda: {"x": broken})
+    console = Console(file=_io.StringIO(), force_terminal=False, width=200)
+    reg = extend_registry(default_registry(), console=console)  # must not raise
+    assert not [n for n in reg.names() if n.startswith("mcp_")]
+
+
+def test_get_client_serializes_concurrent_starts(monkeypatch):
+    """Two threads racing get_client() for the same server must produce
+    exactly one process, not two (and no leaked orphan)."""
+    import threading as _th
+
+    config = fake_config("race")
+    results = []
+
+    def worker():
+        results.append(mcp.get_client(config))
+
+    try:
+        threads = [_th.Thread(target=worker) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=10)
+        assert len(results) == 5
+        assert len({id(c) for c in results}) == 1  # same client object
+        assert results[0].alive
+    finally:
+        mcp.shutdown_all()
+
+
+def test_get_client_does_not_cache_failed_start():
+    """A server whose handshake fails must not be cached as 'alive' —
+    the next call should retry cleanly instead of returning a wedged client."""
+    bad = MCPServerConfig(name="badhandshake", command=[
+        sys.executable, "-c",
+        "import sys, time; sys.stderr.write('boom\\n'); time.sleep(30)",
+    ])
+    with pytest.raises(MCPError):
+        mcp.get_client(bad)
+    assert "badhandshake" not in mcp._clients
+    with pytest.raises(MCPError):
+        mcp.get_client(bad)  # retries cleanly, doesn't hang forever
+    mcp.shutdown_all()
+
+
+def test_rpc_timeout_does_not_leak_late_response(client):
+    """A response that arrives after its RPC timed out must be dropped by
+    _read_stdout, not accumulate forever in _responses."""
+    with pytest.raises(MCPError, match="timed out"):
+        client.call_tool("slow", {}, timeout=0.3)
+    assert len(client._pending) == 0
+    # the real reply for the abandoned call arrives ~30s later in the fake
+    # server; we don't wait for it here, but a fresh in-time call must still
+    # work correctly on the same shared client/connection.
+    assert client.call_tool("echo", {"text": "still alive"}) == "echo: still alive"

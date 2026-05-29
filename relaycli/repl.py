@@ -155,9 +155,20 @@ class Repl:
         self.console = console or Console()
         self.project = ProjectContext(Path.cwd())
         self.permissions = PermissionManager(settings.permission_mode, console=self.console)
-        from relaycli.mcp import extend_registry
+        from relaycli.mcp import enabled_servers, extend_registry
         from relaycli.tools import default_registry
 
+        # Connecting to an MCP server can block for up to INIT_TIMEOUT (60s)
+        # per server — e.g. an npx cold download or a hung process — and
+        # this all runs before the welcome banner. Say so, or a slow/broken
+        # connector reads as RelayCLI hanging on startup with no explanation.
+        servers = enabled_servers()
+        if servers:
+            self.console.print(
+                f"[dim]connecting to {len(servers)} MCP connector"
+                f"{'s' if len(servers) != 1 else ''} "
+                f"({', '.join(servers)})…[/dim]"
+            )
         self.agent = Agent(
             settings,
             console=self.console,
@@ -251,12 +262,16 @@ class Repl:
         """Live status line at the bottom of the terminal.
 
         Rendered by prompt_toolkit per keystroke, so /model, /mode and
-        /relay changes show up on the very next prompt.
+        /relay changes show up on the very next prompt. Mode is read from
+        ``self.permissions`` (what this REPL's agent actually enforces), not
+        ``self.settings`` — if /desktop is open, the web UI's mode toggle
+        mutates the shared Settings independently, and the toolbar must keep
+        showing what THIS session enforces, not what a browser tab last set.
         """
         relay = "relay on" if self.settings.relay_enabled else "relay off"
         parts = (
             short_model_name(self.settings.model),
-            str(self.settings.permission_mode),
+            str(self.permissions.mode),
             relay,
             "/help",
         )
@@ -493,7 +508,7 @@ class Repl:
 
     def _cmd_mode(self, value: str) -> None:
         if not value:
-            self.console.print(f"mode: [yellow]{self.settings.permission_mode}[/yellow]")
+            self.console.print(f"mode: [yellow]{self.permissions.mode}[/yellow]")
             return
         try:
             mode = PermissionMode(value)

@@ -366,32 +366,40 @@ class WebSession:
 
     def reset(self) -> bool:
         """Clear the event log for a new chat (refused while a run is live)."""
-        if self.busy:
-            return False
         with self._lock:
+            if self.busy:
+                return False
             self._events.clear()
         return True
 
     # -- running -----------------------------------------------------------
     def send(self, text: str, mode: str | None = None) -> bool:
-        """Start one run; False when a run is already in flight."""
-        if self.busy:
-            return False
-        if mode:
-            try:
-                self.settings.permission_mode = PermissionMode(mode)
-            except ValueError:
-                pass
-        self._stop.clear()
-        self.add("user", text=text)
-        self._thread = threading.Thread(target=self._run, args=(text,), daemon=True)
-        self._thread.start()
+        """Start one run; False when a run is already in flight.
+
+        The busy-check and thread creation happen under ``self._lock`` so two
+        near-simultaneous requests (double-click, two tabs) can't both pass
+        the check and start two concurrent runs.
+        """
+        with self._lock:
+            if self.busy:
+                return False
+            if mode:
+                try:
+                    self.settings.permission_mode = PermissionMode(mode)
+                except ValueError:
+                    pass
+            self._stop.clear()
+            self._events.append({"n": len(self._events), "kind": "user", "text": text})
+            self._thread = threading.Thread(target=self._run, args=(text,), daemon=True)
+            self._thread.start()
         return True
 
     def _run(self, text: str) -> None:
         from relaycli.agent import Agent
+        from relaycli.mcp import extend_registry
         from relaycli.permissions import PermissionManager
         from relaycli.relay import Relay
+        from relaycli.tools import default_registry
 
         console = Console(file=io.StringIO(), force_terminal=False, width=100)
         # A web run cannot answer an interactive prompt: everything that
@@ -405,10 +413,20 @@ class WebSession:
                 "suggest mode declines every edit/command on the web — "
                 "switch the mode toggle to auto-edit or full-auto"
             ))
+        skills_block = ""
+        if self.settings.skills_auto:
+            from relaycli.skills import auto_match, discover_skills, skills_prompt_block
+
+            skills = discover_skills(self.project.root)
+            names = auto_match(skills, text)
+            if names:
+                self.add("note", text="auto-skill: " + ", ".join(names))
+            skills_block = skills_prompt_block([skills[n] for n in names])
         try:
             if self.settings.relay_enabled:
                 relay = Relay(self.settings, console=console, project=self.project,
                               permissions=permissions, should_stop=self._stop.is_set,
+                              skills_block=skills_block,
                               **({"llm": self._llm} if self._llm else {}))
                 result = relay.run(text, observer=WebObserver(self))
                 self.add("summary", stopped=result.stopped_reason,
@@ -419,6 +437,8 @@ class WebSession:
             else:
                 agent = Agent(self.settings, console=console, project=self.project,
                               permissions=permissions, should_stop=self._stop.is_set,
+                              registry=extend_registry(default_registry(), console=console),
+                              skills_block=skills_block,
                               **({"llm": self._llm} if self._llm else {}))
                 reporter = WebReporter(self, "agent")
                 try:
@@ -554,7 +574,11 @@ def serve(
     session = WebSession(settings)
     server = ThreadingHTTPServer((host, port), make_handler(session, allow_hosts))
     console = Console()
-    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}"
+    # Read back the actual bound port, not the requested one — `--port 0`
+    # (a standard "pick any free port" convention) would otherwise print a
+    # useless "http://127.0.0.1:0".
+    bound_port = server.server_address[1]
+    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{bound_port}"
     scope = "loopback only" if host in _LOOPBACK_HOSTS else f"bound to {host}"
     console.print(
         f"[bold]RelayCLI desktop[/bold] → [cyan]{url}[/cyan]  "

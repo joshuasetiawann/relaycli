@@ -179,46 +179,83 @@
     align-items: center; justify-content: center; }
   .composer .send:disabled { opacity: .4; cursor: default; }
 
-  /* center graph */
-  .canvas { flex: 1 1 auto; position: relative; overflow: hidden; display: flex; align-items: center;
-    justify-content: center; background-color: var(--panel);
+  /* ── center: the orchestration rail ──
+     A vertical rail with one station per participant. The rail itself tells
+     the story: dashes flow through the segment feeding the active agent,
+     finished segments set solid green, specialists branch onto a sub-lane. */
+  .canvas { flex: 1 1 auto; position: relative; overflow: hidden; background-color: var(--panel);
     background-image: radial-gradient(rgba(255,255,255,.045) 1px, transparent 1.4px); background-size: 24px 24px; }
-  .stage { position: relative; transform-origin: center; }
-  .gnode { position: absolute; width: 186px; padding: 11px 13px; background: var(--raise);
-    border: 1px solid var(--border); border-radius: 13px; z-index: 2;
-    transition: border-color .3s, box-shadow .3s; }
-  .gnode .ghead { display: flex; align-items: center; gap: 10px; }
-  .gnode .gi { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center;
-    justify-content: center; background: #1A1B21; color: var(--t3); flex: 0 0 auto; font-family: var(--mono); font-size: 14px; }
-  .gnode .gn { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--t1); }
-  .gnode .gs { font-size: 10.5px; color: var(--t3); margin-top: 2px; }
-  .gnode .gdot { margin-left: auto; position: relative; width: 9px; height: 9px; flex: 0 0 auto; }
-  .gnode .gdot i { position: absolute; inset: 0; border-radius: 50%; background: var(--t5); }
-  .gnode .gfoot { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border2);
-    display: flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 11px;
-    color: var(--t2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .gnode.orch { border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-    box-shadow: 0 0 24px -10px color-mix(in srgb, var(--accent) 60%, transparent); }
-  .gnode.orch .gi { background: color-mix(in srgb, var(--accent) 13%, transparent); color: var(--accent); }
-  .gnode.orch .gdot i { background: var(--accent); }
-  .gnode.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-    box-shadow: 0 0 34px -6px color-mix(in srgb, var(--accent) 45%, transparent); z-index: 3; }
-  .gnode.active .gi { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
-  .gnode.active .gdot i { background: var(--accent); }
-  .gnode.active .gdot::after { content: ""; position: absolute; inset: -1px; border-radius: 50%;
-    border: 1px solid var(--accent); animation: ring 1.9s ease-out infinite; }
-  .gnode .cardring { position: absolute; inset: -1px; border-radius: 13px;
-    border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
-    animation: cardring 2.6s ease-out infinite; pointer-events: none; }
-  .gnode.done { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); }
-  .gnode.done .gi { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--green); }
-  .gnode.done .gdot i { background: var(--green); }
-  .gnode.off { opacity: .45; }
-  .pulse { position: absolute; top: 0; left: 0; width: 7px; height: 7px; border-radius: 50%;
-    background: #EAF0FF; box-shadow: 0 0 9px 2px var(--accent), 0 0 4px 0 #fff;
-    offset-anchor: center; z-index: 1; pointer-events: none; }
-  .flabel { position: absolute; transform: translateX(-50%); font-family: var(--mono);
-    font-size: 10px; color: var(--t5); z-index: 2; }
+  /* The scrolling region is a separate absolutely-positioned layer so the
+     zoom/legend overlays (direct children of .canvas, not this) stay
+     pinned to the corners instead of scrolling away with a tall stage. */
+  .canvas-scroll { position: absolute; inset: 0; overflow: auto; display: flex;
+    align-items: safe center; justify-content: center; }
+  .stage { position: relative; transform-origin: top center; display: flex; flex-direction: column;
+    width: 356px; padding: 28px 0; }
+  .hint { align-self: center; margin-bottom: 18px; padding: 5px 12px; border: 1px solid var(--border);
+    border-radius: 999px; background: var(--card); font-family: var(--mono); font-size: 10.5px;
+    color: var(--t3); }
+  .hint b { color: var(--accent); font-weight: 500; }
+
+  .st { display: flex; gap: 13px; }
+  .st .rail { flex: 0 0 34px; display: flex; flex-direction: column; align-items: center; }
+  .seg { width: 2px; flex: 1 1 12px; min-height: 12px; background: repeating-linear-gradient(
+    to bottom, #2E2F36 0 4px, transparent 4px 9px); }
+  .seg.none { background: transparent; }
+  .seg.done { background: color-mix(in srgb, var(--green) 55%, #2E2F36); }
+  .seg.flow { background: repeating-linear-gradient(
+    to bottom, var(--accent) 0 5px, color-mix(in srgb, var(--accent) 18%, transparent) 5px 10px);
+    background-size: 100% 20px; animation: railflow
+    .9s linear infinite; }
+  @keyframes railflow { to { background-position-y: 20px; } }
+
+  .ring { position: relative; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--raise); border: 1.5px solid var(--border);
+    color: var(--t3); font-family: var(--mono); font-size: 14px;
+    transition: border-color .3s, color .3s, box-shadow .3s; }
+  .st.active .ring { border-color: var(--accent); color: var(--accent);
+    box-shadow: 0 0 18px -4px color-mix(in srgb, var(--accent) 70%, transparent); }
+  .st.active .ring::after { content: ""; position: absolute; inset: -1.5px; border-radius: 50%;
+    border: 1.5px solid var(--accent); animation: ring 1.8s ease-out infinite; }
+  .st.done .ring { border-color: color-mix(in srgb, var(--green) 60%, var(--border)); color: var(--green); }
+  .st.err .ring { border-color: color-mix(in srgb, var(--red) 60%, var(--border)); color: var(--red); }
+  .st.orch .ring { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--accent); }
+
+  .scard { flex: 1; min-width: 0; margin: 4px 0; padding: 9px 12px 10px; background: var(--raise);
+    border: 1px solid var(--border); border-radius: 11px;
+    transition: border-color .3s, box-shadow .3s, opacity .3s; }
+  .st.active .scard { border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
+    box-shadow: 0 0 28px -8px color-mix(in srgb, var(--accent) 45%, transparent); }
+  .st.done .scard { border-color: color-mix(in srgb, var(--green) 30%, var(--border)); }
+  .st.err .scard { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+  .st.dim .scard, .st.dim .ring { opacity: .5; }
+  .st.orch .scard { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
+  .shead { display: flex; align-items: baseline; gap: 8px; }
+  .sname { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--t1); }
+  .schip { margin-left: auto; max-width: 140px; padding: 1px 7px; border-radius: 999px;
+    background: #1A1B21; font-family: var(--mono); font-size: 9.5px; color: var(--t4);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .st.active .schip { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+  .sdesc { font-size: 10.5px; color: var(--t3); margin-top: 2px; }
+  .sact { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px;
+    color: var(--t2); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sact::before { content: "▸"; color: var(--accent); flex: 0 0 auto; }
+  .ssteps { float: right; font-family: var(--mono); font-size: 9.5px; color: var(--t5); margin-left: 8px; }
+
+  /* specialists branch onto an indented sub-lane with elbow connectors */
+  .st.branch { margin-left: 30px; }
+  .st.branch .rail { position: relative; }
+  .elbow { position: relative; height: 16px; margin-left: 30px; }
+  /* The horizontal arm must span the full 30px gap between the main rail's
+     center and the branch rail's center (both rails are 34px wide, so their
+     centers sit 17px into their own box — the only difference between them
+     is this 30px margin-left shift). */
+  .elbow::before { content: ""; position: absolute; left: -13px; top: -2px; width: 30px; height: 16px;
+    border-left: 2px solid #2E2F36; border-bottom: 2px solid #2E2F36; border-bottom-left-radius: 10px; }
+  .elbow.join::before { border-bottom: 0; border-top: 2px solid #2E2F36; border-bottom-left-radius: 0;
+    border-top-left-radius: 10px; top: 2px; }
+
   .zoom { position: absolute; right: 20px; bottom: 18px; display: flex; align-items: center; gap: 2px;
     background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 3px; z-index: 5; }
   .zoom button { width: 24px; height: 22px; border: 0; background: transparent; color: var(--t3);
@@ -229,39 +266,6 @@
     font-family: var(--mono); font-size: 10px; color: var(--t4); z-index: 5; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
-
-  /* vertical workflow flow — scales to any number of roles */
-  .stage { display: flex; flex-direction: column; }
-  .vnode { position: relative; display: flex; align-items: center; gap: 11px; width: 300px;
-    padding: 10px 13px; background: var(--raise); border: 1px solid var(--border);
-    border-radius: 12px; transition: border-color .3s, box-shadow .3s, opacity .3s; }
-  .vnode.off { opacity: .45; }
-  .vnode.orch { border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
-    box-shadow: 0 0 22px -12px color-mix(in srgb, var(--accent) 60%, transparent); }
-  .vnode.active { border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-    box-shadow: 0 0 30px -8px color-mix(in srgb, var(--accent) 45%, transparent); }
-  .vnode.done { border-color: color-mix(in srgb, var(--green) 35%, var(--border)); }
-  .vgi { position: relative; flex: 0 0 30px; width: 30px; height: 30px; border-radius: 8px;
-    display: flex; align-items: center; justify-content: center; background: #1A1B21;
-    color: var(--t3); font-family: var(--mono); font-size: 14px; }
-  .vnode.orch .vgi, .vnode.active .vgi { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
-  .vnode.done .vgi { background: color-mix(in srgb, var(--green) 13%, transparent); color: var(--green); }
-  .vring { position: absolute; inset: -1px; border-radius: 8px; border: 1px solid var(--accent);
-    animation: cardring 1.9s ease-out infinite; }
-  .vbody { min-width: 0; flex: 1; }
-  .vhead { display: flex; align-items: baseline; gap: 8px; }
-  .vn { font-family: var(--mono); font-size: 13px; font-weight: 500; color: var(--t1); }
-  .vmodel { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--t4);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 130px; }
-  .vdesc { font-size: 10.5px; color: var(--t3); margin-top: 2px; }
-  .vact { font-family: var(--mono); font-size: 11px; color: var(--t2); margin-top: 5px;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .vdot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--t5); }
-  .vnode.active .vdot { background: var(--accent); animation: live 1.7s ease-in-out infinite; }
-  .vnode.done .vdot { background: var(--green); }
-  .vspine { width: 2px; height: 22px; margin-left: 26px; background: repeating-linear-gradient(
-    to bottom, #2E2F36 0 4px, transparent 4px 9px); }
-  .vspine.done { background: color-mix(in srgb, var(--green) 45%, #2E2F36); }
 
   /* roster row toggle (Configuration → Roles & Models) */
   .rmrow .tog { flex: 0 0 auto; }
@@ -308,26 +312,45 @@
   .card .act { font-size: 11.5px; color: var(--t2); margin-top: 6px; font-family: var(--mono);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-  /* terminal drawer */
-  .term { flex: 0 0 auto; border-top: 1px solid var(--border); }
+  /* ── terminal drawer ── */
+  .term { flex: 0 0 auto; border-top: 1px solid var(--border); position: relative; }
+  .term-grip { position: absolute; top: -3px; left: 0; right: 0; height: 7px; cursor: ns-resize; z-index: 6; }
+  .term.collapsed .term-grip { display: none; }
   .term-head { height: 37px; display: flex; align-items: center; gap: 9px; padding: 0 14px; background: var(--raise); }
   .term-head .t { font-family: var(--mono); font-size: 10.5px; letter-spacing: 1.2px; color: var(--t3); text-transform: uppercase; }
-  .term-head .cwd { font-family: var(--mono); font-size: 10.5px; color: var(--t4); }
-  .chev { margin-left: auto; display: inline-flex; align-items: center; justify-content: center;
+  .term-head .cwd { font-family: var(--mono); font-size: 10.5px; color: var(--t4);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .term-head .cnt { margin-left: auto; font-family: var(--mono); font-size: 9.5px; color: var(--t5); }
+  .thbtn { display: inline-flex; align-items: center; justify-content: center; height: 22px;
+    padding: 0 8px; border: 0; background: transparent; color: var(--t4); cursor: pointer;
+    border-radius: 5px; font-family: var(--mono); font-size: 10px; }
+  .thbtn:hover { background: #1B1C22; color: var(--t1); }
+  .chev { display: inline-flex; align-items: center; justify-content: center;
     width: 24px; height: 22px; border: 0; background: transparent; color: var(--t3); cursor: pointer; border-radius: 5px; }
   .chev:hover { background: #1B1C22; color: var(--t1); }
   .chev svg { transition: transform .2s; }
   .term.collapsed .chev svg { transform: rotate(-90deg); }
-  .term-body { height: 150px; overflow-y: auto; padding: 8px 14px 10px; background: var(--panel);
-    font-family: var(--mono); font-size: 11.5px; line-height: 1.65; transition: height .2s; }
-  .term.collapsed .term-body { height: 0; padding-top: 0; padding-bottom: 0; }
+  .term-body { height: 190px; overflow-y: auto; padding: 8px 14px 10px; background: #08080B;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.66; }
+  .term.collapsed .term-body { height: 0 !important; padding-top: 0; padding-bottom: 0; overflow: hidden; }
   .line { display: flex; gap: 12px; padding: 1px 0; }
-  .line .tag { color: var(--t4); flex: 0 0 92px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .line:hover { background: rgba(255,255,255,.02); }
+  .line .tag { flex: 0 0 92px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--t4); }
   .line .tag.hot { color: var(--accent); }
-  .line .m { color: var(--t3); word-break: break-word; }
-  .cursor { display: inline-block; width: 8px; height: 14px; background: var(--accent);
-    border-radius: 1px; animation: blink 1.1s step-end infinite; vertical-align: text-bottom; }
+  .line .m { color: #A9AAB1; word-break: break-word; white-space: pre-wrap; }
+  .line .m .dim { color: var(--t4); }
+  .newlines { position: absolute; right: 16px; bottom: 10px; padding: 4px 11px; border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+    background: color-mix(in srgb, var(--accent) 14%, var(--card)); color: var(--t1);
+    font-family: var(--mono); font-size: 10px; cursor: pointer; z-index: 6; }
+  .newlines.hidden { display: none; }
   .ok { color: var(--green); } .bad { color: var(--red); } .warn { color: var(--amber); }
+  /* ANSI SGR palette (30-37 / 90-97) */
+  .a30{color:#3B3C42}.a31{color:#F0554E}.a32{color:#3FB950}.a33{color:#E3A008}
+  .a34{color:#5B8AFF}.a35{color:#C678DD}.a36{color:#3BB8C3}.a37{color:#C9CAD0}
+  .a90{color:#6E6F77}.a91{color:#FF7A72}.a92{color:#5FCE77}.a93{color:#F2C14E}
+  .a94{color:#7FA5FF}.a95{color:#D89AEC}.a96{color:#5FD2DC}.a97{color:#EDEDEF}
+  .ab{font-weight:600}
 </style>
 </head>
 <body>
@@ -386,6 +409,10 @@
           <div class="h">Providers &amp; Keys</div>
           <div id="apiKeys"></div>
         </div>
+        <div class="sec">
+          <div class="h">Connectors · MCP</div>
+          <div id="mcpList"></div>
+        </div>
         <div class="foot"><span class="p" id="cfgPath"></span><span class="v" id="ver"></span></div>
       </div>
     </div>
@@ -430,15 +457,15 @@
       </div>
     </div>
 
-    <div class="canvas">
-      <div class="stage" id="stage"></div>
+    <div class="canvas" id="canvas">
+      <div class="canvas-scroll"><div class="stage" id="stage"></div></div>
       <div class="legend">
         <span><i style="background:var(--accent)"></i>active</span>
         <span><i style="background:var(--green)"></i>done</span>
         <span><i style="background:var(--t5)"></i>idle</span>
       </div>
       <div class="zoom">
-        <button id="zOut">−</button><span class="zv" id="zVal">85%</span><button id="zIn">+</button>
+        <button id="zOut">−</button><span class="zv" id="zVal">100%</span><button id="zIn">+</button>
       </div>
     </div>
 
@@ -461,12 +488,17 @@
   </div>
 
   <div class="term" id="term">
+    <div class="term-grip" id="termGrip" title="Drag to resize"></div>
     <div class="term-head">
       <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="#8A8B92" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m5 8 3.5 3.5L5 15M12.5 16h6"></path></svg>
       <span class="t">Terminal</span><span class="cwd" id="cwd"></span>
+      <span class="cnt" id="lineCount"></span>
+      <button class="thbtn" id="termCopy" title="Copy all output">copy</button>
+      <button class="thbtn" id="termClear" title="Clear output">clear</button>
       <button class="chev" id="termToggle"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg></button>
     </div>
-    <div class="term-body" id="log"><div class="line"><span class="tag hot">❯</span><span class="cursor"></span></div></div>
+    <div class="term-body" id="log"></div>
+    <button class="newlines hidden" id="newLines">↓ new output</button>
   </div>
 </div>
 
@@ -480,9 +512,20 @@ const DESC = {
 const GLYPH = { explorer: "◎", planner: "≣", coder: "⟨⟩", tester: "✓", reviewer: "🔍", agent: "❯" };
 const ACCENTS = ["#2D5BFF", "#3FB950", "#E3A008", "#B060F0", "#F0554E"];
 let since = 0, mode = "auto-edit", busy = false, state = null;
-const activity = {}, status = {};
+const activity = {}, status = {}, steps = {};
+let runStart = 0, elapsedTimer = null;
+function stepsOf(name) { return steps[name] || 0; }
 
-function esc(s) { const d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML; }
+// textContent->innerHTML escapes & < > but NOT quotes, and esc() output is
+// interpolated into double-quoted HTML attributes throughout this file
+// (title="${esc(...)}", data-role="${esc(...)}", value="${esc(...)}" —
+// config-derived strings like roster role ids or MCP command lines flow
+// through these). Escape quotes too so a value can never break out of an
+// attribute context.
+function esc(s) {
+  const d = document.createElement("div"); d.textContent = s == null ? "" : s;
+  return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 async function api(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}) });
@@ -565,6 +608,7 @@ function renderConfig() {
   }
   renderRoster();
   renderApiKeys();
+  renderMcp();
   $("cfgPath").textContent = state.config_file || "";
   $("ver").textContent = "v" + (state.version || "");
 }
@@ -624,6 +668,20 @@ function renderRoster() {
     addLog("config", s.dataset.role + " → " + short(s.value));
   };
 }
+function renderMcp() {
+  const rows = state.mcp || [];
+  $("mcpList").innerHTML = rows.length
+    ? rows.map(s => {
+        const color = s.state === "running" ? "var(--green)"
+          : s.state === "failed" ? "var(--red)" : "var(--t5)";
+        const tools = s.state === "running" ? ` · ${s.tools} tool${s.tools === 1 ? "" : "s"}` : "";
+        return `<div class="keyrow"><span class="kdot" style="background:${color}"></span>` +
+          `<span class="kl" title="${esc(s.command)}">${esc(s.name)}</span>` +
+          `<span style="font-family:var(--mono);font-size:10px;color:var(--t4)">${esc(s.state)}${tools}</span></div>`;
+      }).join("")
+    : `<div style="font-size:10.5px;color:var(--t4)">none configured — <span style="font-family:var(--mono)">relaycli mcp add &lt;preset&gt;</span></div>`;
+}
+
 function renderApiKeys() {
   $("apiKeys").innerHTML = (state.providers || []).map((p, i) =>
     `<div class="keyrow"><span class="kdot ${p.detected ? "on" : ""}"></span>` +
@@ -663,7 +721,8 @@ function participants() {
   // The configured team is visible even before a run: enabled roster
   // specialists, plus any that actually ran this run.
   const names = new Set([...(state.specialists || []), ...Object.keys(status)]);
-  const extras = [...names].filter(k => !known.has(k)).map(k => ({ name: k, model: rosterModelOf(k) }));
+  const extras = [...names].filter(k => !known.has(k))
+    .map(k => ({ name: k, model: rosterModelOf(k), specialist: true }));
   if (!extras.length) return pipeline;
   const ri = pipeline.findIndex(p => p.name === "reviewer");
   return ri >= 0 ? [...pipeline.slice(0, ri), ...extras, ...pipeline.slice(ri)] : [...pipeline, ...extras];
@@ -684,32 +743,47 @@ function renderCards() {
   }).join("");
 }
 
-// A clean VERTICAL flow: one node per participant, joined by a spine, with the
-// active node glowing. Scales to any count — never cramped, never chaotic.
+// The orchestration rail: one station per participant on a vertical rail.
+// The segment INTO the active station flows; segments past finished stations
+// set green; task-split specialists sit on an indented branch lane. Scales to
+// any number of participants — never cramped, never chaotic.
 function renderFlow() {
   const stage = $("stage"); if (!stage) return;
   const relay = state && state.relay;
   const roles = participants();
   const rows = [];
   if (relay) rows.push({ name: "orchestrator", desc: "coordinates the relay", orch: true });
-  roles.forEach(r => rows.push({ name: r.name, desc: DESC[r.name] || "specialist", model: r.model }));
+  roles.forEach(r => rows.push({
+    name: r.name, desc: DESC[r.name] || "specialist", model: r.model, spec: !!r.specialist,
+  }));
 
-  stage.style.width = "300px"; stage.style.height = "auto";
+  const anyRun = busy || Object.keys(status).length > 0;
   stage.style.transform = `scale(${zoom})`;
-  stage.innerHTML = rows.map((row, i) => {
+  const hint = anyRun ? "" :
+    `<div class="hint">team ready — <b>send a request</b> to watch it work</div>`;
+
+  stage.innerHTML = hint + rows.map((row, i) => {
     const st = row.orch ? (busy ? "active" : "idle") : (status[row.name] || "idle");
-    const cls = st === "active" ? "active" : st === "done" ? "done" : (busy && !row.orch ? "off" : "");
-    const glyph = row.orch ? "◈" : (GLYPH[row.name] || "●");
-    const spine = i < rows.length - 1
-      ? `<div class="vspine ${st === "done" ? "done" : ""}"></div>` : "";
-    const act = (!row.orch && status[row.name] === "active" && activity[row.name])
-      ? `<div class="vact">${esc(activity[row.name])}</div>` : "";
-    const model = row.model ? `<span class="vmodel">${esc(short(row.model))}</span>` : "";
-    return `<div class="vnode ${cls} ${row.orch ? "orch" : ""}">` +
-      `<div class="vgi">${esc(glyph)}${st === "active" ? '<span class="vring"></span>' : ""}</div>` +
-      `<div class="vbody"><div class="vhead"><span class="vn">${esc(row.name)}</span>${model}</div>` +
-      `<div class="vdesc">${esc(row.desc)}</div>${act}</div>` +
-      `<span class="vdot"></span></div>${spine}`;
+    const cls = st === "active" ? "active" : st === "done" ? "done" : st === "err" ? "err"
+      : (busy && !row.orch ? "dim" : "");
+    const glyph = st === "done" ? "✓" : st === "err" ? "✕" : (row.orch ? "◈" : (GLYPH[row.name] || "●"));
+    // rail segments: above flows while this station is active; below goes
+    // green once the station is done.
+    const segTop = i === 0 ? "none" : (st === "active" && busy ? "flow" : (st === "done" ? "done" : ""));
+    const segBot = i === rows.length - 1 ? "none" : (st === "done" ? "done" : "");
+    const steps = stepsOf(row.name);
+    const act = (!row.orch && st === "active" && activity[row.name])
+      ? `<div class="sact">${esc(activity[row.name])}</div>` : "";
+    const chip = row.model ? `<span class="schip" title="${esc(row.model)}">${esc(short(row.model))}</span>` : "";
+    const stepsBadge = steps ? `<span class="ssteps">${steps} step${steps > 1 ? "s" : ""}</span>` : "";
+    const prevSpec = i > 0 && rows[i - 1].spec;
+    const fork = row.spec && !prevSpec ? `<div class="elbow"></div>` : "";
+    const join = !row.spec && prevSpec ? `<div class="elbow join"></div>` : "";
+    return fork + join + `<div class="st ${cls} ${row.orch ? "orch" : ""} ${row.spec ? "branch" : ""}">` +
+      `<div class="rail"><i class="seg ${segTop}"></i><span class="ring">${esc(glyph)}</span>` +
+      `<i class="seg ${segBot}"></i></div>` +
+      `<div class="scard"><div class="shead"><span class="sname">${esc(row.name)}</span>${chip}</div>` +
+      `<div class="sdesc">${esc(row.desc)}${stepsBadge}</div>${act}</div></div>`;
   }).join("");
 }
 function updateProgress() {
@@ -729,12 +803,58 @@ function addMsg(cls, who, text) {
   el.innerHTML = `<div class="who">${dot}<span>${esc(who)}</span><span class="ago">now</span></div><div class="bubble">${esc(text)}</div>`;
   $("thread").appendChild(el); $("thread").scrollTop = 1e9;
 }
+/* ANSI SGR → spans (colors 30-37/90-97, bold; everything else stripped). */
+function ansiToHtml(s) {
+  const parts = String(s == null ? "" : s).split(/\x1b\[([0-9;]*)m/);
+  let html = "", classes = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) {
+      if (!parts[i]) continue;
+      const text = esc(parts[i].replace(/[\x00-\x08\x0b-\x1f]/g, ""));
+      html += classes.length ? `<span class="${classes.join(" ")}">${text}</span>` : text;
+    } else {
+      for (const code of (parts[i] || "0").split(";")) {
+        const n = +code || 0;
+        if (n === 0) classes = [];
+        else if (n === 1) classes.push("ab");
+        else if ((n >= 30 && n <= 37) || (n >= 90 && n <= 97)) {
+          classes = classes.filter(c => !/^a\d+$/.test(c)); classes.push("a" + n);
+        }
+      }
+    }
+  }
+  return html;
+}
+
+let logLines = 0, unseen = 0;
+function logPinned() {
+  const log = $("log");
+  return log.scrollTop + log.clientHeight >= log.scrollHeight - 12;
+}
 function addLog(tag, msg, cls) {
+  const log = $("log");
+  const pinned = logPinned();
   const el = document.createElement("div");
   el.className = "line";
-  el.innerHTML = `<span class="tag ${tag === "you" ? "hot" : ""}">[${esc(tag)}]</span><span class="m ${cls || ""}">${esc(msg)}</span>`;
-  const log = $("log"); log.insertBefore(el, log.lastElementChild); log.scrollTop = 1e9;
+  el.innerHTML = `<span class="tag ${tag === "you" ? "hot" : ""}">[${esc(tag)}]</span>` +
+    `<span class="m ${cls || ""}">${ansiToHtml(msg)}</span>`;
+  log.appendChild(el);
+  logLines++;
+  while (logLines > 2000) { log.removeChild(log.firstChild); logLines--; }
+  $("lineCount").textContent = logLines + " lines";
+  if (pinned || $("term").classList.contains("collapsed")) {
+    log.scrollTop = 1e9;
+  } else {
+    unseen++;
+    const chip = $("newLines");
+    chip.textContent = `↓ ${unseen} new`;
+    chip.classList.remove("hidden");
+  }
 }
+$("log").addEventListener("scroll", () => {
+  if (logPinned()) { unseen = 0; $("newLines").classList.add("hidden"); }
+});
+$("newLines").onclick = () => { $("log").scrollTop = 1e9; unseen = 0; $("newLines").classList.add("hidden"); };
 
 function setBusy(b) {
   busy = b;
@@ -743,6 +863,14 @@ function setBusy(b) {
   $("runLabel").className = "label" + (b ? " on" : "");
   $("send").disabled = b; $("stopBtn").disabled = !b;
   if (!b) for (const k in status) if (status[k] === "active") status[k] = "done";
+  if (b && !elapsedTimer) {
+    if (!runStart) runStart = Date.now();
+    elapsedTimer = setInterval(() => {
+      $("stElapsed").textContent = ((Date.now() - runStart) / 1000).toFixed(0) + "s";
+    }, 1000);
+  } else if (!b && elapsedTimer) {
+    clearInterval(elapsedTimer); elapsedTimer = null; runStart = 0;
+  }
   renderCards(); renderFlow(); updateProgress();
 }
 
@@ -750,6 +878,8 @@ function handle(ev) {
   if (ev.kind === "user") {
     addMsg("you", "you", ev.text); addLog("you", ev.text);
     for (const k in status) { status[k] = "idle"; activity[k] = "waiting"; }
+    for (const k in steps) delete steps[k];
+    runStart = Date.now();
     $("goal").textContent = ev.text;
   } else if (ev.kind === "role") {
     for (const k in status) if (status[k] === "active") status[k] = "done";
@@ -761,6 +891,7 @@ function handle(ev) {
     addLog(ev.agent, ev.text.split("\n")[0].slice(0, 140));
   } else if (ev.kind === "tool") {
     status[ev.agent] = "active"; activity[ev.agent] = ev.summary;
+    steps[ev.agent] = (steps[ev.agent] || 0) + 1;
     addLog(ev.agent, ev.summary, ev.ok ? "" : "bad");
   } else if (ev.kind === "note") {
     addLog("note", ev.text, "warn");
@@ -798,6 +929,25 @@ async function loadState() {
   renderModels(); renderConfig(); renderSettings(); renderCards(); renderFlow();
 }
 
+// poll() must start regardless of whether the FIRST loadState() succeeds —
+// a single failed/non-JSON /api/state (e.g. a malformed config.toml 500)
+// used to leave `state` null and never schedule poll() at all, permanently
+// freezing the page with no events, no busy tracking, and no retry.
+// renderCards/renderFlow/participants() already null-guard `state`, so
+// degrading to "no state yet" instead of "app is dead" is safe.
+async function boot() {
+  try {
+    await loadState();
+  } catch (e) {
+    addLog("error", "could not load initial state — retrying…", "bad");
+    const retry = setInterval(async () => {
+      try { await loadState(); clearInterval(retry); }
+      catch (e) {}
+    }, 3000);
+  }
+  poll();
+}
+
 $("modes").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (!b) return;
   mode = b.dataset.m; for (const x of $("modes").children) x.classList.toggle("on", x === b);
@@ -808,10 +958,36 @@ $("newBtn").onclick = async () => {
   if ((await r.json()).ok) { $("thread").innerHTML = ""; since = 0;
     $("goal").innerHTML = '<span style="color:var(--t4)">no run yet</span>';
     for (const k in status) { delete status[k]; delete activity[k]; }
+    for (const k in steps) delete steps[k];
     $("stElapsed").textContent = "—"; $("stTokens").textContent = "—";
     renderCards(); renderFlow(); updateProgress(); }
 };
 $("termToggle").onclick = () => $("term").classList.toggle("collapsed");
+$("termClear").onclick = () => {
+  $("log").innerHTML = ""; logLines = 0; unseen = 0;
+  $("lineCount").textContent = ""; $("newLines").classList.add("hidden");
+};
+$("termCopy").onclick = async () => {
+  const text = [...$("log").children]
+    .map(l => `${l.children[0].textContent} ${l.children[1].textContent}`).join("\n");
+  try { await navigator.clipboard.writeText(text); addLog("note", "output copied"); }
+  catch (e) { addLog("note", "copy failed — clipboard unavailable", "warn"); }
+};
+// drag the grip to resize the terminal (persisted)
+(() => {
+  const body = $("log");
+  if (localStorage.termH) body.style.height = localStorage.termH + "px";
+  $("termGrip").addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const startY = e.clientY, startH = body.clientHeight;
+    const move = (ev) => {
+      const h = Math.max(60, Math.min(window.innerHeight * .6, startH + (startY - ev.clientY)));
+      body.style.height = h + "px"; localStorage.termH = Math.round(h);
+    };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  });
+})();
 function setZoom(z) { zoom = Math.max(0.5, Math.min(1.3, z)); $("zVal").textContent = Math.round(zoom * 100) + "%";
   const s = $("stage"); if (s) s.style.transform = `scale(${zoom})`; }
 $("zIn").onclick = () => setZoom(zoom + 0.1);
@@ -827,7 +1003,8 @@ $("send").onclick = send;
 $("input").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
 
 if (localStorage.accent) document.documentElement.style.setProperty("--accent", localStorage.accent);
-loadState().then(poll);
+addLog("relay", "desktop ready — agent output appears here");
+boot();
 </script>
 </body>
 </html>

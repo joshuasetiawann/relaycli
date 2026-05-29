@@ -163,7 +163,14 @@ class MCPClient:
         self.tools: list[dict[str, Any]] = []
         self._next_id = 0
         self._responses: dict[int, dict] = {}
+        self._pending: set[int] = set()
         self._cond = threading.Condition()
+        # A client is shared process-wide (REPL + web + relay coder may all
+        # call it concurrently), and even a single session has two writers
+        # (a caller's _rpc plus the stdout reader replying to server-issued
+        # requests) — serialize writes so two JSON-RPC frames can never
+        # interleave on the pipe.
+        self._write_lock = threading.Lock()
         self._stderr_tail: deque[str] = deque(maxlen=50)
         self._dead_reason: str | None = None
 
@@ -248,20 +255,29 @@ class MCPClient:
         with self._cond:
             self._next_id += 1
             msg_id = self._next_id
-        self._send({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
-        with self._cond:
-            ok = self._cond.wait_for(
-                lambda: msg_id in self._responses or self._dead_reason is not None,
-                timeout=timeout,
-            )
-            if msg_id in self._responses:
-                response = self._responses.pop(msg_id)
-            elif self._dead_reason:
-                raise MCPError(self._dead_reason)
-            elif not ok:
-                raise MCPError(f"'{method}' timed out after {timeout:.0f}s")
-            else:  # pragma: no cover - defensive
-                raise MCPError(f"'{method}' failed")
+            self._pending.add(msg_id)
+        try:
+            self._send({"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params})
+            with self._cond:
+                ok = self._cond.wait_for(
+                    lambda: msg_id in self._responses or self._dead_reason is not None,
+                    timeout=timeout,
+                )
+                if msg_id in self._responses:
+                    response = self._responses.pop(msg_id)
+                elif self._dead_reason:
+                    raise MCPError(self._dead_reason)
+                elif not ok:
+                    raise MCPError(f"'{method}' timed out after {timeout:.0f}s")
+                else:  # pragma: no cover - defensive
+                    raise MCPError(f"'{method}' failed")
+        finally:
+            # Drop the pending marker so a response that arrives after a
+            # timeout is discarded by _read_stdout instead of accumulating
+            # forever in self._responses (a long-lived, process-wide client
+            # sees an unbounded number of these over its lifetime otherwise).
+            with self._cond:
+                self._pending.discard(msg_id)
         if "error" in response:
             err = response["error"] or {}
             raise MCPError(f"{err.get('message', 'server error')} (code {err.get('code')})")
@@ -275,8 +291,9 @@ class MCPClient:
         if proc is None or proc.stdin is None:
             raise MCPError("server is not running")
         try:
-            proc.stdin.write(json.dumps(msg) + "\n")
-            proc.stdin.flush()
+            with self._write_lock:
+                proc.stdin.write(json.dumps(msg) + "\n")
+                proc.stdin.flush()
         except (OSError, ValueError) as exc:
             raise MCPError(f"write to server failed: {exc}") from exc
 
@@ -297,7 +314,10 @@ class MCPClient:
                 continue
             if "id" in msg and ("result" in msg or "error" in msg):
                 with self._cond:
-                    self._responses[msg["id"]] = msg
+                    if msg["id"] in self._pending:
+                        self._responses[msg["id"]] = msg
+                    # else: a late reply for an abandoned/timed-out call —
+                    # nobody is waiting for it, so drop it rather than leak.
                     self._cond.notify_all()
             elif "id" in msg and "method" in msg:
                 # Server→client request (sampling etc.) — not supported.
@@ -369,11 +389,19 @@ class MCPTool(Tool):
 
         label = f"{self.server_name}:{self.remote_name}"
         if ctx is not None:
+            from rich.markup import escape
+
             compact = json.dumps(data)
             if len(compact) > 120:
                 compact = compact[:119] + "…"
+            # label/compact embed the server-reported tool name and the
+            # model's arguments — both adversary-controlled if the server is
+            # malicious. Escape them like every other confirm prompt in the
+            # codebase (edit_file, write_file, remember, run_command) so
+            # Rich markup can't spoof or hide part of the approval line.
             decision = ctx.permissions.confirm(
-                "command", prompt_text=f"Call MCP tool {label} {compact}?"
+                "command",
+                prompt_text=f"Call MCP tool {escape(label)} {escape(compact)}?",
             )
             if not decision.approved:
                 return ToolResult.error(
@@ -391,26 +419,50 @@ class MCPTool(Tool):
 # One client per configured server per process: the REPL, the relay coder and
 # the web session share processes instead of spawning duplicates.
 _clients: dict[str, MCPClient] = {}
+# Per-server startup lock: serializes concurrent get_client() calls for the
+# SAME server (so /desktop's web thread and the REPL thread never race to
+# start two processes for one config) without blocking unrelated servers.
+_start_locks: dict[str, threading.Lock] = {}
 _clients_lock = threading.Lock()
 _atexit_registered = False
 
 
 def get_client(config: MCPServerConfig) -> MCPClient:
-    """The process-wide client for ``config`` (started on first use)."""
+    """The process-wide client for ``config`` (started on first use).
+
+    A client is inserted into the cache ONLY after start() succeeds — a
+    failed handshake (e.g. a tools/list timeout after Popen succeeded)
+    would otherwise leave a live-but-wedged process cached as `alive`
+    forever, since `alive` only checks that the process hasn't exited.
+    """
     global _atexit_registered
     with _clients_lock:
         client = _clients.get(config.name)
         if client is not None and client.alive:
             return client
-        client = MCPClient(config)
-        _clients[config.name] = client
         if not _atexit_registered:
             import atexit
 
             atexit.register(shutdown_all)
             _atexit_registered = True
-    client.start()  # outside the lock: npx cold start can take a while
-    return client
+        start_lock = _start_locks.setdefault(config.name, threading.Lock())
+
+    with start_lock:
+        # Re-check: another thread may have finished starting (or failed
+        # and cleared) this server while we waited for the lock.
+        with _clients_lock:
+            client = _clients.get(config.name)
+            if client is not None and client.alive:
+                return client
+        client = MCPClient(config)
+        try:
+            client.start()  # slow (npx cold start) — deliberately outside _clients_lock
+        except MCPError:
+            client.close()  # never leak the process on a failed handshake
+            raise
+        with _clients_lock:
+            _clients[config.name] = client
+        return client
 
 
 def shutdown_all() -> None:
@@ -432,7 +484,12 @@ def extend_registry(reg: ToolRegistry, *, console=None) -> ToolRegistry:
             client = get_client(config)
         except MCPError as exc:
             if console is not None:
-                console.print(f"[yellow]mcp {name}: {exc}[/yellow]")
+                from rich.markup import escape
+
+                # exc's message often embeds the server's raw stderr tail —
+                # adversary-controlled if the server is malicious/broken —
+                # so it must be escaped before hitting a markup-parsed print.
+                console.print(f"[yellow]mcp {escape(name)}: {escape(str(exc))}[/yellow]")
             continue
         for tool in client.tools:
             remote = str(tool.get("name") or "")

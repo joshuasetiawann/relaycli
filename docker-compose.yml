@@ -26,7 +26,11 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
-      DATABASE_URL: ${DATABASE_URL:-postgresql://relay:${POSTGRES_PASSWORD:-relay}@postgres:5432/relay}
+      # No baked default: a credentialed URL pointing at a hostname that
+      # only resolves under --profile postgres would otherwise ship to
+      # every container and fail confusingly instead of being unset. Set
+      # DATABASE_URL yourself (see docker/README.md) once postgres is up.
+      DATABASE_URL: ${DATABASE_URL:-}
 
   relaycli-web:
     profiles: [web]
@@ -45,6 +49,7 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      DATABASE_URL: ${DATABASE_URL:-}
 
   ollama:
     profiles: [ollama]
