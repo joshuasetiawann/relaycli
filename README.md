@@ -47,20 +47,24 @@ interactive terminal session.
 
 ## Install
 
-Requires Python 3.12+. Install isolated with `pipx` or `uv tool`
+Requires Python 3.12+ and `git`. Install isolated with `pipx` or `uv tool`
 (recommended), or into a virtualenv with `pip`.
 
 ```bash
-# from a checkout (isolated, recommended)
+git clone https://github.com/joshuasetiawann/relaycli.git
+cd relaycli
+
 pipx install -e .
 # or
 uv tool install .
 
 # plain pip (inside a virtualenv)
+python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -e .
 ```
 
-This puts a `relaycli` command on your PATH.
+This puts a `relaycli` command on your PATH (with `pip`, only inside the
+activated virtualenv).
 
 ## Quick start
 
