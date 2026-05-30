@@ -14,6 +14,8 @@ from relaycli.llm import (
     ToolCall,
     Usage,
     _resolve_arguments,
+    best_ollama_model,
+    tool_capability_warning,
     make_tool_result_message,
 )
 from relaycli.tools import ToolError, ToolRegistry
@@ -191,3 +193,18 @@ def test_wrap_error_non_auth_unchanged():
     msg = str(llm._wrap_error(TimeoutError("took too long"), "openrouter/x/y"))
     assert "rejected" not in msg
     assert "Model call failed for 'openrouter/x/y'" in msg
+
+
+def test_best_ollama_model_prefers_tool_capable_hint(monkeypatch):
+    from relaycli.config import Settings
+    import relaycli.llm as llm
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings: ["qwen2.5-coder:7b", "llama3.1:8b"])
+    assert best_ollama_model(Settings()) == "ollama_chat/llama3.1:8b"
+
+
+def test_tool_capability_warning_for_risky_local_model():
+    msg = tool_capability_warning("ollama_chat/qwen2.5-coder:7b")
+    assert msg is not None
+    assert "plain text" in msg
+    assert tool_capability_warning("ollama_chat/llama3.1:8b") is None

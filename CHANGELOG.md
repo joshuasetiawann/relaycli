@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.4.0 — 2026-07-05
+
+The onboarding and terminal-UX release.
+
+### Added
+- `relaycli init`: guided first-run setup that detects local Ollama, chooses a
+  usable model, writes `~/.relaycli/config.toml`, and can start optional Docker
+  Compose services (`ollama`, `web`, `postgres`, `n8n`).
+- One-line installer script at `scripts/install.sh`; the README now documents
+  `curl -fsSL .../scripts/install.sh | sh` for new users.
+- Terminal command palette: typing `/` shows helpful commands, with new
+  `/setup`, `/services`, and `/doctor` helpers.
+- Ollama readiness checks in `relaycli doctor`, plus warnings for local models
+  that may not support tool calling reliably.
+
+### Changed
+- Web desktop now surfaces onboarding/setup state and local Ollama readiness.
+- Terminal setup panels and status warnings are more actionable.
+- Version 0.4.0.
+
 ## 0.2.0 — 2026-07-03
 
 The production-maturity release.

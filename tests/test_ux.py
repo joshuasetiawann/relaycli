@@ -11,7 +11,7 @@ from rich.console import Console
 
 from relaycli.config import PermissionMode, Settings
 from relaycli.llm import ToolCall, Usage
-from relaycli.render import RichReporter, make_unified_diff, render_task_summary
+from relaycli.render import RichReporter, make_unified_diff, render_model_warning, render_task_summary
 from relaycli.repl import Repl
 from relaycli.tools.base import ToolResult
 
@@ -92,6 +92,25 @@ def test_slash_help_lists_commands():
     repl._handle_slash("/help")
     text = _out(console)
     assert "/model" in text and "/mode" in text and "/diff" in text
+    assert "/setup" in text and "/services" in text and "/doctor" in text
+
+
+def test_slash_palette_and_unknown_suggestion():
+    repl, console = _repl()
+    repl._handle_slash("/")
+    repl._handle_slash("/modle")
+    text = _out(console)
+    assert "press / for commands" in text
+    assert "/setup" in text and "/model" in text
+    assert "Did you mean" in text and "/model" in text
+
+
+def test_slash_services_lists_optional_profiles():
+    repl, console = _repl()
+    repl._handle_slash("/services")
+    text = _out(console)
+    assert "ollama" in text and "n8n" in text
+    assert "/services start ollama,n8n" in text
 
 
 def test_slash_help_matches_slash_commands_registry():
@@ -240,7 +259,8 @@ def test_render_task_summary_shows_error_text():
     console = Console(file=io.StringIO(), force_terminal=False, width=120)
     render_task_summary(console, _Result("error", "LLM error: rate limited (429)"))
     out = _out(console)
-    assert "LLM error: rate limited (429)" in out
+    assert "LLM rate limit" in out
+    assert "/model" in out
 
 
 def test_render_task_summary_shows_max_iterations_text():
@@ -385,9 +405,25 @@ def test_one_shot_missing_key_fails_fast(monkeypatch, tmp_path):
         cli_module, "get_settings",
         lambda: _hermetic(model="gpt-4o-mini"),
     )
-    result = CliRunner().invoke(cli_module.app, ["-p", "hi"])
+    result = CliRunner().invoke(cli_module.app, ["-p", "explain this repo"])
     assert result.exit_code == 2
     assert "OPENAI_API_KEY" in result.output
+
+
+def test_one_shot_greeting_uses_local_guide(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    import relaycli.cli as cli_module
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        cli_module, "get_settings",
+        lambda: _hermetic(model="gpt-4o-mini"),
+    )
+    result = CliRunner().invoke(cli_module.app, ["-p", "hi"])
+    assert result.exit_code == 0
+    assert "siap bantu" in result.output
+    assert "OPENAI_API_KEY" not in result.output
 
 
 def test_one_shot_relay_preflights_role_models(monkeypatch, tmp_path):
@@ -401,7 +437,7 @@ def test_one_shot_relay_preflights_role_models(monkeypatch, tmp_path):
         lambda: _hermetic(model="ollama_chat/llama3.1", relay_enabled=True,
                           coder_model="gpt-4o-mini"),
     )
-    result = CliRunner().invoke(cli_module.app, ["-p", "hi"])
+    result = CliRunner().invoke(cli_module.app, ["-p", "explain this repo"])
     assert result.exit_code == 2
     assert "OPENAI_API_KEY" in result.output
 
@@ -447,6 +483,17 @@ def test_dispatch_plain_text_goes_to_agent(monkeypatch):
     monkeypatch.setattr(repl, "_run_agent", lambda req: called.append(req))
     assert repl._handle_line("explain this repo") is False
     assert called == ["explain this repo"]
+
+
+def test_dispatch_greeting_uses_local_guide(monkeypatch):
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    monkeypatch.setattr(
+        repl,
+        "_run_agent",
+        lambda req: (_ for _ in ()).throw(AssertionError("greeting must stay local")),
+    )
+    assert repl._handle_line("halo") is False
+    assert "siap bantu" in _out(console)
 
 
 def test_dispatch_bang_runs_shell_not_permission_gated():
@@ -711,10 +758,10 @@ def test_enter_applies_highlighted_completion_else_submits():
 
 def test_toolbar_shows_live_session_status():
     repl, _ = _hermetic_repl(model="gpt-4o-mini")
-    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help "
+    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help · type / "
     repl.settings.relay_enabled = True
     repl._cmd_mode("full-auto")  # the real channel: updates settings + permissions together
-    assert repl._toolbar() == " gpt-4o-mini · full-auto · relay on · /help "
+    assert repl._toolbar() == " gpt-4o-mini · full-auto · relay on · /help · type / "
 
 
 def test_toolbar_reflects_enforced_mode_not_a_bare_settings_mutation():
@@ -724,10 +771,10 @@ def test_toolbar_reflects_enforced_mode_not_a_bare_settings_mutation():
     different session, and that must never desync the REPL's own display
     from what it's actually enforcing (see _toolbar's docstring)."""
     repl, console = _hermetic_repl(model="gpt-4o-mini")
-    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help "
+    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help · type / "
     repl.settings.permission_mode = PermissionMode.full_auto  # e.g. the web UI's toggle
     assert repl.permissions.mode is PermissionMode.suggest    # unaffected: still enforced
-    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help "
+    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help · type / "
     repl._handle_slash("/mode")
     assert "suggest" in _out(console)
 
@@ -805,3 +852,10 @@ def test_repl_startup_silent_when_no_mcp_servers(monkeypatch):
     monkeypatch.setattr(mcp_mod, "enabled_servers", lambda: {})
     repl, console = _repl()
     assert "MCP connector" not in _out(console)
+
+
+def test_render_model_warning_for_risky_local_model():
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    render_model_warning(console, Settings(model="ollama_chat/qwen2.5-coder:7b"))
+    out = _out(console)
+    assert "plain text" in out and "relaycli init" in out

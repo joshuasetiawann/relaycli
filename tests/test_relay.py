@@ -613,9 +613,9 @@ class TestCliRelayFlag:
 
         monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
         monkeypatch.setattr("relaycli.relay.Relay", FakeRelay)
-        result = CliRunner().invoke(cli_module.app, ["-p", "do it", "--relay", "-y"])
+        result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "--relay", "-y"])
         assert result.exit_code == 0, result.output
-        assert calls == {"enabled": True, "request": "do it"}
+        assert calls == {"enabled": True, "request": "fix app"}
 
     def test_one_shot_without_flag_uses_single_agent(self, sample_project, monkeypatch):
         monkeypatch.chdir(sample_project)
@@ -636,7 +636,7 @@ class TestCliRelayFlag:
         monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
         monkeypatch.setattr("relaycli.relay.Relay", BoomRelay)
         monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
-        result = CliRunner().invoke(cli_module.app, ["-p", "do it", "-y"])
+        result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "-y"])
         assert result.exit_code == 0, result.output
 
     def test_no_relay_flag_overrides_enabled_config(self, sample_project, monkeypatch):
@@ -659,7 +659,7 @@ class TestCliRelayFlag:
                             lambda: _settings(model="fake/m", relay_enabled=True))
         monkeypatch.setattr("relaycli.relay.Relay", BoomRelay)
         monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
-        result = CliRunner().invoke(cli_module.app, ["-p", "do it", "--no-relay", "-y"])
+        result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "--no-relay", "-y"])
         assert result.exit_code == 0, result.output
 
 class TestReplRelayCommand:

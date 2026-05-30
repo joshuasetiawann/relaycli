@@ -70,7 +70,45 @@ def render_diff(console: Console, old: str, new: str, path: str) -> tuple[int, i
 CLAUDE_ACCENT = "#D97757"
 
 _STOP_STYLE = {"done": "green", "max_iterations": "yellow", "error": "red",
-               "review_exhausted": "yellow"}
+               "review_exhausted": "yellow", "stopped": "yellow"}
+
+
+def friendly_error_text(text: str) -> str:
+    """Compact noisy provider errors into output a human can act on."""
+
+    raw = text or ""
+    low = raw.lower()
+    rate_limited = (
+        "ratelimit" in low
+        or "rate-limit" in low
+        or "rate limited" in low
+        or "rate-limited" in low
+        or " 429" in f" {low}"
+    )
+    if "llm error" in low and rate_limited:
+        model = ""
+        m = re.search(r"for '([^']+)'", raw)
+        if m:
+            model = f" ({m.group(1)})"
+        return (
+            f"LLM rate limit{model}: model/provider sedang penuh. "
+            "Coba lagi sebentar lagi, ganti model lewat /model, atau pasang "
+            "key provider sendiri dengan `relaycli config set-key <provider>`."
+        )
+    return raw
+
+
+def render_local_reply(console: Console, reply) -> None:
+    """Render a local guide reply without starting the LLM."""
+
+    text = getattr(reply, "text", str(reply))
+    console.print(Panel(
+        escape(text),
+        title="guide",
+        title_align="left",
+        border_style=CLAUDE_ACCENT,
+        expand=False,
+    ))
 
 
 class RichReporter:
@@ -158,7 +196,8 @@ def render_task_summary(
     # user gets a silent failure.
     if result.stopped_reason != "done" and getattr(result, "final_text", ""):
         console.print()
-        console.print(f"[{style}]{escape(result.final_text)}[/{style}]")
+        text = friendly_error_text(result.final_text)
+        console.print(f"[{style}]{escape(text)}[/{style}]")
 
     tools_note = ""
     if tools_used:
@@ -211,15 +250,30 @@ class RelayRichObserver:
 
 def render_setup_panel(console: Console, problem: str, detected: dict[str, bool]) -> None:
     """Actionable guidance when the configured model has no usable credential."""
+    from relaycli.config import get_settings
+    from relaycli.llm import best_ollama_model, ollama_host_label
+
+    settings = get_settings()
+    local_model = best_ollama_model(settings)
     lines = [f"[yellow]⚠ {escape(problem)}[/yellow]", ""]
-    lines.append("Fix any ONE of these, then retry (or switch with /model):")
+    lines.append("Fastest fixes:")
+    if local_model:
+        lines.append(
+            f"  • relaycli init     (detected Ollama at {escape(ollama_host_label(settings))}; "
+            f"can use {escape(local_model)})"
+        )
+    else:
+        lines.append("  • relaycli init     (guided setup for Ollama, OpenRouter, or API keys)")
+    lines.append("  • relaycli config set-key <provider> --env <VAR>  (store a key reference)")
+    lines.append("")
+    lines.append("Manual fixes:")
     # Anchor on our own "Set <VAR> ..." sentence and take the LAST match: the
     # problem string also embeds the model id, which is config-controlled and
     # could be crafted to smuggle a fake *_API_KEY name in front of it.
     hinted = re.findall(r"\bSet ([A-Z][A-Z0-9_]*_API_KEY)\b", problem)
     if hinted:
         lines.append(f"  • export {hinted[-1]}=...     (for the current model)")
-    lines.append("  • relaycli -m ollama_chat/llama3.1   (local via Ollama, no key — needs `ollama serve`)")
+    lines.append("  • relaycli -m ollama_chat/llama3.1   (local via Ollama, no key; needs `ollama serve`)")
     lines.append("  • add the key to ~/.relaycli/config.toml or a project .env (names in .env.example)")
     have = [name for name, ok in detected.items() if ok and name != "ollama"]
     if have:
@@ -229,6 +283,27 @@ def render_setup_panel(console: Console, problem: str, detected: dict[str, bool]
     # yellow border on top of it reads as two warnings.
     console.print(Panel("\n".join(lines), title="setup needed", title_align="left",
                         border_style="dim", expand=False))
+
+
+def render_slash_guide(console: Console) -> None:
+    """Compact command palette shown by `/` and in the welcome flow."""
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="cyan", no_wrap=True)
+    table.add_column()
+    table.add_row("/setup", "guided setup: model, keys, Ollama/n8n/web/postgres")
+    table.add_row("/model", "switch the model")
+    table.add_row("/mode", "suggest | auto-edit | full-auto")
+    table.add_row("/agents", "relay roles and task-split specialists")
+    table.add_row("/services", "optional Docker services")
+    table.add_row("/doctor", "health check")
+    table.add_row("/desktop", "browser UI")
+    console.print(Panel(
+        table,
+        title="press / for commands",
+        title_align="left",
+        border_style="dim",
+        expand=False,
+    ))
 
 
 def short_model_name(model: str) -> str:
@@ -299,7 +374,7 @@ def render_welcome(
     grid.add_row("relay", relay_cell)
     grid.add_row("", "")
     grid.add_row("", '[dim]Type a request in plain words — e.g. "explain this repo".[/dim]')
-    grid.add_row("", "[dim]/help commands · !cmd shell · Ctrl-D quit[/dim]")
+    grid.add_row("", "[dim]Type / for commands · !cmd shell · Ctrl-D quit[/dim]")
 
     from pathlib import Path as _Path
 
@@ -312,6 +387,16 @@ def render_welcome(
                 "run relaycli there.[/dim]"
         )
     console.print(Panel(grid, border_style=CLAUDE_ACCENT, expand=False))
+    render_model_warning(console, settings)
+
+
+def render_model_warning(console: Console, settings: "Settings") -> None:
+    """Warn when a chosen local model may not drive tools reliably."""
+    from relaycli.llm import tool_capability_warning
+
+    warning = tool_capability_warning(settings.model)
+    if warning:
+        console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
 
 
 def render_status_line(
@@ -333,10 +418,15 @@ def render_help(console: Console) -> None:
     table.add_column("input", style="cyan", no_wrap=True)
     table.add_column("action")
     table.add_row("<plain text>", "send a request to the agent")
+    table.add_row("/", "show the command palette")
+    table.add_row("/setup", "guided first-run setup (alias: /init)")
+    table.add_row("/init", "alias of /setup")
     table.add_row("/model \\[name]", "show or switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)")
     table.add_row("/mode \\[m]", "permission mode: suggest | auto-edit | full-auto")
     table.add_row("/relay \\[on|off]", "toggle the Planner → Coder → Reviewer pipeline")
     table.add_row("/agents \\[r on|off]", "show relay agents; toggle explorer/tester")
+    table.add_row("/services \\[start names]", "show/start optional services: ollama, web, postgres, n8n")
+    table.add_row("/doctor", "run a local health check")
     table.add_row("/skill \\[name]", "toggle a skill for this session (tdd, debug, ponytail, …)")
     table.add_row("/skill auto \\[on|off]", "toggle per-request skill auto-activation")
     table.add_row("/skills", "list available skills and where they come from")
@@ -374,7 +464,8 @@ def render_relay_summary(console: Console, result: "RelayResult") -> None:
     # re-printing would duplicate the coder's report.
     if result.stopped_reason in ("error", "max_iterations") and result.final_text:
         console.print()
-        console.print(f"[{style}]{escape(result.final_text)}[/{style}]")
+        text = friendly_error_text(result.final_text)
+        console.print(f"[{style}]{escape(text)}[/{style}]")
 
     for note in result.notes:
         console.print(f"[yellow]⚠ {escape(note)}[/yellow]")
@@ -394,4 +485,3 @@ def render_relay_summary(console: Console, result: "RelayResult") -> None:
         f"{result.usage.total_tokens} tokens · ${result.usage.cost_usd:.6f} · "
         f"{result.elapsed:.1f}s[/dim]"
     )
-

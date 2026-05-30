@@ -10,8 +10,10 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from difflib import get_close_matches
 from pathlib import Path
 
+import typer
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import FileHistory
@@ -24,11 +26,14 @@ from rich.syntax import Syntax
 from relaycli.agent import Agent
 from relaycli.config import CONFIG_DIR, PermissionMode, Settings, ensure_config_dir
 from relaycli.context import ProjectContext
+from relaycli.intent import local_reply_for
 from relaycli.llm import is_warm, key_status, preflight_settings
 from relaycli.permissions import PermissionManager
 from relaycli.render import (
     RichReporter,
+    render_local_reply,
     render_help,
+    render_slash_guide,
     render_setup_panel,
     render_task_summary,
     render_welcome,
@@ -48,6 +53,10 @@ SLASH_COMMANDS: dict[str, tuple[str, str]] = {
     "skills": ("", "list available skills (● = active)"),
     "config": ("", "roles, per-role models & provider keys (persistent)"),
     "settings": ("", "general preferences (mode, theme, context)"),
+    "setup": ("", "guided setup: model, keys, and optional services"),
+    "init": ("", "alias of /setup"),
+    "services": ("[start names]", "show/start ollama, web, postgres, n8n"),
+    "doctor": ("", "run a local health check"),
     "memory": ("", "show long-term memory (global + project)"),
     "desktop": ("", "open the desktop web UI in your browser"),
     "mcp": ("", "show MCP connectors and their tools"),
@@ -64,6 +73,7 @@ _ARG_COMPLETIONS: dict[str, tuple[str, ...]] = {
     "mode": ("suggest", "auto-edit", "full-auto"),
     "relay": ("on", "off"),
     "agents": ("explorer", "tester", "tasks"),
+    "services": ("start", "ollama", "web", "postgres", "n8n"),
     "model": (
         "gpt-4o",
         "gpt-4o-mini",
@@ -274,6 +284,7 @@ class Repl:
             str(self.permissions.mode),
             relay,
             "/help",
+            "type /",
         )
         return " " + " · ".join(parts) + " "
 
@@ -334,6 +345,10 @@ class Repl:
             return False
         if lowered in ("exit", "quit"):
             return True
+        reply = local_reply_for(line)
+        if reply is not None:
+            render_local_reply(self.console, reply)
+            return False
         self._run_agent(line)
         return False
 
@@ -461,10 +476,14 @@ class Repl:
         cmd = parts[0].lower() if parts else ""
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        if cmd in ("exit", "quit"):
+        if not cmd:
+            render_slash_guide(self.console)
+        elif cmd in ("exit", "quit"):
             return True
-        if cmd == "help":
+        elif cmd == "help":
             render_help(self.console)
+        elif cmd in ("setup", "init"):
+            self._cmd_setup()
         elif cmd == "model":
             self._cmd_model(arg)
         elif cmd == "mode":
@@ -483,6 +502,10 @@ class Repl:
         elif cmd == "settings":
             from relaycli.config_menu import run_settings
             run_settings(self.console)
+        elif cmd == "services":
+            self._cmd_services(arg)
+        elif cmd == "doctor":
+            self._cmd_doctor()
         elif cmd == "memory":
             self._cmd_memory()
         elif cmd == "desktop":
@@ -495,8 +518,73 @@ class Repl:
             self.agent.session.reset()
             self.console.print("[dim]conversation cleared.[/dim]")
         else:
-            self.console.print(f"[red]Unknown command:[/red] /{cmd}  (try /help)")
+            suggestion = get_close_matches(cmd, SLASH_COMMANDS, n=1, cutoff=0.55)
+            hint = f" Did you mean [cyan]/{suggestion[0]}[/cyan]?" if suggestion else ""
+            self.console.print(
+                f"[red]Unknown command:[/red] /{escape(cmd)}.{hint} "
+                "[dim]Type / to browse commands.[/dim]"
+            )
         return False
+
+    def _cmd_setup(self) -> None:
+        from relaycli.onboarding import run_init
+
+        try:
+            run_init(console=self.console)
+        except typer.Exit as exc:
+            if exc.exit_code:
+                self.console.print("[dim]setup cancelled.[/dim]")
+            return
+
+        from relaycli.config import reload_settings
+
+        fresh = reload_settings()
+        self.settings.model = fresh.model
+        self.settings.permission_mode = fresh.permission_mode
+        self.permissions.set_mode(fresh.permission_mode)
+        self.agent.session.model = fresh.model
+        self.agent.refresh_system_prompt()
+        self.console.print("[dim]setup applied to this session.[/dim]")
+
+    def _cmd_doctor(self) -> None:
+        from relaycli.doctor import render_checks, run_checks
+
+        checks = run_checks(self.settings, self.project.root, live=False)
+        render_checks(self.console, checks)
+
+    def _cmd_services(self, arg: str) -> None:
+        from rich.table import Table
+        from relaycli.onboarding import (
+            SERVICE_DESCRIPTIONS,
+            normalize_services,
+            start_services,
+        )
+
+        if not arg:
+            table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+            table.add_column("service", style="cyan", no_wrap=True)
+            table.add_column("what it adds")
+            for name, desc in SERVICE_DESCRIPTIONS.items():
+                table.add_row(name, desc)
+            self.console.print(table)
+            self.console.print(
+                "[dim]/services start ollama,n8n  · uses docker compose profiles[/dim]"
+            )
+            return
+        raw = arg.split(" ", 1)[1] if arg.startswith("start ") else arg
+        try:
+            services = normalize_services(raw.replace(" ", ","))
+        except typer.BadParameter as exc:
+            self.console.print(f"[red]{escape(str(exc))}[/red]")
+            return
+        if not services:
+            self.console.print("[dim]usage: /services start ollama,n8n[/dim]")
+            return
+        code = start_services(services, self.console)
+        if code == 0:
+            self.console.print(
+                f"[green]services started:[/green] {escape(', '.join(services))}"
+            )
 
     def _cmd_model(self, name: str) -> None:
         if not name:

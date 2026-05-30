@@ -60,11 +60,13 @@ def test_state_reports_session():
     }
     assert "ponytail" in state["skills"]
     assert state["busy"] is False
+    assert "onboarding" in state
+    assert "ready" in state["onboarding"]
 
 
 def test_send_runs_agent_and_records_events():
     session = WebSession(_settings(), llm=FakeLLM([_resp("Hello from the agent")]))
-    assert session.send("halo") is True
+    assert session.send("explain this repo") is True
     session._thread.join(timeout=30)
     kinds = [e["kind"] for e in session.events_since(0)]
     assert kinds[0] == "user"
@@ -77,9 +79,21 @@ def test_send_runs_agent_and_records_events():
     assert [e["n"] for e in session.events_since(0)] == list(range(len(kinds)))
 
 
+def test_send_greeting_returns_local_guide_without_thread():
+    session = WebSession(_settings(), llm=FakeLLM([_resp("should not run")]))
+    assert session.send("halo") is True
+    assert session._thread is None
+    events = session.events_since(0)
+    assert [e["kind"] for e in events] == ["user", "guide", "summary"]
+    assert events[1]["agent"] == "guide"
+    assert "siap bantu" in events[1]["text"]
+    assert events[2]["tokens"] == 0
+    assert events[2]["stopped"] == "done"
+
+
 def test_send_mode_override_and_suggest_note():
     session = WebSession(_settings(), llm=FakeLLM([_resp("ok")]))
-    session.send("halo", mode="suggest")
+    session.send("explain this repo", mode="suggest")
     session._thread.join(timeout=30)
     assert session.settings.permission_mode is PermissionMode.suggest
     assert any(e["kind"] == "note" for e in session.events_since(0))
@@ -101,7 +115,7 @@ def test_http_endpoints_roundtrip():
 
         req = urllib.request.Request(
             base + "/api/send", method="POST",
-            data=json.dumps({"text": "hi", "mode": "full-auto"}).encode(),
+            data=json.dumps({"text": "explain this repo", "mode": "full-auto"}).encode(),
             headers={"Content-Type": "application/json"},
         )
         assert json.loads(urllib.request.urlopen(req, timeout=5).read()) == {"ok": True}
@@ -260,7 +274,7 @@ def test_stop_halts_a_relay_run():
 
     session = WebSession(_settings(relay_enabled=True))
     session._llm = StoppingLLM(session)
-    session.send("do it")
+    session.send("run relay stop test")
     session._thread.join(timeout=30)
     assert not session.busy
     summary = [e for e in session.events_since(0) if e["kind"] == "summary"][-1]
@@ -450,8 +464,8 @@ def test_allow_hosts_extends_guard(monkeypatch, tmp_path):
 # ── fixes: TOCTOU busy-check, MCP + auto-skills wiring on the web surface ──
 def test_send_rejects_while_busy():
     session = WebSession(_settings(), llm=FakeLLM([_resp("ok")]))
-    assert session.send("first") is True
-    assert session.send("second") is False  # rejected while the first run is live
+    assert session.send("explain first task") is True
+    assert session.send("explain second task") is False  # rejected while the first run is live
     session._thread.join(timeout=30)
 
 
@@ -471,7 +485,7 @@ def test_send_concurrent_calls_start_at_most_one_run():
 
     def call():
         barrier.wait(timeout=5)
-        results.append(session.send("go"))
+        results.append(session.send("explain this repo"))
 
     threads = [threading.Thread(target=call) for _ in range(2)]
     for t in threads:
@@ -509,7 +523,7 @@ def test_web_run_wires_mcp_tools(monkeypatch, tmp_path):
     monkeypatch.setattr(agent_mod.Agent, "__init__", capture_init)
     try:
         session = WebSession(_settings(), llm=FakeLLM([_resp("ok")]))
-        session.send("halo")
+        session.send("explain tools")
         session._thread.join(timeout=30)
         assert captured["registry"] is not None
         assert "mcp_fake_echo" in captured["registry"].names()

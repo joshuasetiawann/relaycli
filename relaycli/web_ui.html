@@ -38,12 +38,12 @@
     box-shadow: 0 0 0 1px var(--border); overflow: hidden; }
 
   /* ── top bar ── */
-  .top { flex: 0 0 52px; display: flex; align-items: center; gap: 14px; padding: 0 16px;
+  .top { flex: 0 0 52px; display: flex; align-items: center; gap: 12px; padding: 0 16px;
     background: var(--raise); border-bottom: 1px solid var(--border); position: relative; z-index: 40; }
   .dots span { width: 12px; height: 12px; border-radius: 50%; display: inline-block; margin-right: 6px; }
   .logo { font-family: var(--mono); font-size: 14px; font-weight: 600; color: var(--t1); }
   .logo b { color: var(--accent); }
-  .proj { font-family: var(--mono); font-size: 12px; color: var(--t2); }
+  .proj { font-family: var(--mono); font-size: 12px; color: var(--t2); min-width: 0; max-width: 22vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; cursor: pointer;
     border: 1px solid var(--border); border-radius: 7px; background: var(--card);
     font-family: var(--mono); font-size: 11.5px; color: var(--t2); }
@@ -155,6 +155,16 @@
   .icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px;
     border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--t3); cursor: pointer; }
   .icon-btn:hover { border-color: #34353C; color: var(--t1); }
+  .setup-banner { margin: 12px 12px 0; padding: 10px 11px; border: 1px solid var(--border);
+    border-left: 2px solid var(--accent); border-radius: 8px; background: color-mix(in srgb, var(--accent) 8%, var(--well)); }
+  .setup-banner.hidden { display: none; }
+  .setup-banner.bad { border-left-color: var(--amber); background: color-mix(in srgb, var(--amber) 9%, var(--well)); }
+  .setup-banner .bt { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    font-family: var(--mono); font-size: 11px; color: var(--t1); }
+  .setup-banner .bs { margin-top: 5px; font-size: 11px; color: var(--t3); line-height: 1.45; }
+  .setup-banner button { margin-top: 9px; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--card); color: var(--t2); font-family: var(--mono); font-size: 10.5px; padding: 5px 8px; cursor: pointer; }
+  .setup-banner button:hover { border-color: #34353C; color: var(--t1); }
   .thread { flex: 1 1 auto; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 15px; }
   .msg { display: flex; flex-direction: column; gap: 5px; align-items: flex-start; }
   .msg.you { align-items: flex-end; }
@@ -189,15 +199,26 @@
      zoom/legend overlays (direct children of .canvas, not this) stay
      pinned to the corners instead of scrolling away with a tall stage. */
   .canvas-scroll { position: absolute; inset: 0; overflow: auto; display: flex;
-    align-items: safe center; justify-content: center; }
+    align-items: safe center; justify-content: center; padding: 24px; }
   .stage { position: relative; transform-origin: top center; display: flex; flex-direction: column;
-    width: 356px; padding: 28px 0; }
+    width: clamp(360px, 50vw, 620px); padding: 26px 24px 30px; }
+  .stage::before { content: ""; position: absolute; left: 41px; top: 84px; bottom: 76px; width: 1px;
+    background: linear-gradient(to bottom, transparent, #30313A 12%, #30313A 88%, transparent);
+    opacity: .7; pointer-events: none; }
   .hint { align-self: center; margin-bottom: 18px; padding: 5px 12px; border: 1px solid var(--border);
     border-radius: 999px; background: var(--card); font-family: var(--mono); font-size: 10.5px;
     color: var(--t3); }
   .hint b { color: var(--accent); font-weight: 500; }
 
-  .st { display: flex; gap: 13px; }
+  .st { position: relative; display: flex; gap: 14px; min-height: 76px; --lane-shift: 0px; }
+  .st.lane1 { --lane-shift: 30px; }
+  .st.lane2 { --lane-shift: -10px; }
+  .st.orch { --lane-shift: -18px; }
+  .st::after { content: ""; position: absolute; left: 35px; top: 50%; width: 42px; height: 1px;
+    background: #2E2F36; transform: translateY(-50%); opacity: .85; pointer-events: none; }
+  .st.active::after { height: 2px; background: linear-gradient(90deg, var(--accent), transparent);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 65%, transparent); }
+  .st.done::after { background: color-mix(in srgb, var(--green) 48%, #2E2F36); }
   .st .rail { flex: 0 0 34px; display: flex; flex-direction: column; align-items: center; }
   .seg { width: 2px; flex: 1 1 12px; min-height: 12px; background: repeating-linear-gradient(
     to bottom, #2E2F36 0 4px, transparent 4px 9px); }
@@ -209,7 +230,7 @@
     .9s linear infinite; }
   @keyframes railflow { to { background-position-y: 20px; } }
 
-  .ring { position: relative; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%;
+  .ring { position: relative; z-index: 2; flex: 0 0 auto; width: 34px; height: 34px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
     background: var(--raise); border: 1.5px solid var(--border);
     color: var(--t3); font-family: var(--mono); font-size: 14px;
@@ -222,13 +243,21 @@
   .st.err .ring { border-color: color-mix(in srgb, var(--red) 60%, var(--border)); color: var(--red); }
   .st.orch .ring { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--accent); }
 
-  .scard { flex: 1; min-width: 0; margin: 4px 0; padding: 9px 12px 10px; background: var(--raise);
-    border: 1px solid var(--border); border-radius: 11px;
-    transition: border-color .3s, box-shadow .3s, opacity .3s; }
+  .scard { position: relative; z-index: 1; flex: 1; min-width: 0; margin: 4px 0; padding: 10px 13px 11px;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--raise) 94%, #fff), var(--raise));
+    border: 1px solid var(--border); border-radius: 8px; transform: translateX(var(--lane-shift));
+    transition: border-color .3s, box-shadow .3s, opacity .3s, transform .3s; }
+  .scard::before { content: ""; position: absolute; left: -7px; top: 50%; width: 6px; height: 6px;
+    border-radius: 50%; background: #383942; transform: translateY(-50%); }
   .st.active .scard { border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
-    box-shadow: 0 0 28px -8px color-mix(in srgb, var(--accent) 45%, transparent); }
+    box-shadow: 0 0 30px -8px color-mix(in srgb, var(--accent) 55%, transparent),
+      inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent); }
+  .st.active .scard::before { background: var(--accent);
+    box-shadow: 0 0 16px color-mix(in srgb, var(--accent) 80%, transparent); }
   .st.done .scard { border-color: color-mix(in srgb, var(--green) 30%, var(--border)); }
+  .st.done .scard::before { background: var(--green); }
   .st.err .scard { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+  .st.err .scard::before { background: var(--red); }
   .st.dim .scard, .st.dim .ring { opacity: .5; }
   .st.orch .scard { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); }
   .shead { display: flex; align-items: baseline; gap: 8px; }
@@ -244,14 +273,14 @@
   .ssteps { float: right; font-family: var(--mono); font-size: 9.5px; color: var(--t5); margin-left: 8px; }
 
   /* specialists branch onto an indented sub-lane with elbow connectors */
-  .st.branch { margin-left: 30px; }
+  .st.branch { margin-left: 42px; --lane-shift: 0px; }
   .st.branch .rail { position: relative; }
-  .elbow { position: relative; height: 16px; margin-left: 30px; }
-  /* The horizontal arm must span the full 30px gap between the main rail's
+  .elbow { position: relative; height: 18px; margin-left: 42px; }
+  /* The horizontal arm must span the full 42px gap between the main rail's
      center and the branch rail's center (both rails are 34px wide, so their
      centers sit 17px into their own box — the only difference between them
-     is this 30px margin-left shift). */
-  .elbow::before { content: ""; position: absolute; left: -13px; top: -2px; width: 30px; height: 16px;
+     is this 42px margin-left shift). */
+  .elbow::before { content: ""; position: absolute; left: -24px; top: -2px; width: 42px; height: 18px;
     border-left: 2px solid #2E2F36; border-bottom: 2px solid #2E2F36; border-bottom-left-radius: 10px; }
   .elbow.join::before { border-bottom: 0; border-top: 2px solid #2E2F36; border-bottom-left-radius: 0;
     border-top-left-radius: 10px; top: 2px; }
@@ -330,12 +359,19 @@
   .chev:hover { background: #1B1C22; color: var(--t1); }
   .chev svg { transition: transform .2s; }
   .term.collapsed .chev svg { transform: rotate(-90deg); }
-  .term-body { height: 190px; overflow-y: auto; padding: 8px 14px 10px; background: #08080B;
-    font-family: var(--mono); font-size: 11.5px; line-height: 1.66; }
+  .term-body { height: 190px; overflow-y: auto; padding: 10px 12px 12px; background: #08080B;
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.66; box-shadow: inset 0 1px 0 rgba(255,255,255,.025); }
   .term.collapsed .term-body { height: 0 !important; padding-top: 0; padding-bottom: 0; overflow: hidden; }
-  .line { display: flex; gap: 12px; padding: 1px 0; }
-  .line:hover { background: rgba(255,255,255,.02); }
-  .line .tag { flex: 0 0 92px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--t4); }
+  .line { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 10px; padding: 2px 7px;
+    border-left: 2px solid transparent; border-radius: 6px; }
+  .line:hover { background: rgba(255,255,255,.025); }
+  .line.ok { border-left-color: color-mix(in srgb, var(--green) 55%, transparent);
+    background: color-mix(in srgb, var(--green) 5%, transparent); }
+  .line.warn { border-left-color: color-mix(in srgb, var(--amber) 60%, transparent);
+    background: color-mix(in srgb, var(--amber) 6%, transparent); }
+  .line.bad { border-left-color: color-mix(in srgb, var(--red) 60%, transparent);
+    background: color-mix(in srgb, var(--red) 6%, transparent); }
+  .line .tag { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--t4); font-size: 10.5px; }
   .line .tag.hot { color: var(--accent); }
   .line .m { color: #A9AAB1; word-break: break-word; white-space: pre-wrap; }
   .line .m .dim { color: var(--t4); }
@@ -350,6 +386,23 @@
   .a34{color:#5B8AFF}.a35{color:#C678DD}.a36{color:#3BB8C3}.a37{color:#C9CAD0}
   .a90{color:#6E6F77}.a91{color:#FF7A72}.a92{color:#5FCE77}.a93{color:#F2C14E}
   .a94{color:#7FA5FF}.a95{color:#D89AEC}.a96{color:#5FD2DC}.a97{color:#EDEDEF}
+  @media (max-width: 980px) {
+    .top { flex-wrap: wrap; min-height: 86px; height: auto; padding: 8px 10px; align-content: center; }
+    .dots { display: none; }
+    .proj { max-width: 34vw; }
+    .modes { order: 8; margin-left: 0; width: 100%; }
+    .modes button { flex: 1; width: auto; }
+    .chat { flex-basis: 300px; width: 300px; }
+    .side { flex-basis: 280px; width: 280px; }
+  }
+  @media (max-width: 760px) {
+    .main { flex-direction: column; }
+    .chat, .side { width: 100%; flex: 0 0 auto; max-height: 34vh; border-left: 0; border-right: 0; }
+    .canvas { min-height: 360px; }
+    .canvas-scroll { justify-content: flex-start; padding: 16px; }
+    .stage { width: clamp(320px, calc(100vw - 32px), 560px); padding-left: 10px; padding-right: 10px; }
+    .legend { display: none; }
+  }
   .ab{font-weight:600}
 </style>
 </head>
@@ -445,6 +498,7 @@
           <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg>
         </button>
       </div>
+      <div class="setup-banner hidden" id="setupBanner"><div class="bt"><span id="setupTitle"></span><span id="setupState"></span></div><div class="bs" id="setupBody"></div><button id="setupCopy">copy init command</button></div>
       <div class="thread" id="thread"></div>
       <div class="composer">
         <div class="box">
@@ -576,6 +630,29 @@ async function setCustom() {
 $("customSet").onclick = setCustom;
 $("customModel").addEventListener("keydown", (e) => { if (e.key === "Enter") setCustom(); });
 renderProvChips();
+
+function renderSetupBanner() {
+  const box = $("setupBanner"); if (!box || !state) return;
+  const ob = state.onboarding || {};
+  const problem = ob.preflight || ob.tool_warning || "";
+  const local = ob.ollama_model || "";
+  const show = !!problem || !!local;
+  box.classList.toggle("hidden", !show);
+  if (!show) return;
+  box.classList.toggle("bad", !!problem);
+  $("setupTitle").textContent = problem ? "setup attention" : "local model ready";
+  $("setupState").textContent = local ? short(local) : "init";
+  const bits = [];
+  if (problem) bits.push(problem);
+  if (local) bits.push("Ollama at " + (ob.ollama_host || "localhost:11434") + " can use " + local + ".");
+  bits.push("For a guided setup, run relaycli init in the terminal.");
+  $("setupBody").textContent = bits.join(" ");
+  $("setupCopy").onclick = async () => {
+    const cmd = local ? `relaycli init --model ${local} --yes` : "relaycli init";
+    try { await navigator.clipboard.writeText(cmd); addLog("setup", "copied: " + cmd); }
+    catch (e) { addLog("setup", cmd); }
+  };
+}
 
 function renderModels() {
   const models = state.models || [];
@@ -779,7 +856,7 @@ function renderFlow() {
     const prevSpec = i > 0 && rows[i - 1].spec;
     const fork = row.spec && !prevSpec ? `<div class="elbow"></div>` : "";
     const join = !row.spec && prevSpec ? `<div class="elbow join"></div>` : "";
-    return fork + join + `<div class="st ${cls} ${row.orch ? "orch" : ""} ${row.spec ? "branch" : ""}">` +
+    return fork + join + `<div class="st ${cls} ${row.orch ? "orch" : ""} ${row.spec ? "branch" : ""} lane${i % 3}">` +
       `<div class="rail"><i class="seg ${segTop}"></i><span class="ring">${esc(glyph)}</span>` +
       `<i class="seg ${segBot}"></i></div>` +
       `<div class="scard"><div class="shead"><span class="sname">${esc(row.name)}</span>${chip}</div>` +
@@ -835,7 +912,7 @@ function addLog(tag, msg, cls) {
   const log = $("log");
   const pinned = logPinned();
   const el = document.createElement("div");
-  el.className = "line";
+  el.className = "line" + (cls ? " " + cls : "");
   el.innerHTML = `<span class="tag ${tag === "you" ? "hot" : ""}">[${esc(tag)}]</span>` +
     `<span class="m ${cls || ""}">${ansiToHtml(msg)}</span>`;
   log.appendChild(el);
@@ -889,6 +966,9 @@ function handle(ev) {
   } else if (ev.kind === "text") {
     status[ev.agent] = "active"; addMsg("", ev.agent, ev.text);
     addLog(ev.agent, ev.text.split("\n")[0].slice(0, 140));
+  } else if (ev.kind === "guide") {
+    addMsg("", ev.agent || "guide", ev.text);
+    addLog("guide", ev.text.split("\n")[0].slice(0, 140), "ok");
   } else if (ev.kind === "tool") {
     status[ev.agent] = "active"; activity[ev.agent] = ev.summary;
     steps[ev.agent] = (steps[ev.agent] || 0) + 1;
@@ -926,7 +1006,7 @@ async function loadState() {
   $("stModel").textContent = state.model_short;
   mode = state.mode;
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.m === mode);
-  renderModels(); renderConfig(); renderSettings(); renderCards(); renderFlow();
+  renderModels(); renderSetupBanner(); renderConfig(); renderSettings(); renderCards(); renderFlow();
 }
 
 // poll() must start regardless of whether the FIRST loadState() succeeds —

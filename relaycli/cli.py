@@ -55,6 +55,9 @@ def _apply_overrides(settings: Settings, model: str | None, mode: str | None) ->
 @app.callback(invoke_without_command=True)
 def main(
     ctx: typer.Context,
+    show_version: bool = typer.Option(
+        False, "--version", help="Print the RelayCLI version and exit."
+    ),
     prompt: str = typer.Option(
         None, "-p", "--prompt", help="Run a single request non-interactively and exit."
     ),
@@ -72,6 +75,10 @@ def main(
     ),
 ) -> None:
     """Launch the REPL, or run a one-shot request with -p."""
+    if show_version:
+        console.print(f"relaycli {__version__}")
+        raise typer.Exit()
+
     if ctx.invoked_subcommand is not None:
         return
 
@@ -94,14 +101,22 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     """Execute one agent loop and exit (the -p path)."""
     from relaycli.agent import Agent
     from relaycli.context import ProjectContext
+    from relaycli.intent import local_reply_for
     from relaycli.llm import key_status, preflight_settings
     from relaycli.permissions import PermissionManager
     from relaycli.render import (
         RichReporter,
+        render_local_reply,
+        render_model_warning,
         render_setup_panel,
         render_status_line,
         render_task_summary,
     )
+
+    reply = local_reply_for(request)
+    if reply is not None:
+        render_local_reply(console, reply)
+        return
 
     problem = preflight_settings(settings)
     if problem:
@@ -124,6 +139,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         skills_block = skills_prompt_block([skills[n] for n in auto_names])
 
     render_status_line(console, settings, project.root, key_status(settings))
+    render_model_warning(console, settings)
     if settings.permission_mode is PermissionMode.full_auto:
         console.print(
             "[bold yellow]⚠ full-auto:[/bold yellow] edits and commands run without asking."
@@ -178,6 +194,31 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     render_task_summary(console, result, reporter.tools_used)
     if result.stopped_reason == "error":
         raise typer.Exit(code=1)
+
+
+@app.command("init")
+def init_command(
+    model: str = typer.Option(
+        "auto", "--model", "-m", help="Model to save, or 'auto' to prefer detected Ollama/keys."
+    ),
+    mode: str = typer.Option(
+        None, "--mode", help="Permission mode: suggest | auto-edit | full-auto."
+    ),
+    services: str = typer.Option(
+        None, "--services", help="Comma-separated docker compose profiles: ollama,web,postgres,n8n."
+    ),
+    yes: bool = typer.Option(False, "-y", "--yes", help="Accept the detected setup."),
+    start_services: bool = typer.Option(
+        False, "--start-services", help="Run docker compose for selected services."
+    ),
+) -> None:
+    """Run the first-time setup wizard."""
+    from relaycli.onboarding import run_init
+
+    run_init(
+        console=console, model=model, mode=mode, services=services,
+        yes=yes, start=start_services,
+    )
 
 
 @app.command()

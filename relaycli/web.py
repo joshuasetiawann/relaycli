@@ -34,8 +34,9 @@ from rich.console import Console
 
 from relaycli.config import PermissionMode, Settings
 from relaycli.context import ProjectContext
+from relaycli.intent import local_reply_for
 from relaycli.llm import preflight_settings
-from relaycli.render import short_model_name
+from relaycli.render import friendly_error_text, short_model_name
 from relaycli.router import Role, resolve_model, role_enabled
 
 UI_PATH = Path(__file__).parent / "web_ui.html"
@@ -152,6 +153,7 @@ class WebSession:
                 for r in self.ROLES
             ],
             "providers": self._provider_status(),
+            "onboarding": self._onboarding_status(),
             # Roster specialists a task can be delegated to in task-split mode.
             "specialists": self._enabled_specialists(),
             # The full 16-role roster (from config.toml) for the Configuration
@@ -358,7 +360,25 @@ class WebSession:
             detected = (bool(getattr(self.settings, attr, None)) if attr
                         else bool(os.environ.get(env)))
             out.append({"id": pid, "label": label, "env": env, "detected": detected})
+        ollama = self._ollama_models()
+        out.append({
+            "id": "ollama", "label": "Ollama", "env": "OLLAMA_BASE_URL",
+            "detected": bool(ollama), "detail": f"{len(ollama)} local model(s)" if ollama else "not reachable",
+        })
         return out
+
+    def _onboarding_status(self) -> dict:
+        from relaycli.llm import best_ollama_model, ollama_host_label, tool_capability_warning
+
+        local = best_ollama_model(self.settings)
+        preflight = preflight_settings(self.settings)
+        return {
+            "preflight": preflight,
+            "ollama_host": ollama_host_label(self.settings),
+            "ollama_model": local,
+            "tool_warning": tool_capability_warning(self.settings.model),
+            "ready": preflight is None,
+        }
 
     def stop(self) -> None:
         """Ask the in-flight run to halt after its current step (idempotent)."""
@@ -390,6 +410,28 @@ class WebSession:
                     pass
             self._stop.clear()
             self._events.append({"n": len(self._events), "kind": "user", "text": text})
+            reply = local_reply_for(text)
+            if reply is not None:
+                self._events.append({
+                    "n": len(self._events),
+                    "kind": "guide",
+                    "agent": "guide",
+                    "text": reply.text,
+                    "reason": reply.reason,
+                })
+                self._events.append({
+                    "n": len(self._events),
+                    "kind": "summary",
+                    "stopped": "done",
+                    "verdict": None,
+                    "cycles": 0,
+                    "tasks": [],
+                    "tokens": 0,
+                    "cost": 0.0,
+                    "elapsed": 0.0,
+                    "text": "",
+                })
+                return True
             self._thread = threading.Thread(target=self._run, args=(text,), daemon=True)
             self._thread.start()
         return True
@@ -433,7 +475,8 @@ class WebSession:
                          verdict=result.verdict, cycles=result.cycles,
                          tasks=result.tasks, tokens=result.usage.total_tokens,
                          cost=result.usage.cost_usd, elapsed=round(result.elapsed, 1),
-                         text=result.final_text if result.stopped_reason != "done" else "")
+                         text=(friendly_error_text(result.final_text)
+                               if result.stopped_reason != "done" else ""))
             else:
                 agent = Agent(self.settings, console=console, project=self.project,
                               permissions=permissions, should_stop=self._stop.is_set,
@@ -449,7 +492,8 @@ class WebSession:
                          verdict=None, cycles=0, tasks=[],
                          tokens=result.usage.total_tokens,
                          cost=result.usage.cost_usd, elapsed=round(result.elapsed, 1),
-                         text=result.final_text if result.stopped_reason != "done" else "")
+                         text=(friendly_error_text(result.final_text)
+                               if result.stopped_reason != "done" else ""))
         except Exception as exc:  # never kill the server thread silently
             self.add("error", text=f"{type(exc).__name__}: {exc}")
 

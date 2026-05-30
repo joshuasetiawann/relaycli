@@ -1,5 +1,5 @@
 # RelayCLI
-
+ 
 A provider-agnostic, installable **terminal coding agent** — the same form
 factor as Claude Code / OpenAI Codex CLI, but you choose the model. Install it
 once, then run `relaycli` in any project directory: it reads and edits the
@@ -47,8 +47,20 @@ interactive terminal session.
 
 ## Install
 
-Requires Python 3.12+ and `git`. Install isolated with `pipx` or `uv tool`
-(recommended), or into a virtualenv with `pip`.
+Requires Python 3.12+ and `git`.
+
+One-line install for new users:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/joshuasetiawann/relaycli/main/scripts/install.sh | sh
+```
+
+The installer clones RelayCLI, installs the `relaycli` command, then opens the
+guided setup. In that setup you can choose a model and optionally start local
+services such as Ollama, n8n, the web UI, or Postgres via Docker Compose.
+
+Manual install isolated with `pipx` or `uv tool` (recommended), or into a
+virtualenv with `pip`:
 
 ```bash
 git clone https://github.com/joshuasetiawann/relaycli.git
@@ -64,7 +76,8 @@ pip install -e .
 ```
 
 This puts a `relaycli` command on your PATH (with `pip`, only inside the
-activated virtualenv).
+activated virtualenv). For running tests from a checkout, install the dev extra:
+`pip install -e ".[dev]"`.
 
 ## Quick start
 
