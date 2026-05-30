@@ -140,9 +140,26 @@ def check_key_drift(settings: Settings, project_root: Path) -> Check:
         return Check("key drift", SKIP, str(exc))
 
 
+def check_ollama(settings: Settings) -> Check:
+    """Report whether a local Ollama server is reachable and has models."""
+    from relaycli.llm import best_ollama_model, ollama_host_label, ollama_models
+
+    models = ollama_models(settings)
+    if not models:
+        return Check(
+            "ollama", SKIP,
+            f"not reachable at {ollama_host_label(settings)} (optional; run `ollama serve`)"
+        )
+    best = best_ollama_model(settings) or f"ollama_chat/{models[0]}"
+    return Check(
+        "ollama", OK,
+        f"{len(models)} model(s) detected at {ollama_host_label(settings)}; suggested {best}"
+    )
+
+
 def check_models(settings: Settings) -> list[Check]:
     """Every model the session would use must resolve to a usable credential."""
-    from relaycli.llm import LLM
+    from relaycli.llm import LLM, tool_capability_warning
 
     llm = LLM(settings)
     models = [("model", settings.model)]
@@ -155,6 +172,8 @@ def check_models(settings: Settings) -> list[Check]:
         problem = llm.preflight(model)
         if problem:
             checks.append(Check(label, FAIL, problem))
+        elif warning := tool_capability_warning(model):
+            checks.append(Check(label, WARN, warning))
         else:
             checks.append(Check(label, OK, model))
     return checks
@@ -225,6 +244,7 @@ def run_checks(
         else Check("openrouter key", SKIP, "live check disabled (--offline)")
     )
     checks.append(check_key_drift(settings, project_root))
+    checks.append(check_ollama(settings))
     checks += check_models(settings)
     checks += check_writable_dirs(project_root)
     checks.append(check_mcp())

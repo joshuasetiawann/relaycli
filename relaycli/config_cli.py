@@ -100,6 +100,7 @@ def show() -> None:
 
 
 @config_app.command("set-model")
+@config_app.command("model")
 def set_model(role: str, model: str) -> None:
     """Assign a ROLE a concrete MODEL id or a tier name (fast|balanced|strong)."""
     _require_role(role)

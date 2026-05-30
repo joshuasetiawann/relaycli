@@ -13,6 +13,7 @@ from relaycli.doctor import (
     Check,
     check_config_perms,
     check_key_drift,
+    check_ollama,
     check_openrouter_key,
     check_writable_dirs,
     render_checks,
@@ -101,3 +102,21 @@ def test_openrouter_key_probe_non_json_response_does_not_crash():
 
     check = check_openrouter_key(s, prober=bad_prober)
     assert check.status == doctor.SKIP
+
+
+def test_ollama_check_detects_models(monkeypatch):
+    import relaycli.llm as llm
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings: ["qwen2.5-coder:7b", "llama3.1:8b"])
+    check = check_ollama(Settings())
+    assert check.status == doctor.OK
+    assert "llama3.1:8b" in check.detail
+
+
+def test_ollama_check_skips_when_unreachable(monkeypatch):
+    import relaycli.llm as llm
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings: [])
+    check = check_ollama(Settings())
+    assert check.status == doctor.SKIP
+    assert "ollama serve" in check.detail

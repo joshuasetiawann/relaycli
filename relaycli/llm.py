@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Sequence
+from urllib.parse import urlparse
 
 from relaycli.config import Settings, get_settings
 
@@ -63,6 +64,11 @@ _PROVIDER_KEY_ATTR: dict[str, str] = {
     "openrouter": "openrouter_api_key",
 }
 _KEYLESS_PROVIDERS = {"ollama", "ollama_chat"}
+_TOOL_CAPABLE_OLLAMA_HINTS = (
+    "llama3.1", "llama3.2", "llama3.3", "qwen3", "mistral", "granite3",
+    "devstral", "gpt-oss", "command-r",
+)
+_TOOL_RISK_OLLAMA_HINTS = ("qwen2.5-coder", "deepseek-coder", "codellama")
 
 # Model-id -> provider fast path for the no-network checks (preflight,
 # key_status). Deliberately tiny and permissive: anything unrecognized
@@ -148,6 +154,64 @@ def key_status(settings: Settings, model: str | None = None) -> str | None:
     if attr is None:
         return None
     return "detected" if getattr(settings, attr) else "missing"
+
+
+def ollama_models(settings: Settings, *, timeout: float = 0.5) -> list[str]:
+    """Return installed Ollama model names, or [] when Ollama is unreachable."""
+    import urllib.error
+    import urllib.request
+
+    url = settings.ollama_base_url.rstrip("/") + "/api/tags"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (OSError, ValueError, urllib.error.URLError):
+        return []
+    names: list[str] = []
+    for entry in data.get("models", []):
+        name = entry.get("name")
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+    return names
+
+
+def best_ollama_model(settings: Settings) -> str | None:
+    """Pick the installed Ollama model most likely to support tool calls."""
+    models = ollama_models(settings)
+    if not models:
+        return None
+    lowered = [(name, name.lower()) for name in models]
+    for hint in _TOOL_CAPABLE_OLLAMA_HINTS:
+        for name, low in lowered:
+            if hint in low:
+                return f"ollama_chat/{name}"
+    return f"ollama_chat/{models[0]}"
+
+
+def ollama_host_label(settings: Settings) -> str:
+    parsed = urlparse(settings.ollama_base_url)
+    return parsed.netloc or settings.ollama_base_url
+
+
+def tool_capability_warning(model: str) -> str | None:
+    """Best-effort warning for local models often seen emitting fake tool JSON."""
+    provider = _resolve_provider(model)
+    if provider not in _KEYLESS_PROVIDERS:
+        return None
+    local = model.split("/", 1)[1].lower() if "/" in model else model.lower()
+    if any(h in local for h in _TOOL_RISK_OLLAMA_HINTS):
+        return (
+            f"Model '{model}' may write tool calls as plain text instead of "
+            "calling tools. Prefer llama3.1, qwen3, mistral, granite3, or run "
+            "`relaycli init` to pick a detected local model."
+        )
+    if not any(h in local for h in _TOOL_CAPABLE_OLLAMA_HINTS):
+        return (
+            f"Model '{model}' is local, but RelayCLI cannot recognize its "
+            "tool-calling capability. If tool use stalls, switch models with "
+            "`relaycli config model coder <model>` or `relaycli init`."
+        )
+    return None
 
 
 @dataclass
