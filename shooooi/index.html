@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shooooi Market</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Shooooi Market">
+        <span class="brand-mark">S</span>
+        <span>Shooooi</span>
+      </a>
+      <form class="search" id="searchForm">
+        <input id="searchInput" type="search" placeholder="Cari barang impian..." />
+        <button type="submit">Cari</button>
+      </form>
+      <button class="cart-button" id="cartButton" type="button">
+        Keranjang
+        <span id="cartCount">0</span>
+      </button>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Flash sale hari ini</p>
+          <h1>Shooooi Market</h1>
+          <p>Produk pilihan, voucher cepat, dan keranjang yang siap dipakai.</p>
+          <div class="hero-actions">
+            <a href="#products" class="primary-link">Belanja sekarang</a>
+            <span class="timer" id="saleTimer">00:00:00</span>
+          </div>
+        </div>
+        <div class="hero-media" aria-label="Promo produk pilihan"></div>
+      </section>
+
+      <section class="strip" aria-label="Keuntungan toko">
+        <div><strong>Gratis ongkir</strong><span>minimal Rp50rb</span></div>
+        <div><strong>Bayar aman</strong><span>simulasi checkout</span></div>
+        <div><strong>Voucher kilat</strong><span>diskon sampai 40%</span></div>
+        <div><strong>Produk lokal</strong><span>kurasi harian</span></div>
+      </section>
+
+      <section class="section-head">
+        <div>
+          <p class="eyebrow">Kategori</p>
+          <h2>Temukan yang kamu butuh</h2>
+        </div>
+        <div class="category-tabs" id="categoryTabs"></div>
+      </section>
+
+      <section class="product-grid" id="products" aria-live="polite"></section>
+    </main>
+
+    <aside class="cart-panel" id="cartPanel" aria-hidden="true">
+      <div class="cart-head">
+        <div>
+          <p class="eyebrow">Keranjang</p>
+          <h2>Pesanan kamu</h2>
+        </div>
+        <button class="icon-button" id="closeCart" type="button" aria-label="Tutup keranjang">x</button>
+      </div>
+      <div class="cart-items" id="cartItems"></div>
+      <div class="cart-summary">
+        <div><span>Subtotal</span><strong id="subtotal">Rp0</strong></div>
+        <div><span>Voucher</span><strong id="discount">-Rp0</strong></div>
+        <div class="total"><span>Total</span><strong id="total">Rp0</strong></div>
+        <button class="checkout" id="checkoutButton" type="button">Checkout</button>
+      </div>
+    </aside>
+    <div class="scrim" id="scrim"></div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

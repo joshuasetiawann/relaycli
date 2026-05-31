@@ -203,8 +203,17 @@ def test_best_ollama_model_prefers_tool_capable_hint(monkeypatch):
     assert best_ollama_model(Settings()) == "ollama_chat/llama3.1:8b"
 
 
+def test_best_ollama_model_prefers_qwen_coder_over_unknown_small_model(monkeypatch):
+    from relaycli.config import Settings
+    import relaycli.llm as llm
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings: ["smollm2:360m", "qwen2.5-coder:0.5b"])
+    assert best_ollama_model(Settings()) == "ollama_chat/qwen2.5-coder:0.5b"
+
+
 def test_tool_capability_warning_for_risky_local_model():
-    msg = tool_capability_warning("ollama_chat/qwen2.5-coder:7b")
+    msg = tool_capability_warning("ollama_chat/deepseek-coder:6.7b")
     assert msg is not None
     assert "plain text" in msg
+    assert tool_capability_warning("ollama_chat/qwen2.5-coder:0.5b") is None
     assert tool_capability_warning("ollama_chat/llama3.1:8b") is None

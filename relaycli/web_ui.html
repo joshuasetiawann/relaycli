@@ -56,7 +56,22 @@
   .menu.hidden { display: none; }
   .menu.mcol { display: flex; flex-direction: column; max-height: 74vh; padding: 0; overflow: hidden; }
   .menu.mcol.hidden { display: none; }
+  .model-tools { flex: 0 0 auto; padding: 8px; border-bottom: 1px solid var(--border2); background: #121318; }
+  .model-tools input { width: 100%; border: 1px solid var(--border); border-radius: 7px;
+    background: var(--well); color: var(--t1); font-family: var(--mono); font-size: 11.5px;
+    padding: 7px 9px; outline: none; }
+  .model-tools input:focus { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
+  .provider-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px;
+    padding: 8px; border-bottom: 1px solid var(--border2); }
+  .provider-grid button { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--card);
+    color: var(--t2); font-family: var(--mono); font-size: 10.5px; padding: 7px 8px; cursor: pointer; }
+  .provider-grid button.on { border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+    background: color-mix(in srgb, var(--accent) 12%, var(--card)); color: var(--t1); }
+  .provider-grid small { color: var(--t5); font-size: 9px; }
   #modelItems { overflow-y: auto; padding: 6px; }
+  #recentItems { padding: 6px; border-bottom: 1px solid var(--border2); }
+  .model-empty { padding: 18px 12px; color: var(--t4); font-size: 11.5px; text-align: center; }
   .menu .head { font-family: var(--mono); font-size: 9.5px; letter-spacing: 1.2px; color: var(--t4);
     text-transform: uppercase; padding: 8px 9px 6px; }
   .menu .head.grp { position: sticky; top: 0; background: #16171C; border-top: 1px solid var(--border2); margin-top: 2px; }
@@ -78,6 +93,8 @@
   .menu .item:hover { background: #1E1F27; }
   .menu .item .nm { font-family: var(--mono); font-size: 12px; color: var(--t1); flex: 1; }
   .menu .item .ds { font-size: 10.5px; color: var(--t4); }
+  .menu .item .src { font-family: var(--mono); font-size: 9px; color: var(--t5);
+    border: 1px solid var(--border2); border-radius: 999px; padding: 2px 6px; }
   .menu .item .ck { color: var(--accent); opacity: 0; }
   .menu .item.on .ck { opacity: 1; }
   .modes { margin-left: auto; display: flex; padding: 4px; background: var(--well);
@@ -420,6 +437,11 @@
         <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#6E6F77" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg>
       </button>
       <div class="menu mcol hidden" id="modelMenu">
+        <div id="recentItems"></div>
+        <div class="provider-grid" id="providerItems"></div>
+        <div class="model-tools">
+          <input id="modelQ" placeholder="search selected provider models" autocomplete="off">
+        </div>
         <div id="modelItems"></div>
         <div class="custom">
           <div class="h">Custom · any provider / model</div>
@@ -427,6 +449,11 @@
           <div class="crow">
             <input id="customModel" placeholder="e.g. groq/llama-3.3-70b-versatile" autocomplete="off">
             <button id="customSet">Set</button>
+          </div>
+          <div class="h" style="margin-top:10px">Ollama · pull local model</div>
+          <div class="crow">
+            <input id="ollamaModel" placeholder="qwen2.5-coder:0.5b" autocomplete="off">
+            <button id="ollamaPull">Pull</button>
           </div>
         </div>
       </div>
@@ -568,6 +595,8 @@ const ACCENTS = ["#2D5BFF", "#3FB950", "#E3A008", "#B060F0", "#F0554E"];
 let since = 0, mode = "auto-edit", busy = false, state = null;
 const activity = {}, status = {}, steps = {};
 let runStart = 0, elapsedTimer = null;
+let modelFilter = "";
+let selectedProvider = "";
 function stepsOf(name) { return steps[name] || 0; }
 
 // textContent->innerHTML escapes & < > but NOT quotes, and esc() output is
@@ -629,6 +658,22 @@ async function setCustom() {
 }
 $("customSet").onclick = setCustom;
 $("customModel").addEventListener("keydown", (e) => { if (e.key === "Enter") setCustom(); });
+$("modelQ").addEventListener("input", (e) => { modelFilter = e.target.value.trim().toLowerCase(); renderModels(); });
+async function pullOllama() {
+  const inp = $("ollamaModel");
+  const model = inp.value.trim(); if (!model) return;
+  const r = await api("/api/ollama/pull", { model });
+  let body = {};
+  try { body = await r.json(); } catch (e) {}
+  if (r.ok) {
+    inp.value = "";
+    addLog("ollama", "pull started: " + (body.model || model), "warn");
+  } else {
+    addLog("ollama", body.error || "pull failed", "bad");
+  }
+}
+$("ollamaPull").onclick = pullOllama;
+$("ollamaModel").addEventListener("keydown", (e) => { if (e.key === "Enter") pullOllama(); });
 renderProvChips();
 
 function renderSetupBanner() {
@@ -654,22 +699,65 @@ function renderSetupBanner() {
   };
 }
 
-function renderModels() {
-  const models = state.models || [];
-  let html = "", lastGroup = null;
-  models.forEach((m, i) => {
-    if (m.group !== lastGroup) { html += `<div class="head grp">${esc(m.group)}</div>`; lastGroup = m.group; }
-    html += `<button class="item ${m.current ? "on" : ""}" data-i="${i}">` +
-      `<span class="nm">${esc(m.name)}</span><span class="ds">${esc(m.desc)}</span>` +
-      `<span class="ck"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9 17.5 20 6.5"></path></svg></span></button>`;
-  });
-  $("modelItems").innerHTML = html;
-  for (const b of $("modelItems").querySelectorAll(".item")) b.onclick = async () => {
+function modelMatches(m, q) {
+    if (!q) return true;
+    return [m.id, m.name, m.desc, m.group, m.provider, m.source]
+      .join(" ").toLowerCase().includes(q);
+}
+function modelButton(m, i, prefix) {
+  return `<button class="item ${m.current ? "on" : ""}" data-i="${i}" data-src="${prefix}">` +
+    `<span class="nm">${esc(m.name)}</span><span class="ds">${esc(m.desc)}</span>` +
+    `<span class="src">${esc(m.source || "catalog")}</span>` +
+    `<span class="ck"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5 9 17.5 20 6.5"></path></svg></span></button>`;
+}
+function bindModelButtons(root, models) {
+  for (const b of root.querySelectorAll(".item")) b.onclick = async () => {
     const m = models[+b.dataset.i];
     await api("/api/model", { model: m.id });
     closeMenus(); await loadState();
     addLog("model", "switched to " + m.name);
   };
+}
+function renderModels() {
+  const all = state.models || [];
+  const recent = all.filter(m => m.group === "Recent");
+  const providers = [];
+  const seen = new Set();
+  all.filter(m => m.group !== "Recent" && m.group !== "Current").forEach(m => {
+    const key = m.provider || m.group;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    providers.push({ id: key, label: m.group || key, count: all.filter(x => x.provider === key && x.group !== "Recent").length });
+  });
+  if (!selectedProvider && providers.length) {
+    const current = all.find(m => m.current && m.provider);
+    selectedProvider = (current && current.provider) || providers[0].id;
+  }
+
+  $("recentItems").innerHTML = recent.length
+    ? `<div class="head grp">Recent</div>` + recent.map((m, i) => modelButton(m, i, "recent")).join("")
+    : "";
+  bindModelButtons($("recentItems"), recent);
+
+  $("providerItems").innerHTML = providers.map(p =>
+    `<button class="${p.id === selectedProvider ? "on" : ""}" data-p="${esc(p.id)}">` +
+    `<span>${esc(p.label)}</span><small>${p.count}</small></button>`
+  ).join("");
+  for (const b of $("providerItems").children) b.onclick = () => {
+    selectedProvider = b.dataset.p; modelFilter = ""; $("modelQ").value = ""; renderModels();
+  };
+
+  const q = modelFilter;
+  const models = all.filter(m =>
+    m.group !== "Recent" && m.group !== "Current" && m.provider === selectedProvider && modelMatches(m, q)
+  );
+  let html = "", lastGroup = null;
+  models.forEach((m, i) => {
+    if (m.group !== lastGroup) { html += `<div class="head grp">${esc(m.group)}</div>`; lastGroup = m.group; }
+    html += modelButton(m, i, "provider");
+  });
+  $("modelItems").innerHTML = html || `<div class="model-empty">pick a provider or adjust search</div>`;
+  bindModelButtons($("modelItems"), models);
 }
 
 // CONFIGURATION panel — pipeline, the roster (roles & models), providers & keys.
@@ -975,6 +1063,7 @@ function handle(ev) {
     addLog(ev.agent, ev.summary, ev.ok ? "" : "bad");
   } else if (ev.kind === "note") {
     addLog("note", ev.text, "warn");
+    if ((ev.text || "").startsWith("Ollama model installed:")) setTimeout(loadState, 400);
   } else if (ev.kind === "summary") {
     const p = ["■ " + ev.stopped];
     if (ev.verdict) p.push("verdict " + ev.verdict);
@@ -1034,7 +1123,7 @@ $("modes").addEventListener("click", (e) => {
 });
 $("stopBtn").onclick = async () => { await api("/api/stop", {}); addLog("note", "stop requested — halting after the current step", "warn"); };
 $("newBtn").onclick = async () => {
-  const r = await api("/api/reset", {});
+  const r = await api("/api/reset", { force: true });
   if ((await r.json()).ok) { $("thread").innerHTML = ""; since = 0;
     $("goal").innerHTML = '<span style="color:var(--t4)">no run yet</span>';
     for (const k in status) { delete status[k]; delete activity[k]; }

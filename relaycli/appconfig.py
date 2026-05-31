@@ -168,6 +168,33 @@ def save_app_config(cfg: AppConfig) -> None:
         pass
 
 
+def set_base_model(model: str, path: Path | None = None) -> None:
+    """Persist the flat runtime ``model`` key without disturbing sections."""
+    model = model.strip()
+    if not model:
+        raise ValueError("model id required")
+    cfg = load_app_config(path)
+    cfg._raw["model"] = model
+    recent = cfg._raw.get("recent_models")
+    if not isinstance(recent, list):
+        recent = []
+    cfg._raw["recent_models"] = [model, *[str(m) for m in recent if str(m) != model]][:8]
+    save_app_config(cfg)
+
+
+def recent_models(path: Path | None = None) -> list[str]:
+    """Most recently selected runtime models, newest first."""
+    raw = load_app_config(path)._raw.get("recent_models")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        model = str(item).strip()
+        if model and model not in out:
+            out.append(model)
+    return out
+
+
 # -- security helpers -----------------------------------------------------
 def mask_key(raw: str | None) -> str:
     """Display form for a stored key: env-ref shown, literal masked, never raw."""

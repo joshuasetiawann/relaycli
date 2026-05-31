@@ -20,11 +20,19 @@ def _no_ambient_config(monkeypatch, tmp_path):
     for var in list(os.environ):
         if var.startswith("RELAYCLI_"):
             monkeypatch.delenv(var, raising=False)
+    for var in (
+        "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+        "GROQ_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY",
+        "DASHSCOPE_API_KEY", "ZHIPUAI_API_KEY",
+    ):
+        monkeypatch.delenv(var, raising=False)
     monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no.toml"))
     # WebSession reads/writes the roster via appconfig — keep it hermetic so
     # tests never touch the real ~/.relaycli/config.toml.
     from relaycli import appconfig
+    from relaycli import model_catalog
     monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
+    model_catalog._LIVE_CACHE.clear()
     monkeypatch.chdir(tmp_path)
 
 
@@ -38,6 +46,20 @@ class FakeLLM:
         if on_token and resp.text:
             on_token(resp.text)
         return resp
+
+
+class RecordingLLM(FakeLLM):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.calls = []
+
+    def complete(self, messages, *, tools=None, model=None, temperature=None,
+                 stream=False, on_token=None):
+        self.calls.append(list(messages))
+        return super().complete(
+            messages, tools=tools, model=model, temperature=temperature,
+            stream=stream, on_token=on_token,
+        )
 
 
 def _settings(**kw) -> Settings:
@@ -89,6 +111,47 @@ def test_send_greeting_returns_local_guide_without_thread():
     assert "siap bantu" in events[1]["text"]
     assert events[2]["tokens"] == 0
     assert events[2]["stopped"] == "done"
+
+
+def test_send_permissive_followup_carries_previous_request():
+    llm = RecordingLLM([
+        _resp("I need clarification."),
+        _resp("Created the shop."),
+    ])
+    session = WebSession(_settings(), llm=llm)
+
+    first = "buatkan saya web toko kaya shope, di folder baru namanya shooooi"
+    assert session.send(first) is True
+    session._thread.join(timeout=30)
+
+    assert session.send("apa aja, buat di folder baru ya") is True
+    session._thread.join(timeout=30)
+
+    second_user = llm.calls[-1][-1]["content"]
+    assert "Original request:" in second_user
+    assert first in second_user
+    assert "reasonable defaults" in second_user
+    assert "shooooi" in second_user
+    assert any(
+        e["kind"] == "note" and "continuing the previous request" in e["text"]
+        for e in session.events_since(0)
+    )
+
+
+def test_pull_ollama_records_start_and_done(monkeypatch):
+    monkeypatch.setattr("relaycli.web.pull_ollama_model", lambda settings, model: model)
+    session = WebSession(_settings())
+
+    ok, model = session.pull_ollama("qwen2.5-coder:0.5b")
+
+    assert ok is True
+    assert model == "qwen2.5-coder:0.5b"
+    session._pull_thread.join(timeout=5)
+    texts = [e["text"] for e in session.events_since(0) if e["kind"] == "note"]
+    assert texts == [
+        "Ollama pull started: qwen2.5-coder:0.5b",
+        "Ollama model installed: qwen2.5-coder:0.5b",
+    ]
 
 
 def test_send_mode_override_and_suggest_note():
@@ -244,6 +307,22 @@ def test_reset_clears_events_when_idle():
     session = WebSession(_settings())
     session.add("user", text="hi")
     assert session.reset() is True
+    assert session.events_since(0) == []
+
+
+def test_force_reset_clears_busy_run_and_mutes_late_events():
+    import time as _time
+
+    class SlowLLM(FakeLLM):
+        def complete(self, *a, **kw):
+            _time.sleep(0.2)
+            return super().complete(*a, **kw)
+
+    session = WebSession(_settings(), llm=SlowLLM([_resp("late output")]))
+    assert session.send("explain this repo") is True
+    assert session.reset(force=True) is True
+    assert session.events_since(0) == []
+    session._thread.join(timeout=5)
     assert session.events_since(0) == []
 
 

@@ -29,6 +29,9 @@ def _no_ambient_config(monkeypatch, tmp_path):
         if var.startswith("RELAYCLI_"):
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no-config.toml"))
+    from relaycli import appconfig
+
+    monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "app-config.toml")
 
 
 def _repl(mode=PermissionMode.suggest, model="gpt-4o-mini"):
@@ -44,9 +47,45 @@ def _out(console) -> str:
 # --- slash commands ----------------------------------------------------
 def test_slash_model_switches_model():
     repl, console = _repl()
+    assert repl._handle_slash("/model gpt-4o") is False
+    assert repl.settings.model == "gpt-4o"
+    assert repl.agent.session.model == "gpt-4o"
+
+
+def test_slash_model_rejects_missing_installed_ollama_model(monkeypatch):
+    import relaycli.llm as llm
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen2.5-coder:0.5b"])
+    repl, console = _repl(model="ollama_chat/qwen2.5-coder:0.5b")
+
     assert repl._handle_slash("/model ollama_chat/llama3.1") is False
-    assert repl.settings.model == "ollama_chat/llama3.1"
-    assert repl.agent.session.model == "ollama_chat/llama3.1"
+
+    out = _out(console)
+    assert "not installed" in out
+    assert repl.settings.model == "ollama_chat/qwen2.5-coder:0.5b"
+
+
+def test_slash_model_lists_installed_ollama_models(monkeypatch):
+    import relaycli.llm as llm
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.5: ["qwen2.5-coder:0.5b"])
+    repl, console = _repl(model="ollama_chat/qwen2.5-coder:0.5b")
+
+    assert repl._handle_slash("/model") is False
+
+    out = _out(console)
+    assert "local Ollama" in out
+    assert "ollama_chat/qwen2.5-coder:0.5b" in out
+
+
+def test_slash_model_searches_catalog():
+    repl, console = _repl()
+
+    assert repl._handle_slash("/model search qwen") is False
+
+    out = _out(console)
+    assert "qwen" in out.lower()
+    assert "switch with" in out
 
 
 def test_slash_mode_switches_and_updates_system_prompt():
@@ -856,6 +895,6 @@ def test_repl_startup_silent_when_no_mcp_servers(monkeypatch):
 
 def test_render_model_warning_for_risky_local_model():
     console = Console(file=io.StringIO(), force_terminal=False, width=120)
-    render_model_warning(console, Settings(model="ollama_chat/qwen2.5-coder:7b"))
+    render_model_warning(console, Settings(model="ollama_chat/deepseek-coder:6.7b"))
     out = _out(console)
     assert "plain text" in out and "relaycli init" in out

@@ -43,6 +43,11 @@ else
   "$VENV_DIR/bin/python" -m pip install -e "$SRC_DIR"
   cat > "$BIN_DIR/relaycli" <<WRAP
 #!/usr/bin/env sh
+set -eu
+if ! "$VENV_DIR/bin/python" -c "import typer" >/dev/null 2>&1; then
+  "$VENV_DIR/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
+  "$VENV_DIR/bin/python" -m pip install -e "$SRC_DIR" >/dev/null
+fi
 exec "$VENV_DIR/bin/relaycli" "\$@"
 WRAP
   chmod +x "$BIN_DIR/relaycli"

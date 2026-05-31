@@ -45,7 +45,7 @@ from relaycli.render import (
 # Keep descriptions in step with render_help() — same commands, shorter text
 # (the popup gives each entry one line).
 SLASH_COMMANDS: dict[str, tuple[str, str]] = {
-    "model": ("[name]", "show or switch the model"),
+    "model": ("[name|search q]", "show, search, or switch the model"),
     "mode": ("[m]", "permission mode: suggest | auto-edit | full-auto"),
     "relay": ("[on|off]", "toggle the Planner → Coder → Reviewer pipeline"),
     "agents": ("[r on|off]", "show relay agents; toggle explorer/tester"),
@@ -587,12 +587,92 @@ class Repl:
             )
 
     def _cmd_model(self, name: str) -> None:
-        if not name:
+        from relaycli.llm import ollama_models
+        from relaycli.model_catalog import model_choices
+
+        arg = (name or "").strip()
+        if not arg:
             self.console.print(f"model: [green]{escape(self.settings.model)}[/green]")
+            installed = ollama_models(self.settings)
+            if installed:
+                self.console.print(
+                    "[dim]local Ollama:[/dim] " + escape(", ".join(
+                        f"ollama_chat/{m}" for m in installed[:8]
+                    ))
+                )
+            self.console.print(
+                "[dim]use: /model search <text> · /model provider <name> · "
+                "/model <exact-id>[/dim]"
+            )
             return
-        self.settings.model = name
+        if arg.startswith("search "):
+            query = arg.split(None, 1)[1].strip()
+            self._print_model_matches(model_choices(self.settings, query=query, timeout=0.35))
+            return
+        if arg.startswith("provider "):
+            provider = arg.split(None, 1)[1].strip()
+            self._print_model_matches(model_choices(
+                self.settings, provider_filter=provider, timeout=0.35,
+            ))
+            return
+        if arg in {"ollama", "local"}:
+            self._print_model_matches(model_choices(
+                self.settings, provider_filter="ollama", timeout=0.8,
+            ))
+            return
+
+        if arg.startswith(("ollama_chat/", "ollama/")):
+            local_name = arg.split("/", 1)[1]
+            installed = ollama_models(self.settings, timeout=0.8)
+            if installed and local_name not in installed:
+                self.console.print(
+                    f"[red]Ollama model not installed:[/red] {escape(local_name)}"
+                )
+                self.console.print(
+                    "[dim]installed: " + escape(", ".join(installed)) + "[/dim]"
+                )
+                self.console.print(
+                    f"[dim]install it with: relaycli config ollama-pull {escape(local_name)}[/dim]"
+                )
+                return
+
+        self.settings.model = arg
+        try:
+            from relaycli.appconfig import set_base_model
+
+            set_base_model(arg)
+        except Exception:
+            pass
         self.agent.refresh_system_prompt()  # keeps token counting + prompt in sync
-        self.console.print(f"model → [green]{escape(name)}[/green]")
+        self.console.print(f"model → [green]{escape(arg)}[/green]")
+        from relaycli.render import render_model_warning
+
+        render_model_warning(self.console, self.settings)
+
+    def _print_model_matches(self, rows: list[dict]) -> None:
+        from rich.table import Table
+
+        if not rows:
+            self.console.print("[yellow]No matching models.[/yellow]")
+            return
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("model")
+        table.add_column("provider", no_wrap=True)
+        table.add_column("source", no_wrap=True)
+        table.add_column("note")
+        for row in rows[:24]:
+            model = str(row["id"])
+            style = "green" if row.get("current") else None
+            table.add_row(
+                f"[{style}]{escape(model)}[/{style}]" if style else escape(model),
+                escape(str(row.get("provider") or row.get("group") or "")),
+                escape(str(row.get("source") or "")),
+                escape(str(row.get("desc") or "")),
+            )
+        self.console.print(table)
+        if len(rows) > 24:
+            self.console.print(f"[dim]{len(rows) - 24} more hidden; narrow with /model search <text>[/dim]")
+        self.console.print("[dim]switch with: /model <exact model id>[/dim]")
 
     def _cmd_mode(self, value: str) -> None:
         if not value:

@@ -20,6 +20,7 @@ spawned command's environment so a command cannot read them back.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Sequence
 from urllib.parse import urlparse
@@ -63,12 +64,21 @@ _PROVIDER_KEY_ATTR: dict[str, str] = {
     "mistral": "mistral_api_key",
     "openrouter": "openrouter_api_key",
 }
+_CONFIG_KEY_PROVIDERS = {
+    "openai", "anthropic", "gemini", "groq", "mistral", "openrouter",
+    "deepseek", "dashscope", "zhipu",
+}
+_PROVIDER_ENV_HINT: dict[str, str] = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "dashscope": "DASHSCOPE_API_KEY",
+    "zhipu": "ZHIPUAI_API_KEY",
+}
 _KEYLESS_PROVIDERS = {"ollama", "ollama_chat"}
 _TOOL_CAPABLE_OLLAMA_HINTS = (
-    "llama3.1", "llama3.2", "llama3.3", "qwen3", "mistral", "granite3",
+    "llama3.1", "llama3.2", "llama3.3", "qwen3", "qwen2.5-coder", "mistral", "granite3",
     "devstral", "gpt-oss", "command-r",
 )
-_TOOL_RISK_OLLAMA_HINTS = ("qwen2.5-coder", "deepseek-coder", "codellama")
+_TOOL_RISK_OLLAMA_HINTS = ("deepseek-coder", "codellama")
 
 # Model-id -> provider fast path for the no-network checks (preflight,
 # key_status). Deliberately tiny and permissive: anything unrecognized
@@ -77,7 +87,7 @@ _TOOL_RISK_OLLAMA_HINTS = ("qwen2.5-coder", "deepseek-coder", "codellama")
 # _PROVIDER_KEY_ATTR/_KEYLESS_PROVIDERS above.
 _PREFIX_PROVIDERS = {
     "openai", "anthropic", "gemini", "groq", "mistral", "openrouter",
-    "ollama", "ollama_chat",
+    "deepseek", "dashscope", "zhipu", "ollama", "ollama_chat",
 }
 _BARE_NAME_HINTS = (
     ("gpt-", "openai"),
@@ -116,6 +126,50 @@ def _missing_key_message(provider: str, model: str, attr: str) -> str:
     )
 
 
+def _missing_config_key_message(provider: str, model: str) -> str:
+    env = _PROVIDER_ENV_HINT.get(provider, f"{provider.upper()}_API_KEY")
+    return (
+        f"No API key configured for provider '{provider}' (model '{model}'). "
+        f"Set {env} in your environment / .env, or run: "
+        f"relaycli config set-key {provider} --env {env}"
+    )
+
+
+def _stored_provider_key(provider: str, *, include_standard_env: bool = False) -> str | None:
+    """Best-effort lookup for keys saved through `relaycli config set-key`.
+
+    For providers that have a Settings field, standard environment variables
+    have already been resolved by Settings. Reading them again here would make
+    an explicit constructor override (KEY=None in tests/embedding) ineffective.
+    Providers without a Settings field may still need appconfig's env-wins
+    behavior.
+    """
+    try:
+        from relaycli.appconfig import load_app_config, resolve_provider_key
+
+        cfg = load_app_config()
+        if include_standard_env:
+            return resolve_provider_key(cfg, provider)
+        stored = cfg.providers.get(provider)
+        if stored is None or not stored.api_key:
+            return None
+        if stored.api_key.startswith("env:"):
+            return os.environ.get(stored.api_key[4:])
+        return stored.api_key
+    except Exception:
+        return None
+
+
+def _settings_or_stored_key(settings: Settings, provider: str, attr: str | None) -> str | None:
+    if attr:
+        key = getattr(settings, attr)
+        if key:
+            return key
+    if provider in _CONFIG_KEY_PROVIDERS:
+        return _stored_provider_key(provider, include_standard_env=attr is None)
+    return None
+
+
 def preflight_settings(settings: Settings) -> str | None:
     """Preflight every model a session with ``settings`` would use.
 
@@ -151,9 +205,9 @@ def key_status(settings: Settings, model: str | None = None) -> str | None:
     if provider in _KEYLESS_PROVIDERS:
         return "not needed"
     attr = _PROVIDER_KEY_ATTR.get(provider)
-    if attr is None:
+    if attr is None and provider not in _CONFIG_KEY_PROVIDERS:
         return None
-    return "detected" if getattr(settings, attr) else "missing"
+    return "detected" if _settings_or_stored_key(settings, provider, attr) else "missing"
 
 
 def ollama_models(settings: Settings, *, timeout: float = 0.5) -> list[str]:
@@ -402,10 +456,16 @@ class LLM:
 
         attr = _PROVIDER_KEY_ATTR.get(provider)
         if attr is not None:
-            key = getattr(self.settings, attr)
+            key = _settings_or_stored_key(self.settings, provider, attr)
             if not key:
                 raise LLMError(_missing_key_message(provider, model, attr))
             return {"api_key": key}
+
+        key = _settings_or_stored_key(self.settings, provider, None)
+        if key:
+            return {"api_key": key}
+        if provider in _CONFIG_KEY_PROVIDERS:
+            raise LLMError(_missing_config_key_message(provider, model))
 
         # Provider we don't special-case: let LiteLLM read its own env var.
         return {}
@@ -426,8 +486,11 @@ class LLM:
         if provider in _KEYLESS_PROVIDERS:
             return None
         attr = _PROVIDER_KEY_ATTR.get(provider)
-        if attr is not None and not getattr(self.settings, attr):
+        if attr is not None and not _settings_or_stored_key(self.settings, provider, attr):
             return _missing_key_message(provider, model, attr)
+        if attr is None and provider in _CONFIG_KEY_PROVIDERS:
+            if not _settings_or_stored_key(self.settings, provider, None):
+                return _missing_config_key_message(provider, model)
         return None
 
     def _complete_blocking(self, call_args: dict[str, Any], model: str) -> LLMResponse:

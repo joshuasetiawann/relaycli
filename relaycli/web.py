@@ -34,8 +34,14 @@ from rich.console import Console
 
 from relaycli.config import PermissionMode, Settings
 from relaycli.context import ProjectContext
-from relaycli.intent import local_reply_for
+from relaycli.intent import continuation_for, local_reply_for
 from relaycli.llm import preflight_settings
+from relaycli.model_catalog import (
+    detected_ollama_models,
+    model_choices,
+    provider_key,
+    pull_ollama_model,
+)
 from relaycli.render import friendly_error_text, short_model_name
 from relaycli.router import Role, resolve_model, role_enabled
 
@@ -96,11 +102,16 @@ class WebSession:
         self._events: list[dict] = []
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
+        self._pull_thread: threading.Thread | None = None
+        self._muted_threads: set[int] = set()
         self._stop = threading.Event()
 
     # -- events ------------------------------------------------------------
     def add(self, kind: str, **data) -> None:
+        ident = threading.current_thread().ident
         with self._lock:
+            if ident in self._muted_threads:
+                return
             self._events.append({"n": len(self._events), "kind": kind, **data})
 
     def events_since(self, n: int) -> list[dict]:
@@ -110,6 +121,10 @@ class WebSession:
     @property
     def busy(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    @property
+    def pulling(self) -> bool:
+        return self._pull_thread is not None and self._pull_thread.is_alive()
 
     # -- state -------------------------------------------------------------
     def state(self) -> dict:
@@ -163,6 +178,7 @@ class WebSession:
             "mcp": self._mcp_status(),
             "preflight": preflight_settings(s),
             "busy": self.busy,
+            "ollama_pulling": self.pulling,
         }
 
     def _mcp_status(self) -> list[dict]:
@@ -201,107 +217,16 @@ class WebSession:
         save_app_config(cfg)
         return True
 
-    # The model catalog shown in the top-bar config menu, grouped by
-    # provider: six direct providers (2 each) plus OpenRouter (8, all
-    # open-weights so they work on the user's free tier). Ids are LiteLLM
-    # model ids; each needs its provider's API key set (except the
-    # :free OpenRouter ones, which still need OPENROUTER_API_KEY).
-    MODEL_CATALOG: tuple[tuple[str, tuple[tuple[str, str], ...]], ...] = (
-        ("GPT", (
-            ("gpt-4o", "OpenAI · flagship"),
-            ("gpt-4o-mini", "OpenAI · fast"),
-        )),
-        ("Gemini", (
-            ("gemini/gemini-1.5-pro", "Google · capable"),
-            ("gemini/gemini-1.5-flash", "Google · fast"),
-        )),
-        ("Claude", (
-            ("claude-3-5-sonnet-latest", "Anthropic · balanced"),
-            ("claude-3-5-haiku-latest", "Anthropic · fast"),
-        )),
-        ("DeepSeek", (
-            ("deepseek/deepseek-chat", "DeepSeek · V3"),
-            ("deepseek/deepseek-reasoner", "DeepSeek · R1"),
-        )),
-        ("Qwen", (
-            ("dashscope/qwen-max", "Alibaba · max"),
-            ("dashscope/qwen-plus", "Alibaba · plus"),
-        )),
-        ("GLM", (
-            ("zhipu/glm-4-plus", "Zhipu · plus"),
-            ("zhipu/glm-4-flash", "Zhipu · fast"),
-        )),
-        ("OpenRouter", (
-            ("openrouter/cohere/north-mini-code:free", "Cohere · free"),
-            ("openrouter/qwen/qwen3-coder:free", "Qwen coder · free"),
-            ("openrouter/openai/gpt-oss-120b:free", "GPT-OSS 120B · free"),
-            ("openrouter/meta-llama/llama-3.3-70b-instruct:free", "Llama 3.3 · free"),
-            ("openrouter/qwen/qwen3-next-80b-a3b-instruct:free", "Qwen3-Next · free"),
-            ("openrouter/deepseek/deepseek-v4-flash", "DeepSeek V4 · paid"),
-            ("openrouter/z-ai/glm-4.7", "GLM 4.7 · paid"),
-            ("openrouter/moonshotai/kimi-k2.6", "Kimi K2.6 · paid"),
-        )),
-        # Ollama entries are the fallback when nothing is installed locally;
-        # _ollama_models() replaces them with the actually-pulled models when
-        # a local server answers.
-        ("Ollama", (
-            ("ollama_chat/llama3.1", "local · needs `ollama pull`"),
-            ("ollama_chat/qwen2.5-coder", "local · needs `ollama pull`"),
-        )),
-    )
-
-    def _ollama_models(self) -> list[tuple[str, str]]:
-        """Models actually installed on the local Ollama server (best effort).
-
-        A short timeout keeps state() snappy; any failure (no server, refused)
-        falls back to the catalog defaults. No key needed — Ollama is local.
-        """
-        import json as _json
-        import urllib.request
-
-        url = self.settings.ollama_base_url.rstrip("/") + "/api/tags"
-        try:
-            with urllib.request.urlopen(url, timeout=0.5) as resp:
-                data = _json.loads(resp.read())
-        except Exception:
-            return []
-        models = []
-        for entry in data.get("models", []):
-            name = entry.get("name")
-            if name:
-                models.append((f"ollama_chat/{name}", "local · installed"))
-        return models
-
     def _model_choices(self) -> list[dict]:
-        """Flat catalog for the config menu, tagged with a provider group.
-
-        The current model is always present: if it is not one of the
-        curated ids it is surfaced under a leading 'Current' group.
-        """
-        out: list[dict] = []
-        known = {mid for _, models in self.MODEL_CATALOG for mid, _ in models}
-        if self.settings.model not in known:
-            out.append({
-                "id": self.settings.model, "name": short_model_name(self.settings.model),
-                "desc": "in use", "group": "Current", "current": True,
-            })
-        for group, models in self.MODEL_CATALOG:
-            entries = models
-            if group == "Ollama":
-                detected = self._ollama_models()
-                if detected:
-                    entries = detected
-            for mid, desc in entries:
-                out.append({
-                    "id": mid, "name": short_model_name(mid), "desc": desc,
-                    "group": group, "current": mid == self.settings.model,
-                })
-        return out
+        return model_choices(self.settings, current=self.settings.model)
 
     def set_model(self, model: str) -> None:
         model = (model or "").strip()
         if model:
             self.settings.model = model
+            from relaycli.appconfig import set_base_model
+
+            set_base_model(model)
 
     def set_flag(self, name: str, value: bool) -> bool:
         """Toggle a boolean session setting from the UI. Returns True if known."""
@@ -351,21 +276,52 @@ class WebSession:
                 os.environ[env] = key
             else:
                 os.environ.pop(env, None)
+            from relaycli.appconfig import ProviderConfig, load_app_config, save_app_config
+
+            cfg = load_app_config()
+            pc = cfg.providers.get(pid) or ProviderConfig()
+            pc.api_key = key or None
+            cfg.providers[pid] = pc
+            save_app_config(cfg)
             return True
         return False
 
     def _provider_status(self) -> list[dict]:
         out = []
         for pid, label, attr, env in self.PROVIDERS:
-            detected = (bool(getattr(self.settings, attr, None)) if attr
-                        else bool(os.environ.get(env)))
+            detected = bool(provider_key(self.settings, pid))
             out.append({"id": pid, "label": label, "env": env, "detected": detected})
-        ollama = self._ollama_models()
+        ollama = detected_ollama_models(self.settings)
         out.append({
             "id": "ollama", "label": "Ollama", "env": "OLLAMA_BASE_URL",
             "detected": bool(ollama), "detail": f"{len(ollama)} local model(s)" if ollama else "not reachable",
         })
         return out
+
+    def pull_ollama(self, model: str) -> tuple[bool, str]:
+        model = (model or "").strip()
+        if not model:
+            return False, "Ollama model name required."
+        with self._lock:
+            if self.pulling:
+                return False, "an Ollama pull is already running"
+            self._events.append({
+                "n": len(self._events),
+                "kind": "note",
+                "text": f"Ollama pull started: {model}",
+            })
+            self._pull_thread = threading.Thread(
+                target=self._pull_ollama_worker, args=(model,), daemon=True
+            )
+            self._pull_thread.start()
+        return True, model
+
+    def _pull_ollama_worker(self, model: str) -> None:
+        try:
+            name = pull_ollama_model(self.settings, model)
+            self.add("note", text=f"Ollama model installed: {name}")
+        except Exception as exc:
+            self.add("error", text=f"Ollama pull failed: {exc}")
 
     def _onboarding_status(self) -> dict:
         from relaycli.llm import best_ollama_model, ollama_host_label, tool_capability_warning
@@ -384,11 +340,19 @@ class WebSession:
         """Ask the in-flight run to halt after its current step (idempotent)."""
         self._stop.set()
 
-    def reset(self) -> bool:
-        """Clear the event log for a new chat (refused while a run is live)."""
+    def reset(self, *, force: bool = False) -> bool:
+        """Clear the event log for a new chat.
+
+        A force reset asks the current run to stop and mutes that worker's
+        late events so the old run cannot spill back into the fresh chat view.
+        """
         with self._lock:
             if self.busy:
-                return False
+                if not force:
+                    return False
+                self._stop.set()
+                if self._thread and self._thread.ident is not None:
+                    self._muted_threads.add(self._thread.ident)
             self._events.clear()
         return True
 
@@ -408,9 +372,11 @@ class WebSession:
                     self.settings.permission_mode = PermissionMode(mode)
                 except ValueError:
                     pass
+            previous = self._last_actionable_user_text()
+            run_text = continuation_for(text, previous) or text
             self._stop.clear()
             self._events.append({"n": len(self._events), "kind": "user", "text": text})
-            reply = local_reply_for(text)
+            reply = None if run_text != text else local_reply_for(text)
             if reply is not None:
                 self._events.append({
                     "n": len(self._events),
@@ -432,9 +398,26 @@ class WebSession:
                     "text": "",
                 })
                 return True
-            self._thread = threading.Thread(target=self._run, args=(text,), daemon=True)
+            if run_text != text:
+                self._events.append({
+                    "n": len(self._events),
+                    "kind": "note",
+                    "text": "continuing the previous request with your follow-up",
+                })
+            self._thread = threading.Thread(target=self._run, args=(run_text,), daemon=True)
             self._thread.start()
         return True
+
+    def _last_actionable_user_text(self) -> str | None:
+        """Return the latest user request that was substantial enough to run."""
+
+        for event in reversed(self._events):
+            if event.get("kind") != "user":
+                continue
+            text = (event.get("text") or "").strip()
+            if text and local_reply_for(text) is None:
+                return text
+        return None
 
     def _run(self, text: str) -> None:
         from relaycli.agent import Agent
@@ -464,6 +447,7 @@ class WebSession:
             if names:
                 self.add("note", text="auto-skill: " + ", ".join(names))
             skills_block = skills_prompt_block([skills[n] for n in names])
+        ident = threading.current_thread().ident
         try:
             if self.settings.relay_enabled:
                 relay = Relay(self.settings, console=console, project=self.project,
@@ -496,6 +480,10 @@ class WebSession:
                                if result.stopped_reason != "done" else ""))
         except Exception as exc:  # never kill the server thread silently
             self.add("error", text=f"{type(exc).__name__}: {exc}")
+        finally:
+            if ident is not None:
+                with self._lock:
+                    self._muted_threads.discard(ident)
 
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
@@ -574,7 +562,7 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
                 session.stop()
                 self._json({"ok": True})
             elif path == "/api/reset":
-                self._json({"ok": session.reset()})
+                self._json({"ok": session.reset(force=bool(data.get("force")))})
             elif path == "/api/model":
                 session.set_model(data.get("model") or "")
                 self._json({"ok": True, "model": session.settings.model})
@@ -591,6 +579,12 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
                 ok = session.set_roster(
                     data.get("role") or "", data.get("enabled"), data.get("model"))
                 self._json({"ok": ok}, status=200 if ok else 400)
+            elif path == "/api/ollama/pull":
+                ok, message = session.pull_ollama(data.get("model") or "")
+                self._json(
+                    {"ok": ok, "model": message} if ok else {"error": message},
+                    status=200 if ok else 409,
+                )
             elif path == "/api/send":
                 text = (data.get("text") or "").strip()
                 if not text:

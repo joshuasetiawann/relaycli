@@ -1,0 +1,5 @@
+This is an example text file in the new folder.
+
+It demonstrates basic file creation capabilities.
+
+You can modify this file as needed for your project.
