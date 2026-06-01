@@ -42,23 +42,17 @@ _BARE_ACTIONS = {
 _TOKEN_RE = re.compile(r"[a-z0-9_./-]+", re.IGNORECASE)
 
 _GUIDE_TEXT = (
-    "Siap, aku online di repo ini.\n"
-    "Pola cepat: aksi + target + hasil yang kamu mau.\n"
-    "Contoh siap pakai:\n"
-    "  /setup - setup model, API key, atau Ollama\n"
-    "  jelasin repo ini - ringkas arsitektur dan file penting\n"
-    "  fix error import typer - cari penyebab lalu patch\n"
-    "  buat web toko di folder shooooi - bikin file baru"
+    "Halo, aku siap bantu.\n"
+    "Ketik saja tujuanmu dengan bahasa bebas. Kalau ada file, folder, error, "
+    "atau hasil akhir yang kamu mau, sebutkan sekalian supaya aku bisa langsung "
+    "baca konteks, edit, lalu test."
 )
 
 _VAGUE_TEXT = (
-    "Aku hampir paham, tapi targetnya masih terlalu tipis.\n"
-    "Pakai salah satu template ini:\n"
-    "  fix <error/log> di <file/fitur>\n"
-    "  buat <fitur> di <folder/file>\n"
-    "  jelasin <repo/file/komponen>\n"
-    "  test <bagian yang mau dicek>\n"
-    "Kalau cuma mau menu command, ketik `/`."
+    "Aku belum punya target yang bisa dikerjakan.\n"
+    "Tulis satu tujuan kecil dengan bahasa biasa: mau dibuat, dibenerin, "
+    "dijelaskan, dites, atau dijalankan di bagian mana. Kalau mau menu command, "
+    "ketik `/`."
 )
 
 _SLASH_TEXT = (
@@ -72,13 +66,10 @@ _SLASH_TEXT = (
 )
 
 _CAPABILITY_TEXT = (
-    "Aku bisa bantu kerja coding langsung di folder ini.\n"
-    "Yang paling berguna:\n"
-    "  pahami repo - `jelasin repo ini`, `cari entrypoint`, `rangkum modul web`\n"
-    "  ubah kode - `fix error ini`, `buat halaman toko`, `rapikan UI terminal`\n"
-    "  verifikasi - `run test`, `cek kenapa command gagal`, `review perubahan`\n"
-    "  setup - `install Ollama`, `pilih model`, `cek API key`\n"
-    "Kirim satu target kecil dulu; aku akan baca konteks, edit, lalu test."
+    "Aku bisa bantu kerja coding langsung di folder ini: baca repo, ubah file, "
+    "bikin fitur, run test, debug error, setup model/API key/Ollama, dan review "
+    "hasilnya. Kirim saja targetnya; kalau instruksinya sudah cukup jelas aku "
+    "langsung jalan, kalau belum aku tanya singkat."
 )
 
 _FOLLOWUP_CONSENT_RE = re.compile(
@@ -111,6 +102,9 @@ def local_reply_for(text: str) -> LocalReply | None:
         return None
 
     if _is_greeting_only(tokens):
+        return LocalReply(_GUIDE_TEXT, "greeting")
+
+    if len(tokens) == 1 and _looks_like_greeting(tokens[0]):
         return LocalReply(_GUIDE_TEXT, "greeting")
 
     if _is_capability_question(normalized, tokens):
@@ -176,6 +170,10 @@ def _is_greeting_only(tokens: list[str]) -> bool:
         return False
     allowed = _GREETINGS | _ACKS
     return len(meaningful) <= 3 and all(t in allowed for t in meaningful)
+
+
+def _looks_like_greeting(token: str) -> bool:
+    return bool(re.fullmatch(r"(ha)?lo+w*s*|he+y+|hi+i*|hai+i*", token))
 
 
 def _is_capability_question(normalized: str, tokens: list[str]) -> bool:

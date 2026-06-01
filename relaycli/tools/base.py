@@ -61,6 +61,8 @@ class ToolContext:
     project: ProjectContext
     permissions: PermissionManager
     console: Console = field(default_factory=Console)
+    read_files: set[str] = field(default_factory=set)
+    require_read_before_edit: bool = False
 
 
 @dataclass

@@ -6,6 +6,7 @@ import pytest
 
 from relaycli.config import PermissionMode
 from relaycli.tools import default_registry
+from relaycli.tools.create_folder import CreateFolderArgs, create_folder
 from relaycli.tools.edit_file import EditFileArgs, edit_file
 from relaycli.tools.read_file import ReadFileArgs, read_file
 from relaycli.tools.run_command import RunCommandArgs, run_command
@@ -121,6 +122,36 @@ def test_write_file_blocks_escape(sample_project):
     assert not (sample_project.parent / "evil.txt").exists()
 
 
+# --- create_folder -----------------------------------------------------
+def test_create_folder_applied_in_full_auto(sample_project):
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    res = create_folder(CreateFolderArgs(path="toko laptop"), ctx)
+    assert res.ok
+    assert (sample_project / "toko laptop").is_dir()
+    assert "toko laptop" in res.output
+
+
+def test_create_folder_accepts_folder_name_alias(sample_project):
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    res = create_folder(CreateFolderArgs(folder_name="toko laptop"), ctx)
+    assert res.ok
+    assert (sample_project / "toko laptop").is_dir()
+
+
+def test_create_folder_blocks_escape(sample_project):
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    res = create_folder(CreateFolderArgs(path="../evil"), ctx)
+    assert not res.ok
+    assert not (sample_project.parent / "evil").exists()
+
+
+def test_create_folder_declined_in_suggest(sample_project):
+    ctx = make_context(sample_project, PermissionMode.suggest, prompter=lambda _t: False)
+    res = create_folder(CreateFolderArgs(path="toko laptop"), ctx)
+    assert not res.ok
+    assert not (sample_project / "toko laptop").exists()
+
+
 # --- edit_file ---------------------------------------------------------
 def test_edit_file_applies(sample_project):
     ctx = make_context(sample_project, PermissionMode.full_auto)
@@ -139,6 +170,30 @@ def test_edit_file_not_found(sample_project):
     )
     assert not res.ok
     assert "not found" in res.output.lower()
+    assert "--- current app.py ---" in res.output
+    assert "def hello" in res.output
+
+
+def test_edit_file_requires_prior_read_when_context_requests_it(sample_project):
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    ctx.require_read_before_edit = True
+    res = edit_file(
+        EditFileArgs(path="app.py", old_string="return 'hi'", new_string="return 'hello'"),
+        ctx,
+    )
+    assert not res.ok
+    assert "Read-before-edit is required" in res.output
+    assert "return 'hi'" in res.output
+    assert "app.py" in ctx.read_files
+    assert "return 'hi'" in (sample_project / "app.py").read_text()
+
+    res2 = edit_file(
+        EditFileArgs(path="app.py", old_string="return 'hi'", new_string="return 'hello'"),
+        ctx,
+    )
+
+    assert res2.ok
+    assert "return 'hello'" in (sample_project / "app.py").read_text()
 
 
 def test_edit_file_ambiguous(sample_project):
@@ -194,7 +249,7 @@ def test_run_command_runs_in_project_root(sample_project):
 def test_default_registry_has_all_tools():
     reg = default_registry()
     assert set(reg.names()) == {"list_dir", "find_files", "read_file", "search",
-                                "write_file", "edit_file", "run_command",
+                                "create_folder", "write_file", "edit_file", "run_command",
                                 "run_background", "check_process", "stop_process",
                                 "remember"}
     # the throwaway get_time tool is gone

@@ -468,11 +468,11 @@ class TestRelayFailureModes:
         assert result.elapsed > 0
 
     def test_empty_plan_aborts(self, sample_project):
-        llm = ScriptedLLM([_resp(text="   ")])
+        llm = ScriptedLLM([_resp(text="   "), _resp(text=""), _resp(text="")])
         result = _relay(sample_project, llm).run("req")
         assert result.stopped_reason == "error"
-        assert "no plan" in result.final_text.lower()
-        assert len(llm.calls) == 1
+        assert "empty responses" in result.final_text.lower()
+        assert len(llm.calls) == 3
 
     def test_coder_error_aborts_before_review(self, sample_project):
         llm = ScriptedLLM([_resp(text="plan"), LLMError("coder exploded")])

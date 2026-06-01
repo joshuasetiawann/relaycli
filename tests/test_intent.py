@@ -7,8 +7,14 @@ def test_greeting_gets_local_guide_reply():
     reply = local_reply_for("halo")
     assert reply is not None
     assert reply.reason == "greeting"
-    assert "Pola cepat" in reply.text
-    assert "jelasin repo ini" in reply.text
+    assert "siap bantu" in reply.text
+    assert "bahasa bebas" in reply.text
+
+
+def test_stretched_greeting_stays_local():
+    reply = local_reply_for("halooows")
+    assert reply is not None
+    assert reply.reason == "greeting"
 
 
 def test_vague_short_input_asks_for_context():
@@ -16,7 +22,7 @@ def test_vague_short_input_asks_for_context():
     assert reply is not None
     assert reply.reason == "vague"
     assert "target" in reply.text
-    assert "template" in reply.text
+    assert "bahasa biasa" in reply.text
 
 
 def test_clear_work_requests_pass_through():
@@ -44,8 +50,8 @@ def test_capability_question_gets_local_reply():
     reply = local_reply_for("kamu bisa apa aja")
     assert reply is not None
     assert reply.reason == "capability"
-    assert "jelasin repo ini" in reply.text
-    assert "verifikasi" in reply.text
+    assert "baca repo" in reply.text
+    assert "run test" in reply.text
 
 
 def test_permissive_followup_continues_previous_request():

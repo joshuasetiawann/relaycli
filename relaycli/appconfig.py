@@ -56,6 +56,17 @@ DEFAULT_TIERS: dict[str, str] = {
     "strong": "openrouter/qwen/qwen3-coder:free",
 }
 
+RUNTIME_OPTION_KEYS = frozenset({
+    "permission_mode",
+    "relay_enabled",
+    "relay_explorer",
+    "relay_tester",
+    "relay_split_tasks",
+    "skills_auto",
+    "local_scaffolds",
+    "token_budget",
+})
+
 
 @dataclass
 class ProviderConfig:
@@ -179,6 +190,29 @@ def set_base_model(model: str, path: Path | None = None) -> None:
     if not isinstance(recent, list):
         recent = []
     cfg._raw["recent_models"] = [model, *[str(m) for m in recent if str(m) != model]][:8]
+    save_app_config(cfg)
+
+
+def set_runtime_option(key: str, value: object, path: Path | None = None) -> None:
+    """Persist a runtime setting in the flat config that Settings reads.
+
+    The configuration menu also keeps a small ``[preferences]`` section for
+    display. Options that overlap both stores are mirrored so a setting changed
+    from the terminal or desktop survives the next ``relaycli`` launch.
+    """
+    key = key.strip()
+    if key not in RUNTIME_OPTION_KEYS and key not in DEFAULT_PREFERENCES:
+        raise ValueError(f"unsupported runtime option: {key}")
+
+    cfg = load_app_config(path)
+    if key in DEFAULT_PREFERENCES:
+        cfg.preferences[key] = value
+
+    if key == "max_context_tokens":
+        cfg._raw["token_budget"] = int(value)
+    elif key != "theme":
+        cfg._raw[key] = str(value) if key == "permission_mode" else value
+
     save_app_config(cfg)
 
 

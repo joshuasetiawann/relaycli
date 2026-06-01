@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.1 — 2026-07-06
+
+The ready-to-install CLI patch.
+
+### Added
+- Native `create_folder` tool so small/local models can execute folder-creation
+  requests instead of returning fake JSON tool names.
+- `relaycli doctor` installation checks for bundled skills, core tools, and
+  the desktop UI asset.
+- Wheel packaging regression test to ensure runtime assets ship with installs.
+
+### Changed
+- The one-line installer now smoke-checks the installed command and repairs to
+  a private virtualenv if the command starts with missing dependencies.
+- Agent file-edit recovery now includes project path hints and read-before-edit
+  recovery for existing files.
+- Version 0.4.1.
+
 ## 0.4.0 — 2026-07-05
 
 The onboarding and terminal-UX release.

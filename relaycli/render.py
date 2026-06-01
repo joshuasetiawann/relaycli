@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import time
 from typing import TYPE_CHECKING
 
 from rich.console import Console
@@ -26,6 +27,15 @@ if TYPE_CHECKING:  # avoid an import cycle (agent -> tools -> render -> agent)
     from relaycli.relay import RelayResult
     from relaycli.router import Role
     from relaycli.tools.base import ToolResult
+
+
+def brief_tool_error(text: str, *, limit: int = 260) -> str:
+    """One-line tool error detail for human logs."""
+
+    compact = re.sub(r"\s+", " ", text).strip()
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(0, limit - 1)].rstrip() + "…"
 
 
 def make_unified_diff(old: str, new: str, path: str) -> str:
@@ -71,6 +81,20 @@ CLAUDE_ACCENT = "#D97757"
 
 _STOP_STYLE = {"done": "green", "max_iterations": "yellow", "error": "red",
                "review_exhausted": "yellow", "stopped": "yellow"}
+_TOOL_ACTIVITY = {
+    "list_dir": "listing directory",
+    "find_files": "searching files",
+    "search": "searching code",
+    "read_file": "reading file",
+    "write_file": "writing file",
+    "edit_file": "editing file",
+    "create_folder": "creating folder",
+    "run_command": "running command",
+    "run_background": "starting background command",
+    "check_process": "checking background command",
+    "stop_process": "stopping background command",
+    "remember": "saving memory",
+}
 
 
 def friendly_error_text(text: str) -> str:
@@ -129,15 +153,17 @@ class RichReporter:
     def __init__(self, console: Console) -> None:
         self.console = console
         self._streaming = False
+        self._buf: list[str] = []
         self.tools_used: list[str] = []
         self._status = None
+        self._tool_started: dict[str, float] = {}
 
     # -- working spinner ---------------------------------------------------
-    def _spin(self) -> None:
+    def _spin(self, message: str = "working… (ctrl-c to interrupt)") -> None:
         if self._status is not None or not self.console.is_terminal:
             return
         self._status = self.console.status(
-            "[dim]working… (ctrl-c to interrupt)[/dim]", spinner="dots"
+            f"[dim]{escape(message)}[/dim]", spinner="dots"
         )
         self._status.start()
 
@@ -152,27 +178,66 @@ class RichReporter:
 
     # -- reporter protocol ---------------------------------------------------
     def iteration(self, n: int) -> None:
-        self._spin()
+        # model_start prints the visible log line and starts the spinner.
+        return
+
+    def model_start(self, n: int, model: str) -> None:
+        self._unspin()
+        self.console.print(f"[dim]→ model[/dim] step {n} · [bold]{escape(model)}[/bold]")
+        if model.startswith(("ollama_chat/", "ollama/")):
+            self.console.print(
+                "[dim]  Ollama local is generating now · `ollama ps` should show "
+                "`100% GPU` when acceleration is active.[/dim]"
+            )
+        self._spin(f"waiting for {model}… (ctrl-c to interrupt)")
+
+    def model_end(
+        self, n: int, model: str, tool_calls: int, has_text: bool, usage
+    ) -> None:
+        self._unspin()
+        if tool_calls:
+            detail = f"{tool_calls} tool call{'s' if tool_calls != 1 else ''}"
+        else:
+            detail = "answer" if has_text else "empty response"
+        self.console.print(f"[dim]← model[/dim] {detail} · {usage.total_tokens} tok")
+
+    def model_error(self, n: int, model: str, error: Exception) -> None:
+        self._unspin()
+        self.console.print("[red]← model error[/red]")
 
     def assistant_token(self, text: str) -> None:
-        # Write raw so model text containing brackets isn't parsed as markup.
-        if not self._streaming:
-            self._unspin()
-            self.console.file.write("⏺ ")  # one bullet per assistant block
-        self.console.file.write(text)
-        self.console.file.flush()
-        self._streaming = True
+        self._buf.append(text)
 
     def assistant_end(self) -> None:
-        if self._streaming:
-            self.console.file.write("\n")
-            self.console.file.flush()
+        text = "".join(self._buf)
+        self._buf.clear()
+        if not text:
+            return
+        from relaycli.agent import fake_tool_call_text
+
+        if fake_tool_call_text(text):
             self._streaming = False
+            return
+        self._unspin()
+        self.console.file.write("⏺ ")
+        self.console.file.write(text)
+        if not text.endswith("\n"):
+            self.console.file.write("\n")
+        self.console.file.flush()
+        self._streaming = False
 
     def tool_start(self, call: "ToolCall") -> None:
-        # The tool itself shows diffs / the command line; the compact outcome
-        # lines are printed at tool_end once the result is known.
         self._unspin()
+        self._tool_started[call.id] = time.perf_counter()
+        from relaycli.agent import _compact
+
+        args = _compact(call.arguments, limit=120)
+        suffix = f" [dim]{escape(args)}[/dim]" if args and args != "{}" else ""
+        action = _TOOL_ACTIVITY.get(call.name, "using tool")
+        self.console.print(
+            f"[dim]→ tool[/dim] [bold]{escape(call.name)}[/bold] "
+            f"[dim]{escape(action)}[/dim]{suffix}"
+        )
 
     def tool_end(self, call: "ToolCall", result: "ToolResult | None") -> None:
         self.tools_used.append(call.name)
@@ -182,7 +247,13 @@ class RichReporter:
         # Escape: summaries can embed model-controlled text (commands, paths).
         self.console.print(f"{dot} [bold]{escape(call.name)}[/bold]")
         outcome = "error" if result is None else (result.summary or call.name)
-        self.console.print(f"  [dim]⎿  {escape(outcome)}[/dim]")
+        elapsed = ""
+        started = self._tool_started.pop(call.id, None)
+        if started is not None:
+            elapsed = f" · {time.perf_counter() - started:.1f}s"
+        self.console.print(f"  [dim]⎿  {escape(outcome)}{elapsed}[/dim]")
+        if result is not None and not result.ok and result.output:
+            self.console.print(f"  [red]↳ {escape(brief_tool_error(result.output))}[/red]")
 
 
 def render_task_summary(
@@ -364,17 +435,18 @@ def render_welcome(
     # truncating the very info the banner exists to show helps no one.
     grid.add_column(overflow="fold")
     grid.add_row(
-        "", f"[bold {CLAUDE_ACCENT}]✻[/bold {CLAUDE_ACCENT}] Welcome to "
-            f"[bold]RelayCLI[/bold] [dim]v{__version__}[/dim]!"
+        "", f"[bold {CLAUDE_ACCENT}]✻[/bold {CLAUDE_ACCENT}] "
+            f"[bold]RelayCLI[/bold] [dim]v{__version__}[/dim] "
+            "[dim]agent workspace[/dim]"
     )
-    grid.add_row("", "")
+    grid.add_row("", "[dim]plan, edit, run, review - from this project root[/dim]")
     grid.add_row("cwd", escape(str(root)))
     grid.add_row("model", model_cell)
     grid.add_row("mode", mode_cell)
     grid.add_row("relay", relay_cell)
     grid.add_row("", "")
-    grid.add_row("", '[dim]Type a request in plain words — e.g. "explain this repo".[/dim]')
-    grid.add_row("", "[dim]Type / for commands · !cmd shell · Ctrl-D quit[/dim]")
+    grid.add_row("", '[dim]Try: "explain this repo" · "fix failing tests" · "build a small UI"[/dim]')
+    grid.add_row("", "[dim]/ commands · !cmd shell · Ctrl-D quit[/dim]")
 
     from pathlib import Path as _Path
 
@@ -386,7 +458,15 @@ def render_welcome(
                 "project folder (e.g. mkdir ~/proyek/app && cd ~/proyek/app) and "
                 "run relaycli there.[/dim]"
         )
-    console.print(Panel(grid, border_style=CLAUDE_ACCENT, expand=False))
+    console.print(Panel(
+        grid,
+        title="[bold]RelayCLI[/bold]",
+        title_align="left",
+        subtitle="[dim]type / for commands[/dim]",
+        subtitle_align="right",
+        border_style=CLAUDE_ACCENT,
+        expand=False,
+    ))
     render_model_warning(console, settings)
 
 
@@ -440,11 +520,17 @@ def render_help(console: Console) -> None:
     table.add_row("/help", "show this help  (aliases: help, ?)")
     table.add_row("/exit", "quit  (aliases: exit, quit, Ctrl-D)")
     table.add_row("!<cmd>", "run a shell command in the project root (e.g. !git status)")
-    console.print(table)
-    console.print(
-        "[dim]Enter submits · Alt+Enter inserts a newline · Ctrl-R searches "
-        "history · Ctrl-C clears the line · Ctrl-D quits[/dim]"
+    table.caption = (
+        "Enter submits · Alt+Enter inserts a newline · Ctrl-R searches history · "
+        "Ctrl-C clears the line · Ctrl-D quits"
     )
+    console.print(Panel(
+        table,
+        title="[bold]Command palette[/bold]",
+        title_align="left",
+        border_style=CLAUDE_ACCENT,
+        expand=False,
+    ))
 
 
 def render_routing_banner(console: Console, settings: "Settings") -> None:

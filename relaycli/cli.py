@@ -101,8 +101,10 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     """Execute one agent loop and exit (the -p path)."""
     from relaycli.agent import Agent
     from relaycli.context import ProjectContext
+    from relaycli.frontend_scaffold import create_frontend_scaffold, detect_frontend_scaffold
     from relaycli.intent import local_reply_for
     from relaycli.llm import key_status, preflight_settings
+    from relaycli.ollama_runtime import recommended_fast_local_model, slow_local_model_warning
     from relaycli.permissions import PermissionManager
     from relaycli.render import (
         RichReporter,
@@ -118,15 +120,52 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         render_local_reply(console, reply)
         return
 
+    project = ProjectContext(Path(os.getcwd()))
+    permissions = PermissionManager(
+        settings.permission_mode, console=console, assume_yes=assume_yes
+    )
+    scaffold = detect_frontend_scaffold(request) if settings.local_scaffolds else None
+    if scaffold is not None:
+        decision = permissions.confirm(
+            "write", prompt_text=f"Create frontend scaffold in {escape(scaffold.folder)}?"
+        )
+        if not decision.approved:
+            console.print("[yellow]scaffold declined.[/yellow]")
+            raise typer.Exit(code=1)
+        result = create_frontend_scaffold(project, scaffold)
+        console.print(f"[green]created[/green] {escape(result.folder)}")
+        for rel in result.files:
+            console.print(f"  [dim]write[/dim] {escape(rel)}")
+        console.print(
+            f"[dim]open {escape(result.folder)}/index.html in a browser to preview.[/dim]"
+        )
+        return
+
     problem = preflight_settings(settings)
     if problem:
         render_setup_panel(console, problem, settings.detected_providers())
         raise typer.Exit(code=2)
 
-    project = ProjectContext(Path(os.getcwd()))
-    permissions = PermissionManager(
-        settings.permission_mode, console=console, assume_yes=assume_yes
-    )
+    warning = slow_local_model_warning(settings.model)
+    if warning:
+        fallback = recommended_fast_local_model(settings)
+        if fallback and fallback != settings.model:
+            old_model = settings.model
+            console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+            settings.model = fallback
+            try:
+                from relaycli.appconfig import set_base_model
+
+                set_base_model(fallback)
+            except Exception:
+                pass
+            console.print(
+                f"[yellow]model auto-switch:[/yellow] {escape(old_model)} → {escape(fallback)} "
+                "[dim](requires full GPU / avoids CPU-GPU fallback)[/dim]"
+            )
+        else:
+            console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+            raise typer.Exit(code=2)
 
     skills_block = ""
     if settings.skills_auto:

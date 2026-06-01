@@ -31,6 +31,7 @@ from relaycli.appconfig import (
     load_app_config,
     mask_key,
     save_app_config,
+    set_runtime_option,
 )
 from relaycli.config import PermissionMode
 from relaycli.roles import TIERS, builtin_role
@@ -217,8 +218,8 @@ class SettingsMenu:
         return f"unknown command '{escape(cmd)}' (try help)", False
 
     def _set(self, key: str, value) -> tuple[str, bool]:
-        self.cfg.preferences[key] = value
-        save_app_config(self.cfg)
+        set_runtime_option(key, value, self.cfg.path)
+        self.cfg = load_app_config(self.cfg.path)
         return f"{key} → {escape(str(value))}", False
 
 

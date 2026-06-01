@@ -12,6 +12,7 @@ from relaycli.config import Settings
 from relaycli.doctor import (
     Check,
     check_config_perms,
+    check_installation,
     check_key_drift,
     check_ollama,
     check_openrouter_key,
@@ -39,6 +40,17 @@ def test_config_perms_flags_world_readable(tmp_path: Path):
 def test_config_missing_is_warn(tmp_path: Path):
     checks = check_config_perms(tmp_path / "none.toml", tmp_path)
     assert checks[0].status == doctor.WARN
+
+
+def test_installation_check_verifies_bundled_assets_and_tools():
+    checks = check_installation()
+    by_name = {check.name: check for check in checks}
+
+    assert by_name["builtin skills"].status == doctor.OK
+    assert "bundled" in by_name["builtin skills"].detail
+    assert by_name["core tools"].status == doctor.OK
+    assert "registered" in by_name["core tools"].detail
+    assert by_name["desktop ui"].status == doctor.OK
 
 
 def test_openrouter_key_probes():

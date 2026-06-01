@@ -34,9 +34,9 @@ def _no_ambient_config(monkeypatch, tmp_path):
     monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "app-config.toml")
 
 
-def _repl(mode=PermissionMode.suggest, model="gpt-4o-mini"):
+def _repl(mode=PermissionMode.suggest, model="gpt-4o-mini", **kw):
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
-    settings = Settings(model=model, permission_mode=mode)
+    settings = Settings(model=model, permission_mode=mode, **kw)
     return Repl(settings, console=console), console
 
 
@@ -50,6 +50,96 @@ def test_slash_model_switches_model():
     assert repl._handle_slash("/model gpt-4o") is False
     assert repl.settings.model == "gpt-4o"
     assert repl.agent.session.model == "gpt-4o"
+
+
+def test_slash_model_warns_for_slow_local_model(monkeypatch):
+    import relaycli.llm as llm
+    import relaycli.repl as repl_mod
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen3:4b"])
+    monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "slow local model")
+    repl, console = _repl()
+
+    assert repl._handle_slash("/model ollama_chat/qwen3:4b") is False
+
+    out = _out(console)
+    assert "may be slow unless Ollama shows 100% GPU" in out
+    assert "manual model kept" in out
+
+
+def test_repl_skips_agent_for_slow_local_model(monkeypatch):
+    import relaycli.repl as repl_mod
+
+    monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "slow local model")
+    monkeypatch.setattr(repl_mod, "recommended_fast_local_model", lambda settings: None)
+    repl, console = _repl(model="ollama_chat/qwen3:4b")
+    monkeypatch.setattr(repl.agent, "run", lambda *args, **kwargs: pytest.fail("agent ran"))
+
+    repl._run_agent("jelasin repo ini")
+
+    out = _out(console)
+    assert "slow local model" in out
+
+
+def test_repl_auto_switches_slow_local_model(monkeypatch):
+    import relaycli.repl as repl_mod
+    from relaycli.agent import AgentResult
+
+    monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "partial gpu")
+    monkeypatch.setattr(
+        repl_mod,
+        "recommended_fast_local_model",
+        lambda settings: "ollama_chat/qwen2.5-coder:0.5b",
+    )
+    repl, console = _repl(model="ollama_chat/qwen3:4b")
+    called = {}
+
+    def fake_run(request, reporter=None):
+        called["request"] = request
+        return AgentResult("ok", 1, 0, Usage(total_tokens=1), "done")
+
+    monkeypatch.setattr(repl.agent, "run", fake_run)
+
+    repl._run_agent("jelasin repo ini")
+
+    assert called["request"] == "jelasin repo ini"
+    assert repl.settings.model == "ollama_chat/qwen2.5-coder:0.5b"
+    assert repl.agent.session.model == "ollama_chat/qwen2.5-coder:0.5b"
+    out = _out(console)
+    assert "model auto-switch" in out
+
+
+def test_repl_respects_manually_selected_slow_local_model(monkeypatch):
+    import relaycli.llm as llm
+    import relaycli.repl as repl_mod
+    from relaycli.agent import AgentResult
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen3:4b"])
+    monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "partial gpu")
+    monkeypatch.setattr(
+        repl_mod,
+        "recommended_fast_local_model",
+        lambda settings: "ollama_chat/qwen2.5-coder:0.5b",
+    )
+    repl, console = _repl(model="ollama_chat/qwen2.5-coder:1.5b")
+    called = {}
+
+    def fake_run(request, reporter=None):
+        called["request"] = request
+        return AgentResult("ok", 1, 0, Usage(total_tokens=1), "done")
+
+    repl._handle_slash("/model ollama_chat/qwen3:4b")
+    monkeypatch.setattr(repl.agent, "run", fake_run)
+
+    repl._run_agent("jelasin repo ini")
+
+    assert called["request"] == "jelasin repo ini"
+    assert repl.settings.model == "ollama_chat/qwen3:4b"
+    out = _out(console)
+    assert "manual model kept" in out
+    assert out.count("manual model kept") == 1
+    assert "Switch to a smaller" not in out
+    assert "model auto-switch" not in out
 
 
 def test_slash_model_rejects_missing_installed_ollama_model(monkeypatch):
@@ -99,6 +189,25 @@ def test_slash_mode_switches_and_updates_system_prompt():
     assert "full-auto" in _out(console)
 
 
+def test_slash_runtime_toggles_persist_to_next_session():
+    from relaycli import appconfig
+
+    repl, _console = _repl()
+    repl._handle_slash("/mode full-auto")
+    repl._handle_slash("/relay on")
+    repl._handle_slash("/agents tester on")
+    repl._handle_slash("/agents tasks on")
+    repl._handle_slash("/skill auto off")
+
+    cfg = appconfig.load_app_config()
+    assert cfg._raw["permission_mode"] == "full-auto"
+    assert cfg.preference("permission_mode") == "full-auto"
+    assert cfg._raw["relay_enabled"] is True
+    assert cfg._raw["relay_tester"] is True
+    assert cfg._raw["relay_split_tasks"] is True
+    assert cfg._raw["skills_auto"] is False
+
+
 def test_slash_mode_invalid_is_rejected():
     repl, console = _repl()
     repl._handle_slash("/mode banana")
@@ -124,6 +233,94 @@ def test_slash_unknown_command():
     repl, console = _repl()
     assert repl._handle_slash("/wat") is False
     assert "Unknown command" in _out(console)
+
+
+def test_repl_frontend_prompt_runs_agent_by_default(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    repl, _console = _repl(mode=PermissionMode.full_auto)
+    calls = []
+    monkeypatch.setattr(repl, "_run_agent", lambda request: calls.append(request))
+
+    assert repl._handle_line("buatin saya web platform belajar mandarin") is False
+
+    assert calls == ["buatin saya web platform belajar mandarin"]
+    assert not (tmp_path / "belajar-mandarin").exists()
+
+
+def test_repl_frontend_shop_scaffold_runs_without_agent(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    repl, console = _repl(mode=PermissionMode.full_auto, local_scaffolds=True)
+
+    assert repl._handle_line(
+        "buatin saya web toko spatu di front endnya aja di folder baru namanya sepatuu yaa"
+    ) is False
+
+    assert (tmp_path / "sepatuu" / "index.html").is_file()
+    assert (tmp_path / "sepatuu" / "styles.css").is_file()
+    assert "created" in _out(console)
+
+
+def test_repl_frontend_fashion_shop_scaffold_uses_fashion_copy(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    repl, console = _repl(mode=PermissionMode.full_auto, local_scaffolds=True)
+
+    assert repl._handle_line(
+        "buatin saya website toko baju bukan toko sepatu buat ulang ya"
+    ) is False
+
+    html = (tmp_path / "toko-baju" / "index.html").read_text()
+    app_js = (tmp_path / "toko-baju" / "app.js").read_text()
+    assert "Baju harian" in html
+    assert "City Coach Jacket" in html
+    assert "Everyday Cotton Tee" in app_js
+    assert "Aero Street Runner" not in html + app_js
+    assert "created" in _out(console)
+
+
+def test_repl_frontend_fashion_shop_scaffold_respects_quoted_folder_and_dark_tone(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    repl, console = _repl(mode=PermissionMode.full_auto, local_scaffolds=True)
+
+    assert repl._handle_line(
+        'tolong build ulang website toko baju online di folder baru bernama "toko baju" pake html css js aja nuansa hitam gekao'
+    ) is False
+
+    html = (tmp_path / "toko baju" / "index.html").read_text()
+    css = (tmp_path / "toko baju" / "styles.css").read_text()
+    app_js = (tmp_path / "toko baju" / "app.js").read_text()
+    assert 'class="theme-dark"' in html
+    assert "Baju harian" in html
+    assert "Everyday Cotton Tee" in app_js
+    assert "Aero Street Runner" not in html + app_js
+    assert ".theme-dark" in css
+    assert "created" in _out(console)
+
+
+def test_repl_mandarin_learning_platform_scaffold(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    repl, console = _repl(mode=PermissionMode.full_auto, local_scaffolds=True)
+
+    assert repl._handle_line("buatin saya web platform belajar mandarin") is False
+
+    html = (tmp_path / "belajar-mandarin" / "index.html").read_text()
+    app_js = (tmp_path / "belajar-mandarin" / "app.js").read_text()
+    assert "MandarinLab" in html
+    assert "Belajar Mandarin" in html
+    assert "Modul populer" in html
+    assert "Nada dan Pinyin" in app_js
+    assert "Pelajari" in app_js
+    assert "created" in _out(console)
+
+
+def test_repl_frontend_shop_scaffold_defaults_folder(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    repl, console = _repl(mode=PermissionMode.full_auto, local_scaffolds=True)
+
+    assert repl._handle_line("buatin saya web toko sepatu fokus frontend aja") is False
+
+    assert (tmp_path / "toko-sepatu" / "index.html").is_file()
+    assert (tmp_path / "toko-sepatu" / "styles.css").is_file()
+    assert "created" in _out(console)
 
 
 def test_slash_help_lists_commands():
@@ -204,6 +401,27 @@ def test_rich_reporter_tool_error_shape():
     assert "⏺ read_file" in out and "error" in out
 
 
+def test_rich_reporter_shows_tool_error_detail():
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    reporter = RichReporter(console)
+    reporter.tool_end(
+        ToolCall(id="c1", name="read_file", arguments="{}"),
+        ToolResult(
+            ok=False,
+            output=(
+                "Path 'src/index.html' does not exist.\n\n"
+                "Existing likely paths: belajar-mandarin/index.html."
+            ),
+            summary="read src/index.html (refused)",
+        ),
+    )
+
+    out = _out(console)
+
+    assert "read src/index.html (refused)" in out
+    assert "belajar-mandarin/index.html" in out
+
+
 def test_assistant_blocks_get_one_bullet_each():
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     reporter = RichReporter(console)
@@ -253,6 +471,35 @@ def test_rich_reporter_activity_lines():
     assert "edit app.py (+2 -1)" in out
     assert "run pytest → exit 1" in out
     assert reporter.tools_used == ["edit_file", "run_command"]
+
+
+def test_rich_reporter_model_and_tool_logs():
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    reporter = RichReporter(console)
+    call = ToolCall(id="c1", name="read_file", arguments='{"path":"app.py"}')
+
+    reporter.model_start(1, "fake/model")
+    reporter.model_end(1, "fake/model", 1, False, Usage(total_tokens=12))
+    reporter.tool_start(call)
+    reporter.tool_end(call, ToolResult(ok=True, output="x", summary="read app.py"))
+
+    out = _out(console)
+    assert "→ model" in out and "fake/model" in out
+    assert "← model" in out and "1 tool call" in out
+    assert "→ tool" in out and "read_file" in out and "app.py" in out
+    assert "read app.py" in out
+
+
+
+def test_rich_reporter_shows_ollama_gpu_hint():
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    reporter = RichReporter(console)
+
+    reporter.model_start(1, "ollama_chat/qwen3:4b")
+
+    out = _out(console)
+    assert "Ollama local" in out
+    assert "100% GPU" in out
 
 
 def test_rich_reporter_streams_text():
@@ -680,7 +927,8 @@ def test_banner_has_claude_style_welcome():
     repl, console = _hermetic_repl(model="ollama_chat/llama3.1")
     repl._print_banner()
     out = _out(console)
-    assert "✻ Welcome to RelayCLI" in out
+    assert "✻ RelayCLI" in out
+    assert "agent workspace" in out
 
 
 # --- slash-command menu ------------------------------------------------
@@ -708,6 +956,11 @@ def test_completer_prefix_filters():
     assert _completions("/zzz") == []
 
 
+def test_completer_recovers_small_command_typos():
+    texts = [c.text for c in _completions("/modle")]
+    assert "/model" in texts
+
+
 def test_completer_replaces_the_whole_token():
     # Accepting /model from "/mo" must replace "/mo", not append to it.
     (model, _mode) = _completions("/mo")
@@ -729,7 +982,7 @@ def test_completer_relay_arguments():
 def test_completer_model_arguments_are_curated_ids():
     texts = [c.text for c in _completions("/model ")]
     assert "gpt-4o-mini" in texts
-    assert "ollama_chat/llama3.1" in texts
+    assert "ollama_chat/qwen3:4b" in texts
     # prefix-filtering works on the argument too
     claude = [c.text for c in _completions("/model claude")]
     assert claude and all(t.startswith("claude") for t in claude)
@@ -797,10 +1050,10 @@ def test_enter_applies_highlighted_completion_else_submits():
 
 def test_toolbar_shows_live_session_status():
     repl, _ = _hermetic_repl(model="gpt-4o-mini")
-    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help · type / "
+    assert repl._toolbar() == " model gpt-4o-mini · mode suggest · relay off · /help · / "
     repl.settings.relay_enabled = True
     repl._cmd_mode("full-auto")  # the real channel: updates settings + permissions together
-    assert repl._toolbar() == " gpt-4o-mini · full-auto · relay on · /help · type / "
+    assert repl._toolbar() == " model gpt-4o-mini · mode full-auto · relay on · /help · / "
 
 
 def test_toolbar_reflects_enforced_mode_not_a_bare_settings_mutation():
@@ -810,10 +1063,10 @@ def test_toolbar_reflects_enforced_mode_not_a_bare_settings_mutation():
     different session, and that must never desync the REPL's own display
     from what it's actually enforcing (see _toolbar's docstring)."""
     repl, console = _hermetic_repl(model="gpt-4o-mini")
-    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help · type / "
+    assert repl._toolbar() == " model gpt-4o-mini · mode suggest · relay off · /help · / "
     repl.settings.permission_mode = PermissionMode.full_auto  # e.g. the web UI's toggle
     assert repl.permissions.mode is PermissionMode.suggest    # unaffected: still enforced
-    assert repl._toolbar() == " gpt-4o-mini · suggest · relay off · /help · type / "
+    assert repl._toolbar() == " model gpt-4o-mini · mode suggest · relay off · /help · / "
     repl._handle_slash("/mode")
     assert "suggest" in _out(console)
 
@@ -898,3 +1151,111 @@ def test_render_model_warning_for_risky_local_model():
     render_model_warning(console, Settings(model="ollama_chat/deepseek-coder:6.7b"))
     out = _out(console)
     assert "plain text" in out and "relaycli init" in out
+
+
+def test_slow_local_model_warning_for_cpu_large_model(monkeypatch):
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_ollama_processor", lambda name, timeout=0.4: "100% CPU")
+    monkeypatch.setattr(runtime, "_total_memory_gib", lambda: 32.0)
+
+    warning = runtime.slow_local_model_warning("ollama_chat/qwen3:4b")
+
+    assert warning is not None
+    assert "CPU" in warning
+    assert "qwen2.5-coder:0.5b" in warning
+
+
+def test_slow_local_model_warning_for_loaded_small_cpu_model(monkeypatch):
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_ollama_processor", lambda name, timeout=0.4: "100% CPU")
+
+    warning = runtime.slow_local_model_warning("ollama_chat/qwen2.5-coder:0.5b")
+
+    assert warning is not None
+    assert "CPU" in warning
+
+
+def test_slow_local_model_warning_allows_loaded_gpu_model(monkeypatch):
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_ollama_processor", lambda name, timeout=0.4: "100% GPU")
+    monkeypatch.setattr(runtime, "_total_memory_gib", lambda: 4.0)
+
+    assert runtime.slow_local_model_warning("ollama_chat/qwen3:4b") is None
+
+
+def test_slow_local_model_warning_for_mixed_cpu_gpu_model(monkeypatch):
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_ollama_processor", lambda name, timeout=0.4: "8%/92% CPU/GPU")
+    monkeypatch.setattr(runtime, "_total_memory_gib", lambda: 32.0)
+
+    warning = runtime.slow_local_model_warning("ollama_chat/qwen3:4b")
+
+    assert warning is not None
+    assert "partially offloading" in warning
+
+
+def test_slow_local_model_warning_requires_verified_full_gpu_for_large_model(monkeypatch):
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(runtime, "_ollama_processor", lambda name, timeout=0.4: None)
+    monkeypatch.setattr(runtime, "_ollama_server_prefers_gpu", lambda timeout=0.4: True)
+    monkeypatch.setattr(runtime, "_total_memory_gib", lambda: 16.0)
+
+    warning = runtime.slow_local_model_warning("ollama_chat/qwen3:4b")
+
+    assert warning is not None
+    assert "100% GPU" in warning
+
+
+def test_slow_local_model_warning_can_be_overridden(monkeypatch):
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setenv("RELAYCLI_ALLOW_SLOW_LOCAL", "1")
+    monkeypatch.setattr(runtime, "_ollama_processor", lambda name, timeout=0.4: "100% CPU")
+
+    assert runtime.slow_local_model_warning("ollama_chat/qwen3:4b") is None
+
+
+def test_recommended_fast_local_model_prefers_small_coder(monkeypatch):
+    import relaycli.llm as llm
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(
+        llm,
+        "ollama_models",
+        lambda settings, timeout=0.8: ["qwen3:4b", "qwen2.5-coder:0.5b"],
+    )
+
+    assert (
+        runtime.recommended_fast_local_model(Settings(model="ollama_chat/qwen3:4b"))
+        == "ollama_chat/qwen2.5-coder:0.5b"
+    )
+
+
+def test_recommended_fast_local_model_prefers_larger_small_coder(monkeypatch):
+    import relaycli.llm as llm
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(
+        llm,
+        "ollama_models",
+        lambda settings, timeout=0.8: ["qwen2.5-coder:0.5b", "qwen2.5-coder:1.5b"],
+    )
+
+    assert (
+        runtime.recommended_fast_local_model(Settings(model="ollama_chat/qwen3:4b"))
+        == "ollama_chat/qwen2.5-coder:1.5b"
+    )
+
+
+def test_recommended_fast_local_model_ignores_only_large_models(monkeypatch):
+    import relaycli.llm as llm
+    import relaycli.ollama_runtime as runtime
+
+    monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen3:4b"])
+
+    assert runtime.recommended_fast_local_model(Settings(model="ollama_chat/qwen3:4b")) is None

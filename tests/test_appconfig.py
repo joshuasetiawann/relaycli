@@ -16,6 +16,7 @@ from relaycli.appconfig import (
     resolve_provider_key,
     resolve_role_model,
     save_app_config,
+    set_runtime_option,
 )
 from relaycli.roles import BUILTIN_ROLES, builtin_role
 
@@ -66,6 +67,19 @@ def test_save_is_0600_and_preserves_unknown_keys(cfg_path):
     assert "[models]" in text
     # and it re-parses cleanly
     assert load_app_config(cfg_path).tier_model("fast") == "gpt-4o-mini"
+
+
+def test_set_runtime_option_mirrors_preferences_to_flat_settings(cfg_path):
+    set_runtime_option("permission_mode", "full-auto", cfg_path)
+    set_runtime_option("relay_enabled", True, cfg_path)
+    set_runtime_option("max_context_tokens", 64000, cfg_path)
+
+    cfg = load_app_config(cfg_path)
+    assert cfg.preference("permission_mode") == "full-auto"
+    assert cfg.preference("max_context_tokens") == 64000
+    assert cfg._raw["permission_mode"] == "full-auto"
+    assert cfg._raw["relay_enabled"] is True
+    assert cfg._raw["token_budget"] == 64000
 
 
 # -- model resolution -----------------------------------------------------

@@ -137,6 +137,13 @@ class Settings(BaseSettings):
             "(keyword triggers, announced in the UI; /skill auto on|off)."
         ),
     )
+    local_scaffolds: bool = Field(
+        default=False,
+        description=(
+            "Use deterministic local frontend scaffolds for common website prompts. "
+            "Disabled by default so user prompts go to the selected agent/model."
+        ),
+    )
 
     # --- Relay pipeline (Planner → Coder → Reviewer) ---------------------
     relay_enabled: bool = Field(

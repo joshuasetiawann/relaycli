@@ -19,6 +19,29 @@ need git
 need python3
 mkdir -p "$INSTALL_HOME" "$BIN_DIR"
 
+install_private_venv() {
+  say "Installing command with a private virtualenv"
+  python3 -m venv "$VENV_DIR"
+  "$VENV_DIR/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
+  "$VENV_DIR/bin/python" -m pip install --upgrade pip
+  "$VENV_DIR/bin/python" -m pip install --upgrade "$SRC_DIR"
+  cat > "$BIN_DIR/relaycli" <<WRAP
+#!/usr/bin/env sh
+set -eu
+if ! "$VENV_DIR/bin/python" -c "import typer, rich, pydantic, pydantic_settings, prompt_toolkit, litellm, relaycli" >/dev/null 2>&1; then
+  "$VENV_DIR/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
+  "$VENV_DIR/bin/python" -m pip install --upgrade "$SRC_DIR" >/dev/null
+fi
+exec "$VENV_DIR/bin/relaycli" "\$@"
+WRAP
+  chmod +x "$BIN_DIR/relaycli"
+  relaycli_cmd="$BIN_DIR/relaycli"
+}
+
+check_command() {
+  "$1" version >/dev/null 2>&1
+}
+
 if [ -d "$SRC_DIR/.git" ]; then
   say "Updating RelayCLI in $SRC_DIR"
   git -C "$SRC_DIR" pull --ff-only
@@ -37,21 +60,7 @@ elif command -v pipx >/dev/null 2>&1; then
   pipx install --force "$SRC_DIR"
   relaycli_cmd="$(command -v relaycli || true)"
 else
-  say "Installing command with a private virtualenv"
-  python3 -m venv "$VENV_DIR"
-  "$VENV_DIR/bin/python" -m pip install --upgrade pip
-  "$VENV_DIR/bin/python" -m pip install -e "$SRC_DIR"
-  cat > "$BIN_DIR/relaycli" <<WRAP
-#!/usr/bin/env sh
-set -eu
-if ! "$VENV_DIR/bin/python" -c "import typer" >/dev/null 2>&1; then
-  "$VENV_DIR/bin/python" -m ensurepip --upgrade >/dev/null 2>&1 || true
-  "$VENV_DIR/bin/python" -m pip install -e "$SRC_DIR" >/dev/null
-fi
-exec "$VENV_DIR/bin/relaycli" "\$@"
-WRAP
-  chmod +x "$BIN_DIR/relaycli"
-  relaycli_cmd="$BIN_DIR/relaycli"
+  install_private_venv
 fi
 
 if [ -z "$relaycli_cmd" ] && [ -x "$BIN_DIR/relaycli" ]; then
@@ -60,6 +69,14 @@ fi
 if [ -z "$relaycli_cmd" ]; then
   say "RelayCLI installed, but relaycli is not on PATH. Add $BIN_DIR to PATH."
   relaycli_cmd="$BIN_DIR/relaycli"
+fi
+if ! check_command "$relaycli_cmd"; then
+  say "Installed relaycli command did not start cleanly; repairing with private virtualenv"
+  install_private_venv
+  check_command "$relaycli_cmd" || {
+    say "error: RelayCLI installed but failed its smoke check."
+    exit 1
+  }
 fi
 
 say "RelayCLI is installed."

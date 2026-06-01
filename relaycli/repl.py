@@ -26,8 +26,10 @@ from rich.syntax import Syntax
 from relaycli.agent import Agent
 from relaycli.config import CONFIG_DIR, PermissionMode, Settings, ensure_config_dir
 from relaycli.context import ProjectContext
+from relaycli.frontend_scaffold import create_frontend_scaffold, detect_frontend_scaffold
 from relaycli.intent import local_reply_for
 from relaycli.llm import is_warm, key_status, preflight_settings
+from relaycli.ollama_runtime import recommended_fast_local_model, slow_local_model_warning
 from relaycli.permissions import PermissionManager
 from relaycli.render import (
     RichReporter,
@@ -39,65 +41,9 @@ from relaycli.render import (
     render_welcome,
     short_model_name,
 )
-
-
-# The slash menu's source of truth: command -> (argument hint, description).
-# Keep descriptions in step with render_help() — same commands, shorter text
-# (the popup gives each entry one line).
-SLASH_COMMANDS: dict[str, tuple[str, str]] = {
-    "model": ("[name|search q]", "show, search, or switch the model"),
-    "mode": ("[m]", "permission mode: suggest | auto-edit | full-auto"),
-    "relay": ("[on|off]", "toggle the Planner → Coder → Reviewer pipeline"),
-    "agents": ("[r on|off]", "show relay agents; toggle explorer/tester"),
-    "skill": ("[name]", "toggle a skill on/off for this session"),
-    "skills": ("", "list available skills (● = active)"),
-    "config": ("", "roles, per-role models & provider keys (persistent)"),
-    "settings": ("", "general preferences (mode, theme, context)"),
-    "setup": ("", "guided setup: model, keys, and optional services"),
-    "init": ("", "alias of /setup"),
-    "services": ("[start names]", "show/start ollama, web, postgres, n8n"),
-    "doctor": ("", "run a local health check"),
-    "memory": ("", "show long-term memory (global + project)"),
-    "desktop": ("", "open the desktop web UI in your browser"),
-    "mcp": ("", "show MCP connectors and their tools"),
-    "diff": ("", "show uncommitted changes (git diff)"),
-    "clear": ("", "reset the conversation"),
-    "help": ("", "show all commands and keys"),
-    "exit": ("", "quit (aliases: exit, quit, Ctrl-D)"),
-    "quit": ("", "quit (alias of /exit)"),
-}
-
-# First-argument suggestions. /model offers curated common ids — completion
-# candidates only, not a whitelist: any id can still be typed in full.
-_ARG_COMPLETIONS: dict[str, tuple[str, ...]] = {
-    "mode": ("suggest", "auto-edit", "full-auto"),
-    "relay": ("on", "off"),
-    "agents": ("explorer", "tester", "tasks"),
-    "services": ("start", "ollama", "web", "postgres", "n8n"),
-    "model": (
-        "gpt-4o",
-        "gpt-4o-mini",
-        "o3-mini",
-        "claude-3-5-sonnet-latest",
-        "claude-3-5-haiku-latest",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
-        "groq/llama-3.3-70b-versatile",
-        "mistral-large-latest",
-        # OpenRouter suggestions are open-weights only (user preference;
-        # verified against the live /models API 2026-07-03 — all have public
-        # HF weights + tool support). :free variants cost nothing but share
-        # capacity and can be rate-limited.
-        "openrouter/cohere/north-mini-code:free",
-        "openrouter/qwen/qwen3-coder:free",
-        "openrouter/qwen/qwen3-coder-next",
-        "openrouter/deepseek/deepseek-v4-flash",
-        "openrouter/z-ai/glm-4.7",
-        "openrouter/moonshotai/kimi-k2.6",
-        "openrouter/openai/gpt-oss-120b:free",
-        "ollama_chat/llama3.1",
-    ),
-}
+from relaycli.slash import ARG_COMPLETIONS as _ARG_COMPLETIONS
+from relaycli.slash import COMMANDS as SLASH_COMMAND_ROWS
+from relaycli.slash import SLASH_COMMANDS
 
 
 # Claude Code-ish chrome: orange caret, quiet gray toolbar (no reverse
@@ -137,15 +83,23 @@ class SlashCompleter(Completer):
             return
         head, sep, arg = text[1:].partition(" ")
         if not sep:  # still typing the command name: filter by prefix
-            for name, (hint, desc) in SLASH_COMMANDS.items():
-                if name.startswith(head.lower()):
-                    display = f"/{name} {hint}".rstrip()
-                    yield Completion(
-                        "/" + name,
-                        start_position=-len(text),
-                        display=display,
-                        display_meta=desc,
-                    )
+            prefix = head.lower()
+            rows = [
+                row for row in SLASH_COMMAND_ROWS
+                if row.name.startswith(prefix)
+            ]
+            if prefix and not rows:
+                names = [row.name for row in SLASH_COMMAND_ROWS]
+                matched = set(get_close_matches(prefix, names, n=4, cutoff=0.45))
+                rows = [row for row in SLASH_COMMAND_ROWS if row.name in matched]
+            for row in rows:
+                display = row.usage
+                yield Completion(
+                    "/" + row.name,
+                    start_position=-len(text),
+                    display=display,
+                    display_meta=f"{row.group} · {row.description}",
+                )
             return
         if " " in arg:  # only the first argument is completable
             return
@@ -165,6 +119,8 @@ class Repl:
         self.console = console or Console()
         self.project = ProjectContext(Path.cwd())
         self.permissions = PermissionManager(settings.permission_mode, console=self.console)
+        self._manual_model_selected = False
+        self._manual_slow_warning_shown_for: str | None = None
         from relaycli.mcp import enabled_servers, extend_registry
         from relaycli.tools import default_registry
 
@@ -280,11 +236,11 @@ class Repl:
         """
         relay = "relay on" if self.settings.relay_enabled else "relay off"
         parts = (
-            short_model_name(self.settings.model),
-            str(self.permissions.mode),
+            f"model {short_model_name(self.settings.model)}",
+            f"mode {self.permissions.mode}",
             relay,
             "/help",
-            "type /",
+            "/",
         )
         return " " + " · ".join(parts) + " "
 
@@ -349,6 +305,8 @@ class Repl:
         if reply is not None:
             render_local_reply(self.console, reply)
             return False
+        if self.settings.local_scaffolds and self._try_frontend_scaffold(line):
+            return False
         self._run_agent(line)
         return False
 
@@ -390,6 +348,25 @@ class Repl:
         style = "dim" if proc.returncode == 0 else "red"
         self.console.print(f"[{style}]↳ exit {proc.returncode}[/{style}]")
 
+    def _try_frontend_scaffold(self, request: str) -> bool:
+        scaffold = detect_frontend_scaffold(request)
+        if scaffold is None:
+            return False
+        decision = self.permissions.confirm(
+            "write", prompt_text=f"Create frontend scaffold in {escape(scaffold.folder)}?"
+        )
+        if not decision.approved:
+            self.console.print("[yellow]scaffold declined.[/yellow]")
+            return True
+        result = create_frontend_scaffold(self.project, scaffold)
+        self.console.print(f"[green]created[/green] {escape(result.folder)}")
+        for rel in result.files:
+            self.console.print(f"  [dim]write[/dim] {escape(rel)}")
+        self.console.print(
+            f"[dim]open {escape(result.folder)}/index.html in a browser to preview.[/dim]"
+        )
+        return True
+
     # -- running a task --------------------------------------------------
     def _warm_note(self) -> None:
         # LiteLLM is imported lazily on the first model call and that import
@@ -410,7 +387,55 @@ class Repl:
             self.console.print(f"[dim]✦ auto-skill: [cyan]{escape(name)}[/cyan][/dim]")
         return names
 
+    def _ensure_runnable_local_model(self) -> bool:
+        warning = slow_local_model_warning(self.settings.model)
+        if not warning:
+            return True
+        if self._manual_model_selected:
+            self._print_manual_slow_warning_once(warning)
+            return True
+        fallback = recommended_fast_local_model(self.settings)
+        if fallback and fallback != self.settings.model:
+            old = self.settings.model
+            self.console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+            self.settings.model = fallback
+            try:
+                from relaycli.appconfig import set_base_model
+
+                set_base_model(fallback)
+            except Exception:
+                pass
+            self.agent.session.model = fallback
+            self.agent.refresh_system_prompt()
+            self.console.print(
+                f"[yellow]model auto-switch:[/yellow] {escape(old)} → {escape(fallback)} "
+                "[dim](requires full GPU / avoids CPU-GPU fallback)[/dim]"
+            )
+            return True
+        self.console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+        return False
+
+    def _print_manual_slow_warning_once(self, warning: str) -> None:
+        """Warn once per manually selected slow local model.
+
+        The user already chose this model explicitly, so RelayCLI should keep
+        their choice without repeating the same warning before every request.
+        """
+
+        if self._manual_slow_warning_shown_for == self.settings.model:
+            return
+        model = short_model_name(self.settings.model)
+        self.console.print(
+            f"[yellow]⚠ {escape(model)} may be slow unless Ollama shows 100% GPU.[/yellow]"
+        )
+        self.console.print(
+            "[dim]manual model kept; RelayCLI will not auto-switch this choice.[/dim]"
+        )
+        self._manual_slow_warning_shown_for = self.settings.model
+
     def _run_agent(self, request: str) -> None:
+        if not self._ensure_runnable_local_model():
+            return
         auto = self._auto_skills_for(request)
         if self.settings.relay_enabled:
             self._run_relay(request, auto_skills=auto)
@@ -435,6 +460,8 @@ class Repl:
         from relaycli.relay import Relay
         from relaycli.render import RelayRichObserver, render_relay_summary
 
+        if not self._ensure_runnable_local_model():
+            return
         self._warm_note()
 
         # A fresh Relay per request is by design: each request is a fresh
@@ -525,6 +552,14 @@ class Repl:
                 "[dim]Type / to browse commands.[/dim]"
             )
         return False
+
+    def _persist_runtime_option(self, key: str, value: object) -> None:
+        try:
+            from relaycli.appconfig import set_runtime_option
+
+            set_runtime_option(key, value)
+        except Exception:
+            pass  # session toggle still applies
 
     def _cmd_setup(self) -> None:
         from relaycli.onboarding import run_init
@@ -637,6 +672,8 @@ class Repl:
                 return
 
         self.settings.model = arg
+        self._manual_model_selected = True
+        self._manual_slow_warning_shown_for = None
         try:
             from relaycli.appconfig import set_base_model
 
@@ -648,6 +685,9 @@ class Repl:
         from relaycli.render import render_model_warning
 
         render_model_warning(self.console, self.settings)
+        warning = slow_local_model_warning(self.settings.model)
+        if warning:
+            self._print_manual_slow_warning_once(warning)
 
     def _print_model_matches(self, rows: list[dict]) -> None:
         from rich.table import Table
@@ -686,6 +726,7 @@ class Repl:
         self.settings.permission_mode = mode
         self.permissions.set_mode(mode)
         self.agent.refresh_system_prompt()
+        self._persist_runtime_option("permission_mode", str(mode))
         self.console.print(f"mode → [yellow]{mode}[/yellow]")
         if mode is PermissionMode.full_auto:
             self._full_auto_banner()
@@ -701,6 +742,7 @@ class Repl:
             self.console.print("[red]Usage:[/red] /relay \\[on|off]")
             return
         self.settings.relay_enabled = value == "on"
+        self._persist_runtime_option("relay_enabled", self.settings.relay_enabled)
         self.console.print(f"relay → [cyan]{value}[/cyan]")
         if self.settings.relay_enabled:
             self._print_routing()
@@ -722,6 +764,7 @@ class Repl:
                     and parts[1] in ("on", "off")):
                 field = "relay_split_tasks" if parts[0] == "tasks" else f"relay_{parts[0]}"
                 setattr(self.settings, field, parts[1] == "on")
+                self._persist_runtime_option(field, getattr(self.settings, field))
                 self.console.print(f"agent {parts[0]} → [cyan]{parts[1]}[/cyan]")
                 if parts[1] == "on" and not self.settings.relay_enabled:
                     self.console.print(
@@ -809,15 +852,7 @@ class Repl:
             return
         value = args[0] == "on"
         self.settings.skills_auto = value
-        # Persist as a flat config.toml key (same path relay_enabled uses).
-        try:
-            from relaycli.appconfig import load_app_config, save_app_config
-
-            cfg = load_app_config()
-            cfg._raw["skills_auto"] = value
-            save_app_config(cfg)
-        except OSError:
-            pass  # session toggle still applies
+        self._persist_runtime_option("skills_auto", value)
         self.console.print(f"skill auto → [cyan]{args[0]}[/cyan]")
 
     def _cmd_skills(self) -> None:

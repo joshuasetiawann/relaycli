@@ -144,6 +144,7 @@ def default_registry() -> ToolRegistry:
     """Build a fresh registry containing all real RelayCLI coding tools."""
     from relaycli.tools import (  # local import avoids import cycles
         background as _background,
+        create_folder as _create_folder,
         edit_file as _edit_file,
         find_files as _find_files,
         list_dir as _list_dir,
@@ -155,7 +156,7 @@ def default_registry() -> ToolRegistry:
     )
 
     reg = ToolRegistry()
-    for module in (_list_dir, _find_files, _read_file, _search, _write_file,
+    for module in (_list_dir, _find_files, _read_file, _search, _create_folder, _write_file,
                    _edit_file, _run_command, _background, _remember):
         module.register(reg)
     return reg

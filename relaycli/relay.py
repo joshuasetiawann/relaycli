@@ -105,7 +105,9 @@ How to work:
   examples such as `new_folder`.
 - If the Planner produced clarification text instead of an actionable plan but
   the user's request is still doable, proceed from the user request directly.
-- Inspect before changing: use read_file / search to understand the code first.
+- Inspect before changing: for an existing file, call read_file first in this
+  task, then use exact snippets copied from that output. Do not guess snippets
+  or paths.
 - Use edit_file for targeted changes and write_file to create or fully replace
   a file. Use run_command to run tests or builds.
 - Use run_background for anything that does not exit on its own (dev servers,

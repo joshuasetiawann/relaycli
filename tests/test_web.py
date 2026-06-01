@@ -82,8 +82,11 @@ def test_state_reports_session():
     }
     assert "ponytail" in state["skills"]
     assert state["busy"] is False
+    assert state["local_scaffolds"] is False
     assert "onboarding" in state
     assert "ready" in state["onboarding"]
+    assert any(c["name"] == "model" and c["usage"].startswith("/model") for c in state["commands"])
+    assert any(c["name"] == "mode" and c["group"] == "Safety" for c in state["commands"])
 
 
 def test_send_runs_agent_and_records_events():
@@ -101,6 +104,17 @@ def test_send_runs_agent_and_records_events():
     assert [e["n"] for e in session.events_since(0)] == list(range(len(kinds)))
 
 
+def test_send_records_model_progress_logs():
+    session = WebSession(_settings(), llm=FakeLLM([_resp("Hello from the agent")]))
+
+    assert session.send("explain this repo") is True
+    session._thread.join(timeout=30)
+
+    logs = [e["text"] for e in session.events_since(0) if e["kind"] == "log"]
+    assert any("→ model step 1" in text for text in logs)
+    assert any("← model answer" in text for text in logs)
+
+
 def test_send_greeting_returns_local_guide_without_thread():
     session = WebSession(_settings(), llm=FakeLLM([_resp("should not run")]))
     assert session.send("halo") is True
@@ -113,6 +127,306 @@ def test_send_greeting_returns_local_guide_without_thread():
     assert events[2]["stopped"] == "done"
 
 
+def test_send_frontend_prompt_uses_agent_by_default(tmp_path):
+    llm = RecordingLLM([_resp("agent handled")])
+    session = WebSession(_settings(permission_mode=PermissionMode.full_auto), llm=llm)
+
+    assert session.send("buatin saya web platform belajar mandarin") is True
+    session._thread.join(timeout=30)
+
+    assert llm.calls
+    assert not (tmp_path / "belajar-mandarin").exists()
+    events = session.events_since(0)
+    assert any(e["kind"] == "text" and e["text"] == "agent handled" for e in events)
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+
+
+def test_send_frontend_shop_scaffold_runs_locally_without_llm(tmp_path):
+    llm = RecordingLLM([_resp("should not run")])
+    session = WebSession(
+        _settings(permission_mode=PermissionMode.full_auto, local_scaffolds=True),
+        llm=llm,
+    )
+
+    assert session.send(
+        "buatin saya web toko spatu di front endnya aja di folder baru namanya sepatuu yaa"
+    ) is True
+    session._thread.join(timeout=30)
+
+    assert llm.calls == []
+    assert (tmp_path / "sepatuu" / "index.html").is_file()
+    assert (tmp_path / "sepatuu" / "styles.css").is_file()
+    assert (tmp_path / "sepatuu" / "app.js").is_file()
+    events = session.events_since(0)
+    assert any(e["kind"] == "tool" and "sepatuu/index.html" in e["summary"] for e in events)
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+    assert summary["tokens"] == 0
+
+
+def test_send_frontend_shop_scaffold_respects_quoted_folder_without_llm(tmp_path):
+    llm = RecordingLLM([_resp("should not run")])
+    session = WebSession(
+        _settings(permission_mode=PermissionMode.full_auto, local_scaffolds=True),
+        llm=llm,
+    )
+
+    assert session.send(
+        'tolong build ulang website toko baju online di folder baru bernama "toko baju" pake html css js aja nuansa hitam gekao'
+    ) is True
+    session._thread.join(timeout=30)
+
+    assert llm.calls == []
+    html = (tmp_path / "toko baju" / "index.html").read_text()
+    app_js = (tmp_path / "toko baju" / "app.js").read_text()
+    assert 'class="theme-dark"' in html
+    assert "Baju harian" in html
+    assert "Everyday Cotton Tee" in app_js
+    assert not (tmp_path / "bernama").exists()
+    summary = [e for e in session.events_since(0) if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+
+
+def test_send_mandarin_learning_platform_scaffold_without_llm(tmp_path):
+    llm = RecordingLLM([_resp("should not run")])
+    session = WebSession(
+        _settings(permission_mode=PermissionMode.full_auto, local_scaffolds=True),
+        llm=llm,
+    )
+
+    assert session.send("buatin saya web platform belajar mandarin") is True
+    session._thread.join(timeout=30)
+
+    assert llm.calls == []
+    html = (tmp_path / "belajar-mandarin" / "index.html").read_text()
+    app_js = (tmp_path / "belajar-mandarin" / "app.js").read_text()
+    assert "MandarinLab" in html
+    assert "Belajar Mandarin" in html
+    assert "Nada dan Pinyin" in app_js
+    assert any(
+        e["kind"] == "text" and "MandarinLab" in e["text"] and "toko sepatu" not in e["text"]
+        for e in session.events_since(0)
+    )
+    summary = [e for e in session.events_since(0) if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+
+
+def test_send_frontend_shop_scaffold_defaults_folder_without_llm(tmp_path):
+    llm = RecordingLLM([_resp("should not run")])
+    session = WebSession(
+        _settings(permission_mode=PermissionMode.full_auto, local_scaffolds=True),
+        llm=llm,
+    )
+
+    assert session.send("buatin saya web toko sepatu fokus frontend aja") is True
+    session._thread.join(timeout=30)
+
+    assert llm.calls == []
+    assert (tmp_path / "toko-sepatu" / "index.html").is_file()
+    assert (tmp_path / "toko-sepatu" / "styles.css").is_file()
+    summary = [e for e in session.events_since(0) if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+    assert summary["tokens"] == 0
+
+
+def test_send_frontend_shop_scaffold_respects_suggest_mode(tmp_path):
+    session = WebSession(
+        _settings(permission_mode=PermissionMode.suggest, local_scaffolds=True)
+    )
+
+    assert session.send("buat web toko sepatu di folder namanya sepatuu") is True
+
+    assert session._thread is None
+    assert not (tmp_path / "sepatuu").exists()
+    assert any("suggest mode" in e.get("text", "") for e in session.events_since(0))
+
+
+def test_unknown_text_tool_json_is_retried_not_rendered_as_action(tmp_path):
+    fake = '```json\n{"name":"build_web_app","arguments":{"output_folder":"web-app"}}\n```'
+    real = (
+        '```json\n'
+        '{"name":"write_file","arguments":{"path":"web-app/index.html","content":"<h1>OK</h1>"}}\n'
+        '```'
+    )
+    session = WebSession(_settings(), llm=FakeLLM([_resp(fake), _resp(real), _resp("done")]))
+
+    assert session.send("buat web toko") is True
+    session._thread.join(timeout=30)
+
+    events = session.events_since(0)
+    assert (tmp_path / "web-app" / "index.html").read_text() == "<h1>OK</h1>"
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+    assert not any(e["kind"] == "text" and "build_web_app" in e["text"] for e in events)
+
+
+def test_repeated_unknown_text_tool_json_is_marked_as_error():
+    fake = '```json\n{"name":"build_web_app","arguments":{"output_folder":"web-app"}}\n```'
+    session = WebSession(_settings(), llm=FakeLLM([_resp(fake), _resp(fake), _resp(fake)]))
+
+    assert session.send("buat web toko") is True
+    session._thread.join(timeout=30)
+
+    events = session.events_since(0)
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "error"
+    assert "fake tool call" in summary["text"]
+    assert not any(e["kind"] == "text" and "build_web_app" in e["text"] for e in events)
+
+
+def test_text_tool_json_executes_in_web_session(tmp_path):
+    fake = (
+        '```json\n'
+        '{"name":"write_file","arguments":{"path":"mandarin/index.html","content":"<h1>你好</h1>"}}\n'
+        '```'
+    )
+    session = WebSession(_settings(), llm=FakeLLM([_resp(fake), _resp("done")]))
+
+    assert session.send("ubah file mandarin/index.html jadi halaman sederhana") is True
+    session._thread.join(timeout=30)
+
+    events = session.events_since(0)
+    assert (tmp_path / "mandarin" / "index.html").read_text() == "<h1>你好</h1>"
+    assert any(e["kind"] == "tool" and "mandarin/index.html" in e["summary"] for e in events)
+    assert not any(e["kind"] == "text" and "write_file" in e["text"] for e in events)
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+
+
+def test_web_retries_frontend_task_when_model_only_gives_tutorial(tmp_path):
+    from relaycli.llm import ToolCall
+
+    def tc(name, args, call_id):
+        return ToolCall(id=call_id, name=name, arguments=json.dumps(args))
+
+    session = WebSession(
+        _settings(),
+        llm=FakeLLM([
+            LLMResponse(text="", tool_calls=[tc("create_folder", {"path": "toko laptop"}, "c1")], usage=Usage(total_tokens=8)),
+            _resp("Here are the steps to create a website with HTML, CSS, and JavaScript."),
+            LLMResponse(text="", tool_calls=[tc("write_file", {
+                "path": "toko laptop/index.html",
+                "content": "<h1>Toko Laptop</h1>",
+            }, "c2")], usage=Usage(total_tokens=8)),
+            _resp("done"),
+        ]),
+    )
+
+    assert session.send('buatin website toko laptop di folder "toko laptop"') is True
+    session._thread.join(timeout=30)
+
+    assert (tmp_path / "toko laptop" / "index.html").read_text() == "<h1>Toko Laptop</h1>"
+    summary = [e for e in session.events_since(0) if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+
+
+def test_send_slow_local_model_returns_fast_error(monkeypatch):
+    import relaycli.web as web_mod
+
+    monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
+    monkeypatch.setattr(web_mod, "recommended_fast_local_model", lambda settings: None)
+    session = WebSession(
+        _settings(model="ollama_chat/qwen3:4b"),
+        llm=FakeLLM([_resp("should not run")]),
+    )
+
+    assert session.send("jelasin repo ini") is True
+
+    assert session._thread is None
+    events = session.events_since(0)
+    assert any(e["kind"] == "error" and "slow local model" in e["text"] for e in events)
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "error"
+
+
+def test_send_slow_local_model_auto_switches_to_fast_model(monkeypatch):
+    import relaycli.web as web_mod
+
+    monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
+    monkeypatch.setattr(
+        web_mod,
+        "recommended_fast_local_model",
+        lambda settings: "ollama_chat/qwen2.5-coder:0.5b",
+    )
+    session = WebSession(
+        _settings(model="ollama_chat/qwen3:4b"),
+        llm=FakeLLM([_resp("ok")]),
+    )
+
+    assert session.send("jelasin repo ini") is True
+    session._thread.join(timeout=30)
+
+    assert session.settings.model == "ollama_chat/qwen2.5-coder:0.5b"
+    events = session.events_since(0)
+    assert any(
+        e["kind"] == "note" and "Model auto-switched:" in e["text"]
+        for e in events
+    )
+    assert any(e["kind"] == "text" and e["text"] == "ok" for e in events)
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+
+
+def test_send_respects_manually_selected_slow_model(monkeypatch):
+    import relaycli.web as web_mod
+
+    monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
+    monkeypatch.setattr(
+        web_mod,
+        "recommended_fast_local_model",
+        lambda settings: "ollama_chat/qwen2.5-coder:0.5b",
+    )
+    session = WebSession(
+        _settings(model="ollama_chat/qwen2.5-coder:1.5b"),
+        llm=FakeLLM([_resp("ok")]),
+    )
+    session.set_model("ollama_chat/qwen3:4b")
+
+    assert session.send("jelasin repo ini") is True
+    session._thread.join(timeout=30)
+
+    assert session.settings.model == "ollama_chat/qwen3:4b"
+    events = session.events_since(0)
+    assert any(
+        e["kind"] == "log" and "manual slow local model kept" in e["text"]
+        for e in events
+    )
+    assert not any(
+        e["kind"] == "note" and "Model auto-switched:" in e["text"]
+        for e in events
+    )
+    assert any(e["kind"] == "text" and e["text"] == "ok" for e in events)
+
+
+def test_send_warns_once_for_manually_selected_slow_model(monkeypatch):
+    import relaycli.web as web_mod
+
+    monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
+    monkeypatch.setattr(
+        web_mod,
+        "recommended_fast_local_model",
+        lambda settings: "ollama_chat/qwen2.5-coder:0.5b",
+    )
+    session = WebSession(
+        _settings(model="ollama_chat/qwen2.5-coder:1.5b"),
+        llm=FakeLLM([_resp("first"), _resp("second")]),
+    )
+    session.set_model("ollama_chat/qwen3:4b")
+
+    assert session.send("jelasin repo ini") is True
+    session._thread.join(timeout=30)
+    assert session.send("jelasin lagi") is True
+    session._thread.join(timeout=30)
+
+    events = session.events_since(0)
+    warnings = [
+        e for e in events
+        if e["kind"] == "log" and "manual slow local model kept" in e["text"]
+    ]
+    assert len(warnings) == 1
+
+
 def test_send_permissive_followup_carries_previous_request():
     llm = RecordingLLM([
         _resp("I need clarification."),
@@ -120,7 +434,7 @@ def test_send_permissive_followup_carries_previous_request():
     ])
     session = WebSession(_settings(), llm=llm)
 
-    first = "buatkan saya web toko kaya shope, di folder baru namanya shooooi"
+    first = "buatkan struktur catatan produk, di folder baru namanya shooooi"
     assert session.send(first) is True
     session._thread.join(timeout=30)
 
@@ -171,7 +485,8 @@ def test_http_endpoints_roundtrip():
     try:
         base = f"http://127.0.0.1:{port}"
         html = urllib.request.urlopen(base + "/", timeout=5).read().decode()
-        assert "RelayCLI" in html and "Agents" in html
+        assert "RelayCLI" in html and "Agents" in html and "Activity" in html
+        assert 'id="activityList"' in html
 
         state = json.loads(urllib.request.urlopen(base + "/api/state", timeout=5).read())
         assert state["model"] == "fake/model"
@@ -198,6 +513,9 @@ def test_http_endpoints_roundtrip():
 def test_send_empty_rejected_and_ui_file_ships():
     session = WebSession(_settings())
     assert UI_PATH.is_file()
+    ui = UI_PATH.read_text(encoding="utf-8")
+    for marker in ("projectBtn", "chatCollapse", "sideCollapse", "termLarger"):
+        assert marker in ui
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
     port = server.server_address[1]
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -293,14 +611,37 @@ def test_current_model_surfaces_under_current_group():
 
 
 def test_set_model_and_flags():
+    from relaycli import appconfig
+
     session = WebSession(_settings())
     session.set_model("ollama_chat/llama3.1")
     assert session.settings.model == "ollama_chat/llama3.1"
+    assert session.set_mode("auto-edit") is True
+    assert session.settings.permission_mode is PermissionMode.auto_edit
     assert session.set_flag("tasks", True) is True
     assert session.settings.relay_split_tasks is True
     assert session.set_flag("explorer", True) is True
     assert session.settings.relay_explorer is True
     assert session.set_flag("bogus", True) is False
+
+    cfg = appconfig.load_app_config()
+    assert cfg._raw["model"] == "ollama_chat/llama3.1"
+    assert cfg._raw["permission_mode"] == "auto-edit"
+    assert cfg._raw["relay_split_tasks"] is True
+    assert cfg._raw["relay_explorer"] is True
+
+
+def test_set_project_changes_desktop_working_directory(tmp_path):
+    session = WebSession(_settings())
+    target = tmp_path / "project-two"
+    target.mkdir()
+
+    ok, path = session.set_project(str(target))
+
+    assert ok is True
+    assert path == str(target.resolve())
+    assert session.state()["cwd"] == str(target.resolve())
+    assert any("project directory changed" in e.get("text", "") for e in session.events_since(0))
 
 
 def test_reset_clears_events_when_idle():
@@ -377,6 +718,8 @@ def test_http_stop_model_reset_endpoints():
             return json.loads(urllib.request.urlopen(req, timeout=5).read())
 
         assert post("/api/model", {"model": "ollama_chat/llama3.1"})["model"] == "ollama_chat/llama3.1"
+        assert post("/api/mode", {"mode": "full-auto"})["mode"] == "full-auto"
+        assert session.settings.permission_mode is PermissionMode.full_auto
         assert post("/api/flag", {"name": "tasks", "on": True})["ok"] is True
         assert session.settings.relay_split_tasks is True
         assert post("/api/stop", {})["ok"] is True

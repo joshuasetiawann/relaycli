@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 from rich.markup import escape
 
 from relaycli.context import PathSafetyError
+from relaycli.project_hints import missing_path_hint
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult
 
@@ -37,7 +38,10 @@ def read_file(args: ReadFileArgs, ctx: ToolContext) -> ToolResult:
     try:
         path = proj.resolve(args.path, must_exist=True)
     except PathSafetyError as exc:
-        return ToolResult.error(str(exc), summary=f"read {args.path} (refused)")
+        return ToolResult.error(
+            str(exc) + missing_path_hint(proj, args.path),
+            summary=f"read {args.path} (refused)",
+        )
 
     if not path.is_file():
         hint = " Use list_dir to list a directory." if path.is_dir() else ""
@@ -97,6 +101,7 @@ def read_file(args: ReadFileArgs, ctx: ToolContext) -> ToolResult:
     if truncated:
         text += f"\n\n[... truncated: {total} bytes total, showing first {args.max_bytes} ...]"
 
+    ctx.read_files.add(rel)
     return ToolResult(
         ok=True,
         output=text,

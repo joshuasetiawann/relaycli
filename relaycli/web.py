@@ -25,6 +25,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +35,7 @@ from rich.console import Console
 
 from relaycli.config import PermissionMode, Settings
 from relaycli.context import ProjectContext
+from relaycli.frontend_scaffold import create_frontend_scaffold, detect_frontend_scaffold
 from relaycli.intent import continuation_for, local_reply_for
 from relaycli.llm import preflight_settings
 from relaycli.model_catalog import (
@@ -42,11 +44,11 @@ from relaycli.model_catalog import (
     provider_key,
     pull_ollama_model,
 )
-from relaycli.render import friendly_error_text, short_model_name
+from relaycli.ollama_runtime import recommended_fast_local_model, slow_local_model_warning
+from relaycli.render import brief_tool_error, friendly_error_text, short_model_name
 from relaycli.router import Role, resolve_model, role_enabled
 
 UI_PATH = Path(__file__).parent / "web_ui.html"
-
 
 class WebReporter:
     """Reporter protocol → session events (one per assistant block / tool)."""
@@ -55,6 +57,32 @@ class WebReporter:
         self._session = session
         self._agent = agent
         self._buf: list[str] = []
+        self._tool_started: dict[str, float] = {}
+
+    def model_start(self, n: int, model: str) -> None:
+        self._session.add(
+            "log", agent=self._agent,
+            text=f"→ model step {n} · {model}",
+            level="info",
+        )
+
+    def model_end(self, n: int, model: str, tool_calls: int, has_text: bool, usage) -> None:
+        if tool_calls:
+            detail = f"{tool_calls} tool call{'s' if tool_calls != 1 else ''}"
+        else:
+            detail = "answer" if has_text else "empty response"
+        self._session.add(
+            "log", agent=self._agent,
+            text=f"← model {detail} · {usage.total_tokens} tok",
+            level="ok",
+        )
+
+    def model_error(self, n: int, model: str, error: Exception) -> None:
+        self._session.add(
+            "log", agent=self._agent,
+            text="← model error",
+            level="bad",
+        )
 
     def assistant_token(self, text: str) -> None:
         self._buf.append(text)
@@ -63,14 +91,31 @@ class WebReporter:
         text = "".join(self._buf).strip()
         self._buf.clear()
         if text:
+            from relaycli.agent import fake_tool_call_text
+
+            if fake_tool_call_text(text):
+                return
             self._session.add("text", agent=self._agent, text=text)
 
-    def tool_start(self, call) -> None: ...
+    def tool_start(self, call) -> None:
+        self._tool_started[call.id] = time.perf_counter()
+        from relaycli.agent import _compact
+
+        args = _compact(call.arguments, limit=120)
+        detail = f"→ tool {call.name}" + (f" {args}" if args and args != "{}" else "")
+        self._session.add("log", agent=self._agent, text=detail, level="info")
 
     def tool_end(self, call, result) -> None:
         ok = result is not None and result.ok
         summary = (result.summary if result is not None else "") or call.name
+        started = self._tool_started.pop(call.id, None)
+        if started is not None:
+            summary = f"{summary} · {time.perf_counter() - started:.1f}s"
         self._session.add("tool", agent=self._agent, ok=ok, summary=summary)
+        if result is not None and not result.ok and result.output:
+            self._session.add(
+                "error", agent=self._agent, text=brief_tool_error(result.output)
+            )
 
     def iteration(self, n: int) -> None: ...
 
@@ -105,6 +150,8 @@ class WebSession:
         self._pull_thread: threading.Thread | None = None
         self._muted_threads: set[int] = set()
         self._stop = threading.Event()
+        self._manual_model_selected = False
+        self._manual_slow_warning_shown_for: str | None = None
 
     # -- events ------------------------------------------------------------
     def add(self, kind: str, **data) -> None:
@@ -130,6 +177,7 @@ class WebSession:
     def state(self) -> dict:
         from relaycli import __version__
         from relaycli.config import CONFIG_FILE
+        from relaycli.slash import command_payload
         from relaycli.skills import discover_skills
 
         s = self.settings
@@ -153,6 +201,7 @@ class WebSession:
             "relay": s.relay_enabled,
             "explorer": s.relay_explorer,
             "tester": s.relay_tester,
+            "local_scaffolds": s.local_scaffolds,
             # "tasks" mirrors the /api/flag name the settings toggle uses;
             # "split_tasks" is kept for any other consumer.
             "tasks": s.relay_split_tasks,
@@ -175,6 +224,7 @@ class WebSession:
             # panel: each role's enabled state, assignment, and resolved model.
             "roster": self._roster(),
             "skills": sorted(discover_skills(self.project.root)),
+            "commands": command_payload(),
             "mcp": self._mcp_status(),
             "preflight": preflight_settings(s),
             "busy": self.busy,
@@ -220,13 +270,30 @@ class WebSession:
     def _model_choices(self) -> list[dict]:
         return model_choices(self.settings, current=self.settings.model)
 
-    def set_model(self, model: str) -> None:
+    def set_model(self, model: str, *, manual: bool = True) -> None:
         model = (model or "").strip()
         if model:
             self.settings.model = model
+            if manual:
+                self._manual_model_selected = True
+                self._manual_slow_warning_shown_for = None
             from relaycli.appconfig import set_base_model
 
             set_base_model(model)
+
+    def set_mode(self, mode: str) -> bool:
+        try:
+            value = PermissionMode(mode)
+        except ValueError:
+            return False
+        self.settings.permission_mode = value
+        try:
+            from relaycli.appconfig import set_runtime_option
+
+            set_runtime_option("permission_mode", str(value))
+        except Exception:
+            pass
+        return True
 
     def set_flag(self, name: str, value: bool) -> bool:
         """Toggle a boolean session setting from the UI. Returns True if known."""
@@ -238,7 +305,32 @@ class WebSession:
         if field is None:
             return False
         setattr(self.settings, field, bool(value))
+        try:
+            from relaycli.appconfig import set_runtime_option
+
+            set_runtime_option(field, bool(value))
+        except Exception:
+            pass
         return True
+
+    def set_project(self, path: str) -> tuple[bool, str]:
+        """Switch the desktop working directory when no run is active."""
+
+        raw = (path or "").strip()
+        if not raw:
+            return False, "Project path required."
+        if self.busy:
+            return False, "Wait for the current run to finish before changing project."
+        candidate = Path(raw).expanduser()
+        try:
+            resolved = candidate.resolve()
+        except OSError as exc:
+            return False, f"Could not resolve project path: {exc}"
+        if not resolved.is_dir():
+            return False, f"Not a directory: {resolved}"
+        self.project = ProjectContext(resolved)
+        self.add("note", text=f"project directory changed: {self.project.root}")
+        return True, str(self.project.root)
 
     # Each relay role can run a different specialist model. "" clears the
     # override so the role falls back to the base model.
@@ -368,10 +460,7 @@ class WebSession:
             if self.busy:
                 return False
             if mode:
-                try:
-                    self.settings.permission_mode = PermissionMode(mode)
-                except ValueError:
-                    pass
+                self.set_mode(mode)
             previous = self._last_actionable_user_text()
             run_text = continuation_for(text, previous) or text
             self._stop.clear()
@@ -404,6 +493,92 @@ class WebSession:
                     "kind": "note",
                     "text": "continuing the previous request with your follow-up",
                 })
+            scaffold = detect_frontend_scaffold(run_text) if self.settings.local_scaffolds else None
+            if scaffold is not None:
+                if self.settings.permission_mode is PermissionMode.suggest:
+                    self._events.append({
+                        "n": len(self._events),
+                        "kind": "note",
+                        "text": (
+                            "suggest mode cannot approve file writes in the web UI - "
+                            "switch to auto-edit or full-auto, then send again"
+                        ),
+                    })
+                    self._events.append({
+                        "n": len(self._events),
+                        "kind": "summary",
+                        "stopped": "error",
+                        "verdict": None,
+                        "cycles": 0,
+                        "tasks": [],
+                        "tokens": 0,
+                        "cost": 0.0,
+                        "elapsed": 0.0,
+                        "text": "Mode suggest menolak pembuatan file di web.",
+                    })
+                    return True
+                self._thread = threading.Thread(
+                    target=self._run_frontend_scaffold, args=(scaffold,), daemon=True
+                )
+                self._thread.start()
+                return True
+            warning = slow_local_model_warning(self.settings.model)
+            if warning:
+                old_model = self.settings.model
+                fallback = recommended_fast_local_model(self.settings)
+                if self._manual_model_selected:
+                    if self._manual_slow_warning_shown_for != self.settings.model:
+                        self._events.append({
+                            "n": len(self._events),
+                            "kind": "log",
+                            "agent": "model",
+                            "level": "warn",
+                            "text": (
+                                "manual slow local model kept; RelayCLI will not "
+                                "auto-switch this choice"
+                            ),
+                        })
+                        self._manual_slow_warning_shown_for = self.settings.model
+                elif fallback and fallback != old_model:
+                    self.set_model(fallback, manual=False)
+                    old_short = short_model_name(old_model)
+                    fallback_short = short_model_name(fallback)
+                    note = (
+                        f"Model auto-switched: {old_short} -> {fallback_short} "
+                        "because the previous local model is too slow on CPU."
+                    )
+                    self._events.append({
+                        "n": len(self._events),
+                        "kind": "note",
+                        "text": note,
+                    })
+                    self._events.append({
+                        "n": len(self._events),
+                        "kind": "log",
+                        "agent": "model",
+                        "level": "warn",
+                        "text": f"auto-switched {old_short} -> {fallback_short}",
+                    })
+                else:
+                    self._events.append({
+                        "n": len(self._events),
+                        "kind": "error",
+                        "agent": "setup",
+                        "text": warning,
+                    })
+                    self._events.append({
+                        "n": len(self._events),
+                        "kind": "summary",
+                        "stopped": "error",
+                        "verdict": None,
+                        "cycles": 0,
+                        "tasks": [],
+                        "tokens": 0,
+                        "cost": 0.0,
+                        "elapsed": 0.0,
+                        "text": warning,
+                    })
+                    return True
             self._thread = threading.Thread(target=self._run, args=(run_text,), daemon=True)
             self._thread.start()
         return True
@@ -418,6 +593,46 @@ class WebSession:
             if text and local_reply_for(text) is None:
                 return text
         return None
+
+    def _run_frontend_scaffold(self, scaffold) -> None:
+        start = time.time()
+        try:
+            self.add("role", agent="agent", model="local-scaffold", cycle=1)
+            result = create_frontend_scaffold(self.project, scaffold)
+            for rel in result.files:
+                self.add("tool", agent="agent", ok=True, summary=f"write {rel}")
+            self.add(
+                "text",
+                agent="agent",
+                text=(
+                    f"Frontend {scaffold.title} sudah dibuat di `{result.folder}`.\n"
+                    f"Buka `{result.folder}/index.html` langsung di browser."
+                ),
+            )
+            self.add(
+                "summary",
+                stopped="done",
+                verdict=None,
+                cycles=0,
+                tasks=["local frontend scaffold"],
+                tokens=0,
+                cost=0.0,
+                elapsed=round(time.time() - start, 1),
+                text="",
+            )
+        except Exception as exc:
+            self.add("error", text=f"{type(exc).__name__}: {exc}")
+            self.add(
+                "summary",
+                stopped="error",
+                verdict=None,
+                cycles=0,
+                tasks=[],
+                tokens=0,
+                cost=0.0,
+                elapsed=round(time.time() - start, 1),
+                text=str(exc),
+            )
 
     def _run(self, text: str) -> None:
         from relaycli.agent import Agent
@@ -566,9 +781,19 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
             elif path == "/api/model":
                 session.set_model(data.get("model") or "")
                 self._json({"ok": True, "model": session.settings.model})
+            elif path == "/api/mode":
+                ok = session.set_mode(data.get("mode") or "")
+                self._json({"ok": ok, "mode": str(session.settings.permission_mode)},
+                           status=200 if ok else 400)
             elif path == "/api/flag":
                 ok = session.set_flag(data.get("name") or "", bool(data.get("on")))
                 self._json({"ok": ok}, status=200 if ok else 400)
+            elif path == "/api/project":
+                ok, message = session.set_project(data.get("path") or "")
+                self._json(
+                    {"ok": ok, "path": message} if ok else {"error": message},
+                    status=200 if ok else 400,
+                )
             elif path == "/api/role-model":
                 ok = session.set_role_model(data.get("role") or "", data.get("model") or "")
                 self._json({"ok": ok}, status=200 if ok else 400)

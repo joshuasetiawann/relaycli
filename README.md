@@ -55,9 +55,12 @@ One-line install for new users:
 curl -fsSL https://raw.githubusercontent.com/joshuasetiawann/relaycli/main/scripts/install.sh | sh
 ```
 
-The installer clones RelayCLI, installs the `relaycli` command, then opens the
-guided setup. In that setup you can choose a model and optionally start local
-services such as Ollama, n8n, the web UI, or Postgres via Docker Compose.
+The installer clones RelayCLI, installs the `relaycli` command, smoke-checks
+that the command starts cleanly, then opens the guided setup. If a PATH/tool
+installer leaves a broken command behind, it repairs RelayCLI into a private
+virtualenv under `~/.relaycli/venv`. In setup you can choose a model and
+optionally start local services such as Ollama, n8n, the web UI, or Postgres
+via Docker Compose.
 
 Manual install isolated with `pipx` or `uv tool` (recommended), or into a
 virtualenv with `pip`:

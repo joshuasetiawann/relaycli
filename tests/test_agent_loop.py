@@ -13,6 +13,7 @@ from relaycli.context import ProjectContext
 from relaycli.llm import LLMResponse, ToolCall, Usage
 from relaycli.permissions import PermissionManager
 from relaycli.tools.base import ToolContext
+from relaycli.tools.read_file import ReadFileArgs, read_file
 
 
 class FakeLLM:
@@ -80,6 +81,284 @@ def test_full_read_edit_run_cycle(sample_project):
     assert result.tool_calls == 3
     assert "return 'hello'" in (sample_project / "app.py").read_text()
     assert result.usage.total_tokens == 32  # 4 calls * 8
+
+
+def test_agent_recovers_when_model_edits_before_reading(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("edit_file", {
+            "path": "app.py",
+            "old_string": "missing",
+            "new_string": "x",
+        })]),
+        _resp(tool_calls=[_tc("edit_file", {
+            "path": "app.py",
+            "old_string": "return 'hi'",
+            "new_string": "return 'hello'",
+        })]),
+        _resp(text="Updated."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("update app.py")
+
+    assert result.stopped_reason == "done"
+    assert "return 'hello'" in (sample_project / "app.py").read_text()
+    tool_msgs = [m for m in llm.calls[1] if m.get("role") == "tool"]
+    assert any("Read-before-edit is required" in (m.get("content") or "") for m in tool_msgs)
+    assert any("return 'hi'" in (m.get("content") or "") for m in tool_msgs)
+
+
+def test_text_tool_json_is_executed(sample_project):
+    fake = (
+        '```json\n'
+        '{"name":"write_file","arguments":{"path":"mandarin/index.html","content":"<h1>你好</h1>"}}\n'
+        '```'
+    )
+    llm = FakeLLM([
+        _resp(text=fake),
+        _resp(text="Created the Mandarin page."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("buat web belajar mandarin")
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 1
+    assert (sample_project / "mandarin" / "index.html").read_text() == "<h1>你好</h1>"
+    tool_msgs = [m for m in llm.calls[-1] if m.get("role") == "tool"]
+    assert any("Wrote" in (m.get("content") or "") for m in tool_msgs)
+
+
+def test_text_create_folder_json_is_executed(sample_project):
+    fake = (
+        '```json\n'
+        '{"name":"create_folder","arguments":{"folder_name":"toko laptop"}}\n'
+        '```'
+    )
+    llm = FakeLLM([
+        _resp(text=fake),
+        _resp(text="Folder created."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run('buat satu folder bernama "toko laptop"')
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 1
+    assert (sample_project / "toko laptop").is_dir()
+
+
+def test_text_tool_array_json_executes_multiple_calls(sample_project):
+    fake = (
+        '```json\n'
+        '[{"name":"create_folder","arguments":{"path":"shop"}},'
+        '{"name":"write_file","arguments":{"path":"shop/index.html","content":"<h1>Shop</h1>"}}]\n'
+        '```'
+    )
+    llm = FakeLLM([
+        _resp(text=fake),
+        _resp(text="Shop created."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("buat web toko sederhana")
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 2
+    assert (sample_project / "shop").is_dir()
+    assert (sample_project / "shop" / "index.html").read_text() == "<h1>Shop</h1>"
+
+
+def test_text_tool_alias_and_string_args_are_normalized(sample_project):
+    fake = '```json\n{"tool":"mkdir","args":"toko laptop"}\n```'
+    llm = FakeLLM([
+        _resp(text=fake),
+        _resp(text="Folder created."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run('buat satu folder bernama "toko laptop"')
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 1
+    assert (sample_project / "toko laptop").is_dir()
+
+
+def test_empty_response_is_retried_instead_of_marked_done(sample_project):
+    llm = FakeLLM([
+        _resp(text=""),
+        _resp(tool_calls=[_tc("create_folder", {"path": "toko laptop"})]),
+        _resp(text="Folder created."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run('buat satu folder bernama "toko laptop"')
+
+    assert result.stopped_reason == "done"
+    assert result.iterations == 3
+    assert (sample_project / "toko laptop").is_dir()
+    user_messages = [
+        m.get("content", "") for m in llm.calls[1]
+        if m.get("role") == "user"
+    ]
+    assert any("previous response was empty" in text for text in user_messages)
+
+
+def test_actionable_frontend_task_retries_when_no_files_written(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("create_folder", {"path": "toko laptop"})]),
+        _resp(text="I'm sorry, but I don't have enough information to continue."),
+        _resp(tool_calls=[_tc("write_file", {
+            "path": "toko laptop/index.html",
+            "content": "<h1>Toko Laptop</h1>",
+        })]),
+        _resp(text="Website created."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run('buatin website toko laptop nuansa gelap di folder "toko laptop"')
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 2
+    assert (sample_project / "toko laptop" / "index.html").read_text() == "<h1>Toko Laptop</h1>"
+    user_messages = [
+        m.get("content", "") for m in llm.calls[2]
+        if m.get("role") == "user"
+    ]
+    assert any("no files have been written" in text for text in user_messages)
+    assert any("`toko laptop`" in text for text in user_messages)
+
+
+def test_actionable_file_task_rejects_fake_created_file_claim(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("create_folder", {"path": "smoke-folder"})]),
+        _resp(text="<tool_response>\nCreated file 'smoke-folder/index.html'.\n</tool_response>"),
+        _resp(text="Please provide me with the necessary information to complete the task."),
+        _resp(text="<tool_response>\nCreated file 'smoke-folder/index.html'.\n</tool_response>"),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run(
+        'buat satu folder bernama "smoke-folder", lalu buat file '
+        'smoke-folder/ok.txt berisi OK'
+    )
+
+    assert result.stopped_reason == "error"
+    assert "without writing or editing any files" in result.final_text
+    assert not (sample_project / "smoke-folder" / "ok.txt").exists()
+
+
+def test_actionable_file_task_rejects_clarification_without_write(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("create_folder", {"path": "smoke-folder"})]),
+        _resp(text="Please provide me with the necessary information to complete the task."),
+        _resp(text="I will continue once you provide the details."),
+        _resp(text="Please provide me with the necessary information to complete the task."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run(
+        'buat satu folder bernama "smoke-folder", lalu buat file '
+        'smoke-folder/ok.txt berisi OK'
+    )
+
+    assert result.stopped_reason == "error"
+    assert "without writing or editing any files" in result.final_text
+    assert not (sample_project / "smoke-folder" / "ok.txt").exists()
+
+
+def test_actionable_file_task_recovers_after_fake_created_file_claim(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("create_folder", {"path": "smoke-folder"})]),
+        _resp(text="<tool_response>\nCreated file 'smoke-folder/index.html'.\n</tool_response>"),
+        _resp(tool_calls=[_tc("write_file", {
+            "path": "smoke-folder/ok.txt",
+            "content": "OK",
+        })]),
+        _resp(text="done"),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run(
+        'buat satu folder bernama "smoke-folder", lalu buat file '
+        'smoke-folder/ok.txt berisi OK'
+    )
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 2
+    assert (sample_project / "smoke-folder" / "ok.txt").read_text() == "OK"
+
+
+def test_explain_website_prompt_can_finish_without_file_write(sample_project):
+    llm = FakeLLM([_resp(text="This website is a static HTML app.")])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("jelaskan website ini")
+
+    assert result.stopped_reason == "done"
+    assert result.final_text == "This website is a static HTML app."
+    assert result.tool_calls == 0
+
+
+def test_folder_only_task_does_not_require_file_write(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("create_folder", {"path": "toko laptop"})]),
+        _resp(text="Folder created."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run('buat satu folder bernama "toko laptop"')
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 1
+    assert (sample_project / "toko laptop").is_dir()
+
+
+def test_repeated_empty_response_is_error_not_done(sample_project):
+    llm = FakeLLM([_resp(text=""), _resp(text=""), _resp(text="")])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("buat website toko laptop")
+
+    assert result.stopped_reason == "error"
+    assert "empty responses" in result.final_text
+    assert result.tool_calls == 0
+
+
+def test_unknown_text_tool_json_is_retried_then_recovers(sample_project):
+    fake = '```json\n{"name":"build_web_app","arguments":{"output_folder":"web-app"}}\n```'
+    real = (
+        '```json\n'
+        '{"name":"write_file","arguments":{"path":"web-app/index.html","content":"<h1>OK</h1>"}}\n'
+        '```'
+    )
+    llm = FakeLLM([_resp(text=fake), _resp(text=real), _resp(text="Created.")])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("buat web")
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 1
+    assert (sample_project / "web-app" / "index.html").read_text() == "<h1>OK</h1>"
+    user_messages = [
+        m.get("content", "") for m in llm.calls[1]
+        if m.get("role") == "user"
+    ]
+    assert any("build_web_app" in text and "write_file" in text for text in user_messages)
+
+
+def test_repeated_unknown_text_tool_json_is_error(sample_project):
+    fake = '```json\n{"name":"build_web_app","arguments":{"output_folder":"web-app"}}\n```'
+    llm = FakeLLM([_resp(text=fake), _resp(text=fake), _resp(text=fake)])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("buat web")
+
+    assert result.stopped_reason == "error"
+    assert "fake tool call" in result.final_text
+    assert "did not recover" in result.final_text
+    assert result.iterations == 3
+    assert result.tool_calls == 0
 
 
 def test_tool_error_recovery(sample_project):
@@ -169,3 +448,37 @@ def test_system_prompt_mentions_tools_and_mode(sample_project):
     assert "read_file" in system and "run_command" in system
     assert "full-auto" in system
     assert str(sample_project.resolve()) in system
+
+
+def test_system_prompt_lists_existing_web_files(tmp_path):
+    web = tmp_path / "belajar-mandarin"
+    web.mkdir()
+    (web / "index.html").write_text("<h1>Belajar Mandarin</h1>", encoding="utf-8")
+    (web / "styles.css").write_text("body { color: white; }", encoding="utf-8")
+    (web / "app.js").write_text("console.log('mandarin')", encoding="utf-8")
+    agent = _build_agent(tmp_path, FakeLLM([_resp(text="hi")]))
+
+    system = agent.session.to_messages()[0]["content"]
+
+    assert "Project snapshot:" in system
+    assert "belajar-mandarin/index.html" in system
+    assert "belajar-mandarin/styles.css" in system
+    assert "Do not assume `src/index.html` unless it is listed" in system
+
+
+def test_missing_read_path_suggests_existing_web_candidate(tmp_path):
+    web = tmp_path / "belajar-mandarin"
+    web.mkdir()
+    (web / "index.html").write_text("<h1>Belajar Mandarin</h1>", encoding="utf-8")
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    ctx = ToolContext(
+        ProjectContext(tmp_path),
+        PermissionManager(PermissionMode.full_auto, console=console),
+        console,
+    )
+
+    result = read_file(ReadFileArgs(path="src/index.html"), ctx)
+
+    assert not result.ok
+    assert "src/index.html" in result.output
+    assert "belajar-mandarin/index.html" in result.output

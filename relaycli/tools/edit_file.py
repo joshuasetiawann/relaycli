@@ -6,11 +6,13 @@ from pydantic import BaseModel, Field
 from rich.markup import escape
 
 from relaycli.context import PathSafetyError
+from relaycli.project_hints import missing_path_hint
 from relaycli.render import render_diff
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult, atomic_write
 
 _BINARY_SNIFF = 8192
+_RECOVERY_MAX_CHARS = 5_000
 
 NAME = "edit_file"
 DESCRIPTION = (
@@ -35,7 +37,10 @@ def edit_file(args: EditFileArgs, ctx: ToolContext) -> ToolResult:
     try:
         path = proj.resolve(args.path, must_exist=True)
     except PathSafetyError as exc:
-        return ToolResult.error(str(exc), summary=f"edit {args.path} (refused)")
+        return ToolResult.error(
+            str(exc) + missing_path_hint(proj, args.path),
+            summary=f"edit {args.path} (refused)",
+        )
 
     if not path.is_file():
         return ToolResult.error(
@@ -71,10 +76,18 @@ def edit_file(args: EditFileArgs, ctx: ToolContext) -> ToolResult:
             summary=f"edit {rel} (refused: non-utf-8)",
         )
 
+    if ctx.require_read_before_edit and rel not in ctx.read_files:
+        ctx.read_files.add(rel)
+        can_show = not proj.is_secret(path) and not proj.is_ignored(path)
+        return ToolResult.error(
+            _read_required_recovery(rel, old if can_show else None),
+            summary=f"edit {rel} (read required)",
+        )
+
     count = old.count(args.old_string)
     if count == 0:
         return ToolResult.error(
-            f"old_string not found in '{rel}'.", summary=f"edit {rel} (not found)"
+            _not_found_recovery(rel, old), summary=f"edit {rel} (not found)"
         )
     if count > 1 and not args.replace_all:
         return ToolResult.error(
@@ -112,3 +125,36 @@ def edit_file(args: EditFileArgs, ctx: ToolContext) -> ToolResult:
 
 def register(reg: ToolRegistry) -> None:
     reg.add(Tool(name=NAME, description=DESCRIPTION, args_model=EditFileArgs, func=edit_file))
+
+
+def _not_found_recovery(rel: str, current: str) -> str:
+    shown = current[:_RECOVERY_MAX_CHARS]
+    if len(current) > _RECOVERY_MAX_CHARS:
+        shown += (
+            f"\n\n[... truncated: {len(current)} characters total, "
+            f"showing first {_RECOVERY_MAX_CHARS} ...]"
+        )
+    return (
+        f"old_string not found in '{rel}'. Use an exact snippet from the current "
+        "file below, or use write_file to replace the file if the requested change "
+        f"is broad.\n\n--- current {rel} ---\n{shown}"
+    )
+
+
+def _read_required_recovery(rel: str, current: str | None) -> str:
+    if current is None:
+        return (
+            f"Read '{rel}' before editing it. Call read_file for that exact path, "
+            "then retry edit_file with an exact snippet from the read output."
+        )
+    shown = current[:_RECOVERY_MAX_CHARS]
+    if len(current) > _RECOVERY_MAX_CHARS:
+        shown += (
+            f"\n\n[... truncated: {len(current)} characters total, "
+            f"showing first {_RECOVERY_MAX_CHARS} ...]"
+        )
+    return (
+        f"Read-before-edit is required for '{rel}'. Use an exact snippet from "
+        "the current file below, then retry edit_file, or use write_file for a "
+        f"broad replacement.\n\n--- current {rel} ---\n{shown}"
+    )

@@ -197,6 +197,51 @@ def check_runtimes() -> list[Check]:
     return checks
 
 
+def check_installation() -> list[Check]:
+    """Verify bundled assets and core tools survived installation."""
+
+    checks: list[Check] = []
+    try:
+        from relaycli.skills import discover_skills
+        from relaycli.tools import default_registry
+        from relaycli.web import UI_PATH
+
+        skills = discover_skills(None)
+        required_skills = {
+            "brainstorm", "debug", "frontend-taste", "ponytail", "tdd", "verify",
+        }
+        missing_skills = sorted(required_skills - set(skills))
+        checks.append(Check(
+            "builtin skills",
+            FAIL if missing_skills else OK,
+            "missing: " + ", ".join(missing_skills) if missing_skills
+            else f"{len(required_skills)} bundled skill(s) available",
+        ))
+
+        tools = set(default_registry().names())
+        required_tools = {
+            "list_dir", "find_files", "read_file", "search", "create_folder",
+            "write_file", "edit_file", "run_command", "run_background",
+            "check_process", "stop_process", "remember",
+        }
+        missing_tools = sorted(required_tools - tools)
+        checks.append(Check(
+            "core tools",
+            FAIL if missing_tools else OK,
+            "missing: " + ", ".join(missing_tools) if missing_tools
+            else f"{len(required_tools)} tool(s) registered",
+        ))
+
+        checks.append(Check(
+            "desktop ui",
+            OK if UI_PATH.exists() else FAIL,
+            str(UI_PATH) if UI_PATH.exists() else f"missing {UI_PATH}",
+        ))
+    except Exception as exc:
+        checks.append(Check("installation", FAIL, f"{type(exc).__name__}: {exc}"))
+    return checks
+
+
 def check_writable_dirs(project_root: Path) -> list[Check]:
     from relaycli import memory
 
@@ -237,6 +282,7 @@ def run_checks(
     prober: Callable[[str], tuple[int, str]] | None = None,
 ) -> list[Check]:
     checks: list[Check] = []
+    checks += check_installation()
     checks += check_config_perms()
     checks.append(
         check_openrouter_key(settings, prober=prober)
