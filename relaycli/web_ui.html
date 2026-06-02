@@ -1025,7 +1025,7 @@ function renderCommandPalette() {
     return head + `<button class="cmd-item ${i === cmdIndex ? "sel" : ""}" data-i="${i}">` +
       `<span class="cu">${esc(c.usage)}</span><span class="cd">${esc(c.description)}</span></button>`;
   }).join("");
-  box.innerHTML = `<div class="cmd-top"><b>Command palette</b><span>↑↓ select · Tab apply · Enter run</span></div>` +
+  box.innerHTML = `<div class="cmd-top"><b>Command palette</b><span>↑↓ pilih · Tab isi · Enter jalan</span></div>` +
     `<div class="cmd-list">${body}</div>`;
   box.classList.remove("hidden");
   for (const b of box.querySelectorAll(".cmd-item")) {
@@ -1044,7 +1044,8 @@ function commandHelpText() {
   const rows = commandRows();
   if (!rows.length) return "Ketik /model, /mode, /relay, /clear, atau /help.";
   return "Command yang tersedia di desktop:\n" +
-    rows.map(c => `${c.usage.padEnd(22)} ${c.description}`).join("\n");
+    rows.map(c => `${c.usage.padEnd(22)} ${c.description}`).join("\n") +
+    "\n\nTip: ketik / lalu lanjutkan beberapa huruf untuk mencari command.";
 }
 function nearestCommand(name) {
   const rows = commandRows();

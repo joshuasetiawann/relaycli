@@ -1,113 +1,127 @@
 # RelayCLI
- 
-A provider-agnostic, installable **terminal coding agent** — the same form
-factor as Claude Code / OpenAI Codex CLI, but you choose the model. Install it
-once, then run `relaycli` in any project directory: it reads and edits the
-real files there, runs shell commands, and works through your request in an
-interactive terminal session.
 
-## Features
+RelayCLI is a provider-agnostic coding agent for the terminal and desktop. Run
+it inside any project, choose the model you want, and let it read files, edit
+code, run commands, review changes, and keep useful project memory.
 
-- **Provider-agnostic** (via LiteLLM): OpenAI, Anthropic, Gemini, Groq,
-  Mistral, OpenRouter, or a local Ollama — no key needed for Ollama. Switch
-  models live with `/model`.
-- **Real coding tools**: `list_dir`, `find_files`, `read_file`, `search`
-  (ripgrep with Python fallback), `edit_file`, `write_file`, `run_command`,
-  plus `run_background` / `check_process` / `stop_process` for dev servers
-  and watchers — every file change is shown as a
-  colored diff before it is applied.
-- **Permission modes** — `suggest` / `auto-edit` / `full-auto` — gate every
-  edit and every command.
-- **Relay pipeline** (optional multi-agent mode): Planner → Coder → Reviewer
-  with per-role model routing and a bounded review/revise loop.
-- **Skills that activate themselves**: built-in working styles (tdd, debug,
-  verify, frontend-taste, …) switch on automatically when a request matches
-  their triggers — always announced, never silent (`/skill auto off` to opt
-  out).
-- **Long-term memory**: the agent saves durable facts with the `remember`
-  tool to `~/.relaycli/memory.md` (global) and `.relaycli/memory.md`
-  (per-project) and reads them at the start of every session. `/memory` shows
-  them; they're plain markdown you can edit.
-- **MCP connectors**: attach external tool servers (GitHub, Postgres, fetch,
-  filesystem, a real browser, or anything speaking MCP over stdio) with
-  `relaycli mcp add <preset>` — their tools appear to the agent alongside the
-  native ones, every call permission-gated like a command.
-- **Desktop web UI**: `relaycli desktop` (or `/desktop` from the REPL) opens
-  a loopback-only browser UI with the live agent pipeline, per-role models,
-  and API-key management.
-- **`relaycli doctor`**: one command that verifies keys (live), config file
-  permissions, model routing, connector runtimes, and the classic
-  `.env`-vs-config key-drift trap.
-- **Safety rails**: paths confined to the project root, `.gitignore`
-  respected, secret files (`.env`, credentials) never auto-read, provider keys
-  scrubbed from spawned command environments. Details in
-  [SECURITY.md](SECURITY.md).
-- **Cost awareness**: streaming output plus a per-task summary of steps,
-  tokens, estimated cost, and elapsed time.
+It is built for the same workflow family as Claude Code and Codex CLI, with a
+few RelayCLI-specific ideas: persistent settings, optional multi-agent relay,
+local Ollama support, desktop UI, MCP connectors, and explicit permission
+control for every write or command.
 
-## Install
+## Why RelayCLI
 
-Requires Python 3.12+ and `git`.
+- **Bring your own model**: OpenAI, Anthropic, Gemini, Groq, Mistral,
+  OpenRouter, DeepSeek, Qwen, GLM, or local Ollama through LiteLLM.
+- **Real project tools**: list, search, read, edit, write, run commands, manage
+  background processes, and save durable memory.
+- **Predictable safety**: project-root path confinement, secret-file protection,
+  `.gitignore` awareness, diff previews, and permission modes.
+- **Terminal first, desktop ready**: use the interactive CLI or launch a
+  loopback-only browser UI with live agent status.
+- **Persistent configuration**: model, mode, relay, agents, recent models,
+  roles, providers, and memory load automatically on the next run.
+- **Optional relay pipeline**: Planner -> Coder -> Reviewer, with per-role
+  models and task-split specialists.
 
-One-line install for new users:
+## Quick Start
+
+Install:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/joshuasetiawann/relaycli/main/scripts/install.sh | sh
 ```
 
-The installer clones RelayCLI, installs the `relaycli` command, smoke-checks
-that the command starts cleanly, then opens the guided setup. If a PATH/tool
-installer leaves a broken command behind, it repairs RelayCLI into a private
-virtualenv under `~/.relaycli/venv`. In setup you can choose a model and
-optionally start local services such as Ollama, n8n, the web UI, or Postgres
-via Docker Compose.
+Start in a project:
 
-Manual install isolated with `pipx` or `uv tool` (recommended), or into a
-virtualenv with `pip`:
+```bash
+cd your-project
+relaycli
+```
+
+Then type a normal request:
+
+```text
+explain this repo
+fix the failing tests
+build a simple landing page in a new folder named demo-site
+```
+
+For guided setup at any time:
+
+```bash
+relaycli init
+relaycli doctor
+```
+
+The installer clones RelayCLI, installs the `relaycli` command, smoke-checks
+the install, and opens setup. If `uv` or `pipx` is unavailable, it falls back to
+a private virtualenv under `~/.relaycli/venv`.
+
+During setup you can also choose optional local services such as Ollama, n8n,
+the desktop web UI, or Postgres.
+
+## Installation Options
+
+RelayCLI requires Python 3.12+ and Git.
 
 ```bash
 git clone https://github.com/joshuasetiawann/relaycli.git
 cd relaycli
+```
 
-pipx install -e .
-# or
+Install with `uv`:
+
+```bash
 uv tool install .
+```
 
-# plain pip (inside a virtualenv)
-python -m venv .venv && . .venv/bin/activate   # Windows: .venv\Scripts\activate
+Install with `pipx`:
+
+```bash
+pipx install -e .
+```
+
+Install in a virtualenv:
+
+```bash
+python -m venv .venv
+. .venv/bin/activate
 pip install -e .
 ```
 
-This puts a `relaycli` command on your PATH (with `pip`, only inside the
-activated virtualenv). For running tests from a checkout, install the dev extra:
-`pip install -e ".[dev]"`.
-
-## Quick start
+Install development dependencies:
 
 ```bash
-cd your-project
-export OPENAI_API_KEY=sk-...      # or any other provider key (see below)
-
-relaycli                          # interactive session
-relaycli -p "find every TODO in this project and list them"   # one-shot
-relaycli config                   # check which provider keys are detected
+pip install -e ".[dev]"
 ```
 
-## Configure
+## First Run
 
-RelayCLI reads configuration from (highest precedence first):
+RelayCLI reads configuration from:
 
 1. CLI flags
-2. environment variables / a local `.env`
+2. Environment variables and local `.env`
 3. `~/.relaycli/config.toml`
-4. built-in defaults
+4. Built-in defaults
 
-Provider keys use their standard names: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`,
-`GEMINI_API_KEY`, `GROQ_API_KEY`, `MISTRAL_API_KEY`, `OPENROUTER_API_KEY`.
-Ollama needs no key (`ollama_chat/<model>`, server URL via `OLLAMA_BASE_URL`).
+Common provider keys:
 
 ```bash
-cp .env.example .env   # then fill in the providers you use
+export OPENAI_API_KEY=...
+export ANTHROPIC_API_KEY=...
+export GEMINI_API_KEY=...
+export GROQ_API_KEY=...
+export MISTRAL_API_KEY=...
+export OPENROUTER_API_KEY=...
+```
+
+Ollama needs no API key:
+
+```bash
+ollama serve
+ollama pull qwen2.5-coder:1.5b
+relaycli init --model ollama_chat/qwen2.5-coder:1.5b --yes
 ```
 
 Example `~/.relaycli/config.toml`:
@@ -115,173 +129,114 @@ Example `~/.relaycli/config.toml`:
 ```toml
 model = "gpt-4o-mini"
 permission_mode = "suggest"
+relay_enabled = false
 ```
 
-> Security note: a project-local `.env` can set the model and provider keys,
-> but deliberately **cannot** change the permission mode or the Ollama URL —
-> an untrusted repo must not be able to switch RelayCLI into `full-auto` or
-> redirect model traffic. Set those via real environment variables, CLI
-> flags, or `~/.relaycli/config.toml`.
+Project `.env` files may set models and provider keys, but cannot escalate the
+permission mode or redirect Ollama traffic. Those safety-sensitive settings
+must come from CLI flags, real environment variables, or
+`~/.relaycli/config.toml`.
 
-## Usage
+## Daily Usage
 
-### Interactive session
-
-`relaycli` (no arguments) opens the REPL: type a request, watch the streamed
-answer and tool activity, approve diffs/commands per your permission mode.
-The welcome panel shows the model and whether its API key was found; if it
-wasn't, a setup panel lists the exact fixes (it doesn't block the session).
-
-| input | effect |
-|---|---|
-| plain text | send a request to the agent |
-| `/model [name]` | show or switch model (e.g. `gpt-4o-mini`, `ollama_chat/llama3.1`) |
-| `/mode [suggest\|auto-edit\|full-auto]` | show or switch permission mode |
-| `/relay [on\|off]` | toggle the Planner → Coder → Reviewer pipeline |
-| `/agents [r on\|off]` | show relay agents; toggle the optional explorer/tester |
-| `/skill [name]` | toggle a skill for this session (tdd, debug, ponytail, …) |
-| `/skill auto [on\|off]` | toggle per-request skill auto-activation |
-| `/skills` | list available skills and their sources |
-| `/memory` | show long-term memory (global + project) |
-| `/mcp` | show MCP connectors and their tools |
-| `/desktop` | open the desktop web UI in your browser |
-| `/config` | roles, per-role models & provider keys (persistent config) |
-| `/settings` | general preferences: mode, theme, context limit |
-| `/diff` | show working-tree changes (`git diff`) |
-| `/clear` | reset the conversation |
-| `/help` | show help (also `help`, `?`) |
-| `/exit` | quit (also `exit`, `quit`, Ctrl-D) |
-| `!<cmd>` | run a shell command in the project root (e.g. `!git status`) |
-
-Typing `/` pops a menu of every command with its description — keep typing to
-filter (`/mo` → `/model`, `/mode`), and `/mode `, `/relay `, `/model ` suggest
-their arguments. Enter accepts the highlighted entry when the menu is open and
-submits otherwise; Alt+Enter inserts a newline; Ctrl-C clears the line. A
-status bar at the bottom shows the live `model · mode · relay` state. Typing a
-`-flag` in the REPL prints a hint instead of sending it to the model — flags
-belong on the `relaycli` command line.
-
-### Skills
-
-A skill is a small markdown file that steers how the agent works. Built-ins:
-`ponytail` (least-code discipline), `tdd`, `debug`, `brainstorm`, `verify`,
-`frontend-taste`. Toggle one per session with `/skill <name>` — or let them
-activate themselves: built-in and user skills carry `triggers:` keywords
-(English + Indonesian), and when a request matches, the best one or two
-switch on for that request with a visible `✦ auto-skill:` line. Pure keyword
-matching — no extra model call. `/skill auto off` disables it.
-
-Add your own to `~/.relaycli/skills/` (or a project's `.relaycli/skills/`)
-as `name.md` with a `---` header carrying `name:`, `description:` and
-optional `triggers:`. Active skills also steer the relay coder.
-**Project** skills are never auto-activated — a cloned repo can offer a
-skill but cannot silently steer the agent.
-
-### Memory
-
-The agent keeps durable notes across sessions in two plain markdown files:
-`~/.relaycli/memory.md` (global: your preferences, environment quirks) and
-`<project>/.relaycli/memory.md` (project conventions, gotchas). It saves
-facts itself with the `remember` tool — gated like an edit, so `suggest`
-mode asks first — and reads both files into its context every session
-(size-capped). `/memory` or `relaycli memory` shows them; edit or delete
-the files freely.
-
-### MCP connectors
-
-RelayCLI speaks the Model Context Protocol (stdio). Connect external tool
-servers and the agent can use their tools like native ones:
+Interactive mode:
 
 ```bash
-relaycli mcp list                 # configured servers + available presets
-relaycli mcp add github           # preset (uses GITHUB_TOKEN via env:)
-relaycli mcp add fetch            # web pages as markdown (needs uvx)
-relaycli mcp add mydb --command "npx -y @modelcontextprotocol/server-postgres env:DATABASE_URL"
-relaycli mcp test github          # start it once and list its tools
-relaycli mcp remove github
+relaycli
 ```
 
-Servers live in `~/.relaycli/config.toml` under `[mcp.<name>]`; `env:VAR`
-values resolve at start time so secrets stay out of the file. Tools appear
-as `mcp_<server>_<tool>` and **every call asks for approval** exactly like
-`run_command` (full-auto skips prompts, as always). `/mcp` shows status
-inside the REPL.
-
-### Agents
-
-The relay pipeline is Planner → Coder → Reviewer, plus two opt-in roles:
-an **explorer** that scouts the codebase before planning (read-only) and a
-**tester** that runs the plan's verification step after coding. `/agents`
-shows the lineup; `/agents explorer on` / `/agents tester on` enable them
-(each adds a full agent run per request). Per-role models via
-`RELAYCLI_EXPLORER_MODEL` etc.
-
-**Specialists (roster-driven).** With task-split on (`/agents tasks on`), the
-Planner delegates each numbered step to a specialist from the 16-role roster
-by tagging it — `1. [backend] add the token helper`, `2. [frontend] wire the
-form`. Each task then runs on a fresh agent with that role's system prompt and
-its own resolved model, so a real team of specialists collaborates on one
-request. Enable roles and assign their models in `relaycli config` (or
-`/config`); `/agents` lists the enabled specialists. Untagged steps use the
-general Coder.
-
-### Configuration & Settings
-
-RelayCLI keeps two surfaces strictly separate:
-
-- **`relaycli settings`** (or `/settings`) — general preferences only:
-  permission mode, theme, context-token limit.
-- **`relaycli config`** (or `/config`) — a persistent, roster-based config
-  with two sections: **Roles & Models** (16 built-in roles, each
-  enable/disable + a per-role model or tier) and **Providers & Keys** (set a
-  key as an env reference or a masked literal). Scriptable subcommands:
-  `config show`, `config set-model <role> <model|tier>`, `config tier <t>
-  <model>`, `config enable|disable <role>`, `config set-key <provider>
-  [--env VAR | --value …]`, `config path`.
-
-Everything persists atomically to `~/.relaycli/config.toml` (`0600`); keys
-are never printed — only masked status (`via env (VAR)` or `sk-…abcd`).
-
-### One-shot and flags
+One-shot mode:
 
 ```bash
-relaycli -p "<request>"      # run one agent loop non-interactively and exit
-relaycli -m gpt-4o           # override the model at launch
-relaycli --mode auto-edit    # override the permission mode at launch
-relaycli -p "..." -y         # auto-approve prompts in non-interactive runs
-relaycli --relay             # run through the relay pipeline (also with -p)
-relaycli config              # active config, relay routing, detected providers
-relaycli doctor              # health checks (keys live-verified, perms, routing)
-relaycli memory              # show long-term memory
-relaycli mcp list            # MCP connectors and presets
-relaycli desktop             # desktop web UI in the browser (loopback only)
-relaycli version             # print the version
+relaycli -p "find every TODO and summarize them"
+relaycli -p "fix the import error" --mode auto-edit
+relaycli -p "review the current diff" --relay
 ```
 
-## Permission modes
+Desktop UI:
 
-| mode        | behaviour                                            |
-|-------------|------------------------------------------------------|
-| `suggest`   | ask before any edit or command (default, safest)     |
-| `auto-edit` | auto-apply edits, still ask before running commands  |
-| `full-auto` | never prompt (a banner is shown while active)        |
+```bash
+relaycli desktop
+```
 
-## Relay pipeline (multi-agent)
+Health check:
 
-The relay pipeline is what makes RelayCLI *RelayCLI*: instead of one agent,
-each request flows through three specialized roles —
+```bash
+relaycli doctor
+```
 
-1. **Planner** (read-only tools) explores the project and writes a short
-   numbered plan.
-2. **Coder** (full tools, honors your permission mode) carries out the plan
-   and reports what changed.
-3. **Reviewer** (read + run tests, no writes) verifies the working tree and
-   answers `VERDICT: approve` or `VERDICT: revise`. On revise, its feedback
-   goes back to the Coder — bounded by `max_review_cycles` (default 2).
+## Interactive Commands
 
-Each role can run on a different model ("smart routing"): a cheap model for
-planning/review, a strong one for coding. Unset roles fall back to the base
-`model`.
+Type `/` in the REPL to open the command palette. Keep typing to filter.
+
+| Command | Purpose |
+| --- | --- |
+| `/model [name]` | Show or switch the active model |
+| `/mode [suggest\|auto-edit\|full-auto]` | Show or switch permission mode |
+| `/relay [on\|off]` | Toggle Planner -> Coder -> Reviewer |
+| `/agents` | Show relay roles and task-split specialists |
+| `/agents explorer on` | Add a read-only explorer before planning |
+| `/agents tester on` | Add verification after coding |
+| `/agents tasks on` | Let the planner delegate steps to specialists |
+| `/skill [name]` | Toggle a skill for the current session |
+| `/skill auto [on\|off]` | Enable or disable automatic skill activation |
+| `/skills` | List available skills |
+| `/memory` | Show global and project memory |
+| `/mcp` | Show MCP connector status |
+| `/desktop` | Open the desktop UI |
+| `/config` | Configure roles, provider keys, and model tiers |
+| `/settings` | Configure general preferences |
+| `/diff` | Show uncommitted changes |
+| `/clear` | Reset conversation history |
+| `/help` | Show help |
+| `/exit` | Quit |
+| `!<cmd>` | Run a shell command in the project root |
+
+## Permission Modes
+
+| Mode | Behavior |
+| --- | --- |
+| `suggest` | Ask before edits and commands. Safest default. |
+| `auto-edit` | Apply file edits automatically, ask before commands. |
+| `full-auto` | Run edits and commands without asking. Use deliberately. |
+
+Mode changes persist automatically. If you switch to `full-auto`, the next
+RelayCLI session will remember it until you change it again.
+
+## Desktop UI
+
+`relaycli desktop` starts a loopback-only web app. It includes:
+
+- chat with the agent or relay team
+- model picker with recent models, provider groups, search, and Ollama pull
+- mode controls that persist across sessions
+- project directory switcher
+- live workflow visualization
+- activity feed for model calls, reads, writes, commands, and summaries
+- resizable terminal output drawer
+- provider key and role configuration panels
+
+The desktop UI is local by default. It binds to loopback unless explicitly
+configured otherwise.
+
+## Relay Pipeline
+
+Relay mode turns one request into a small workflow:
+
+1. **Planner** inspects the project and produces a short plan.
+2. **Coder** edits files and runs commands according to the plan.
+3. **Reviewer** checks the result and returns `VERDICT: approve` or
+   `VERDICT: revise`.
+
+Enable it:
+
+```bash
+relaycli --relay
+# or inside the REPL
+/relay on
+```
+
+Configure per-role models:
 
 ```toml
 # ~/.relaycli/config.toml
@@ -292,18 +247,155 @@ reviewer_model = "gpt-4o-mini"
 max_review_cycles = 2
 ```
 
-Enable per-session with `relaycli --relay` (works with `-p` one-shots too) or
-`/relay on` in the REPL; `--no-relay` overrides an enabled config. The
-end-of-task summary breaks down steps, tokens, and cost per role. Single-agent
-mode remains the default and is unchanged.
+Task-split mode lets the planner route numbered steps to specialist roles:
+
+```text
+1. [backend] add the API route
+2. [frontend] wire the UI
+3. [security] review input validation
+```
+
+Turn it on with:
+
+```text
+/agents tasks on
+```
+
+Use `/config` to enable specialists and assign their models.
+
+## Skills
+
+Skills are markdown instructions that shape how the agent works. Built-in
+skills include:
+
+- `frontend-taste`
+- `debug`
+- `tdd`
+- `verify`
+- `brainstorm`
+- `ponytail`
+
+Skills can auto-activate when a request matches their triggers. RelayCLI
+announces this with `auto-skill` output. Disable automatic activation with:
+
+```text
+/skill auto off
+```
+
+Add personal skills in:
+
+```text
+~/.relaycli/skills/
+```
+
+Project skills can live in:
+
+```text
+<project>/.relaycli/skills/
+```
+
+Project skills are listed, but not silently auto-activated.
+
+## Memory
+
+RelayCLI keeps durable notes in plain markdown:
+
+```text
+~/.relaycli/memory.md
+<project>/.relaycli/memory.md
+```
+
+The agent can save facts with the `remember` tool, and reads memory at the
+start of future sessions. Use `/memory` or `relaycli memory` to inspect it.
+
+Good memory examples:
+
+- project conventions
+- preferred commands
+- recurring environment issues
+- user preferences
+- known local model limitations
+
+## MCP Connectors
+
+RelayCLI supports MCP over stdio. Add external tool servers and the agent can
+use them alongside native tools.
+
+```bash
+relaycli mcp list
+relaycli mcp add github
+relaycli mcp add fetch
+relaycli mcp test github
+relaycli mcp remove github
+```
+
+Custom command example:
+
+```bash
+relaycli mcp add mydb --command "npx -y @modelcontextprotocol/server-postgres env:DATABASE_URL"
+```
+
+Connector config is stored in `~/.relaycli/config.toml`. `env:VAR` references
+resolve at runtime so secrets do not need to be written into the file.
+
+## Configuration Surfaces
+
+RelayCLI separates general preferences from model/provider routing.
+
+Use settings for general preferences:
+
+```bash
+relaycli settings
+```
+
+Use config for roles, providers, keys, and model tiers:
+
+```bash
+relaycli config
+relaycli config show
+relaycli config set-model coder gpt-4o
+relaycli config tier strong claude-3-5-sonnet-latest
+relaycli config set-key openrouter --env OPENROUTER_API_KEY
+relaycli config path
+```
+
+Configuration is written atomically to `~/.relaycli/config.toml` with `0600`
+permissions. Provider keys are masked in output.
+
+## Safety Model
+
+RelayCLI is designed to be useful without being casual about trust:
+
+- tool paths stay inside the project root
+- `.gitignore` is respected
+- secret-looking files are not auto-read
+- provider keys are scrubbed from spawned command environments
+- every edit is represented as a diff
+- every command and write is permission-gated unless you choose `full-auto`
+- project memory and project skills are treated as untrusted project data
+
+Read [SECURITY.md](SECURITY.md) for details.
 
 ## Development
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
+python -m venv .venv
+. .venv/bin/activate
 pip install -e ".[dev]"
 pytest
 ```
 
-Design docs live under `docs/superpowers/specs/` and implementation plans
-under `docs/superpowers/plans/`.
+Useful commands:
+
+```bash
+python -m relaycli.cli version
+python -m pytest -q
+python -m compileall relaycli tests
+```
+
+Design notes live in `docs/superpowers/specs/`. Implementation plans live in
+`docs/superpowers/plans/`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

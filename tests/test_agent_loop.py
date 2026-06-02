@@ -450,6 +450,16 @@ def test_system_prompt_mentions_tools_and_mode(sample_project):
     assert str(sample_project.resolve()) in system
 
 
+def test_system_prompt_discourages_invented_high_level_tools(sample_project):
+    agent = _build_agent(sample_project, FakeLLM([_resp(text="hi")]))
+
+    system = agent.session.to_messages()[0]["content"]
+
+    assert "Never invent high-level tools" in system
+    assert "build_web_app" in system
+    assert "create_folder" in system and "write_file" in system
+
+
 def test_system_prompt_lists_existing_web_files(tmp_path):
     web = tmp_path / "belajar-mandarin"
     web.mkdir()
