@@ -109,7 +109,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
-        toml_file=CONFIG_FILE,
+        toml_file=None,
     )
 
     # --- Core behaviour -------------------------------------------------
@@ -266,7 +266,7 @@ class Settings(BaseSettings):
             init_settings,
             env_settings,
             _FilteredSource(dotenv_settings, _DOTENV_BLOCKED_FIELDS),
-            TomlConfigSettingsSource(settings_cls),
+            TomlConfigSettingsSource(settings_cls, toml_file=CONFIG_FILE),
             file_secret_settings,
         )
 

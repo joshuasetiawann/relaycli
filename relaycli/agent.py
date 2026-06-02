@@ -76,6 +76,15 @@ _STRING_ARGUMENT_KEYS = {
     "check_process": "id",
     "stop_process": "id",
 }
+_CREATE_FOLDER_PATH_KEYS = (
+    "path",
+    "folder_name",
+    "folder_path",
+    "name",
+    "directory",
+    "directory_name",
+    "dir_name",
+)
 _FILE_ACTION_TERMS = (
     "buat", "buatin", "bikin", "create", "build", "generate", "tulis", "write",
     "add", "tambah", "ubah", "edit", "ganti", "update", "perbaiki", "perbagus",
@@ -147,6 +156,9 @@ How to work:
 - For static website/frontend requests, do the work instead of giving a
   tutorial: create or use the requested folder and write real files such as
   index.html, styles.css, and app.js. Preserve quoted folder names exactly.
+- Never finish a website/frontend/file task after only creating the folder.
+  Once create_folder succeeds, continue with write_file/edit_file until the
+  requested files actually exist or have changed.
 - If the user asks for a design refresh, avoid repeating the same template.
   Read existing files first, then make the design fit the requested domain,
   mood, and audience with real content and responsive layout.
@@ -334,6 +346,7 @@ class Agent:
         text_tool_repairs = 0
         file_write_successes = 0
         actionable_noop_repairs = 0
+        folder_create_nudges = 0
 
         for i in range(1, self.settings.max_iterations + 1):
             # Cooperative cancellation (e.g. the web Stop button): checked
@@ -468,6 +481,7 @@ class Agent:
                 )
 
             text_tool_repairs = 0
+            folder_ready_nudge: str | None = None
             for call_index, call in enumerate(active_tool_calls):
                 tool_calls += 1
                 reporter.tool_start(call)
@@ -491,6 +505,21 @@ class Agent:
                     and result.ok
                 ):
                     file_write_successes += 1
+                if (
+                    call.name == "create_folder"
+                    and result is not None
+                    and result.ok
+                    and file_write_successes == 0
+                    and folder_create_nudges < _TEXT_TOOL_REPAIR_RETRIES
+                    and _looks_like_actionable_file_request(request)
+                ):
+                    folder_ready_nudge = _folder_ready_file_task_nudge(
+                        request, call.arguments, result
+                    )
+
+            if folder_ready_nudge and file_write_successes == 0:
+                folder_create_nudges += 1
+                self.session.add_user(folder_ready_nudge)
 
         return AgentResult(
             final_text=(
@@ -753,20 +782,86 @@ def _looks_like_actionable_file_request(request: str) -> bool:
     )
 
 
-def _actionable_file_task_nudge(request: str) -> str:
+def _exact_names_from_request(request: str) -> list[str]:
     quoted = re.findall(r'"([^"\n]+)"|`([^`\n]+)`|' + r"'([^'\n]+)'", request)
-    exact_names = [next(part for part in group if part) for group in quoted]
+    return [next(part for part in group if part) for group in quoted]
+
+
+def _exact_names_clause(request: str) -> str:
+    exact_names = _exact_names_from_request(request)
     exact = ""
     if exact_names:
         exact = " Exact names from the user: " + ", ".join(
             f"`{name}`" for name in exact_names
         ) + "."
+    return exact
+
+
+def _folder_name_from_create_folder_args(arguments: str) -> str | None:
+    try:
+        data = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    for key in _CREATE_FOLDER_PATH_KEYS:
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _folder_name_from_result(result: ToolResult) -> str | None:
+    path = result.meta.get("path")
+    if isinstance(path, str) and path.strip():
+        return path.strip()
+    for pattern in (
+        r"Folder '([^'\n]+)' already exists\.",
+        r"Created folder '([^'\n]+)'\.",
+    ):
+        match = re.search(pattern, result.output or "")
+        if match:
+            return match.group(1).strip()
+    return None
+
+
+def _folder_ready_file_task_nudge(
+    request: str,
+    arguments: str,
+    result: ToolResult,
+) -> str:
+    folder = (
+        _folder_name_from_result(result)
+        or _folder_name_from_create_folder_args(arguments)
+    )
+    folder_clause = (
+        f" inside `{folder}`" if folder else " inside the requested folder"
+    )
+    return (
+        "The folder is ready, but the deliverable is not done: no files have "
+        "been written or edited yet. Do not call create_folder again for this "
+        "folder. Continue the same task now and make the next successful action "
+        "a write_file call, or edit_file only when updating an existing file. "
+        "For a static website/frontend request, create complete real files"
+        f"{folder_clause}: index.html, styles.css, and app.js. "
+        "Do not output <tool_response>, tutorial prose, placeholders, or "
+        "ellipses. If you cannot emit native tool calls, output only a valid "
+        "JSON array of available RelayCLI write_file calls with full content."
+        + _exact_names_clause(request)
+    )
+
+
+def _actionable_file_task_nudge(request: str) -> str:
     return (
         "The user asked for a concrete file-changing deliverable, but no files "
         "have been written or edited yet. Continue the same task by using tools, "
-        "not by giving tutorial steps or asking for more details. For a static "
-        "website/frontend request, write actual files such as index.html, "
-        "styles.css, and app.js inside the requested folder." + exact
+        "not by giving tutorial steps or asking for more details. Do not call "
+        "create_folder again if the folder already exists. Your next successful "
+        "action should be write_file, or edit_file only when updating an "
+        "existing file. For a static website/frontend request, write actual "
+        "files such as index.html, styles.css, and app.js inside the requested "
+        "folder. If you can only emit JSON-as-text, output only valid JSON for "
+        "available RelayCLI write_file/edit_file tools." + _exact_names_clause(request)
     )
 
 

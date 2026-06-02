@@ -229,6 +229,36 @@ def test_actionable_frontend_task_retries_when_no_files_written(sample_project):
     assert any("`toko laptop`" in text for text in user_messages)
 
 
+def test_actionable_frontend_task_nudges_after_folder_creation(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("create_folder", {"dir_name": "marketplace-shopee"})]),
+        _resp(tool_calls=[_tc("write_file", {
+            "path": "marketplace-shopee/index.html",
+            "content": "<h1>Marketplace</h1>",
+        })]),
+        _resp(text="Marketplace frontend created."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run(
+        'Buatkan website marketplace seperti Shopee, fokus frontend saja, '
+        'di folder baru bernama "marketplace-shopee".'
+    )
+
+    assert result.stopped_reason == "done"
+    assert result.tool_calls == 2
+    assert (sample_project / "marketplace-shopee" / "index.html").read_text() == (
+        "<h1>Marketplace</h1>"
+    )
+    user_messages = [
+        m.get("content", "") for m in llm.calls[1]
+        if m.get("role") == "user"
+    ]
+    assert any("Do not call create_folder again" in text for text in user_messages)
+    assert any("write_file" in text and "index.html" in text for text in user_messages)
+    assert any("`marketplace-shopee`" in text for text in user_messages)
+
+
 def test_actionable_file_task_rejects_fake_created_file_claim(sample_project):
     llm = FakeLLM([
         _resp(tool_calls=[_tc("create_folder", {"path": "smoke-folder"})]),

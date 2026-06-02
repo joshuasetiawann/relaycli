@@ -36,6 +36,22 @@ def _hermetic_global_memory(tmp_path_factory, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_user_config(tmp_path, monkeypatch):
+    """Keep tests away from the developer's real ~/.relaycli/config.toml."""
+    import relaycli.appconfig as appconfig
+    import relaycli.config as config
+
+    fake_dir = tmp_path / ".relaycli"
+    fake_file = fake_dir / "config.toml"
+    monkeypatch.setattr(config, "CONFIG_DIR", fake_dir)
+    monkeypatch.setattr(config, "CONFIG_FILE", fake_file)
+    monkeypatch.setattr(appconfig, "CONFIG_FILE", fake_file)
+    config.get_settings.cache_clear()
+    yield
+    config.get_settings.cache_clear()
+
+
 @pytest.fixture
 def sample_project(tmp_path: Path) -> Path:
     """A small sample project tree used by the tool tests."""
