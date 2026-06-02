@@ -97,6 +97,9 @@ class WebReporter:
                 return
             self._session.add("text", agent=self._agent, text=text)
 
+    def assistant_discard(self) -> None:
+        self._buf.clear()
+
     def tool_start(self, call) -> None:
         self._tool_started[call.id] = time.perf_counter()
         from relaycli.agent import _compact

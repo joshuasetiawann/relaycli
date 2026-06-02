@@ -64,6 +64,33 @@ def _build_agent(project_root, llm, mode=PermissionMode.full_auto, prompter=None
     )
 
 
+class CaptureReporter:
+    """Tiny reporter that exposes whether model text was rendered or discarded."""
+
+    def __init__(self) -> None:
+        self._buf: list[str] = []
+        self.rendered: list[str] = []
+        self.discarded: list[str] = []
+
+    def model_start(self, n, model): pass
+    def model_end(self, n, model, tool_calls, has_text, usage): pass
+    def model_error(self, n, model, error): pass
+    def iteration(self, n): pass
+    def tool_start(self, call): pass
+    def tool_end(self, call, result): pass
+
+    def assistant_token(self, text: str) -> None:
+        self._buf.append(text)
+
+    def assistant_end(self) -> None:
+        self.rendered.append("".join(self._buf))
+        self._buf.clear()
+
+    def assistant_discard(self) -> None:
+        self.discarded.append("".join(self._buf))
+        self._buf.clear()
+
+
 def test_full_read_edit_run_cycle(sample_project):
     llm = FakeLLM([
         _resp(tool_calls=[_tc("read_file", {"path": "app.py"})]),
@@ -259,6 +286,59 @@ def test_actionable_frontend_task_nudges_after_folder_creation(sample_project):
     assert any("`marketplace-shopee`" in text for text in user_messages)
 
 
+def test_actionable_file_task_recovers_from_plain_done_claim(sample_project):
+    llm = FakeLLM([
+        _resp(text=(
+            "I created the marketplace website in marketplace-shopee. "
+            "Open index.html to preview it."
+        )),
+        _resp(tool_calls=[_tc("write_file", {
+            "path": "marketplace-shopee/index.html",
+            "content": "<h1>Marketplace</h1>",
+        })]),
+        _resp(text="Done."),
+    ])
+    agent = _build_agent(sample_project, llm)
+    reporter = CaptureReporter()
+
+    result = agent.run(
+        'buat website marketplace seperti shopee di folder "marketplace-shopee"',
+        reporter=reporter,
+    )
+
+    assert result.stopped_reason == "done"
+    assert (sample_project / "marketplace-shopee" / "index.html").read_text() == (
+        "<h1>Marketplace</h1>"
+    )
+    assert any("I created the marketplace" in text for text in reporter.discarded)
+    assert not any("I created the marketplace" in text for text in reporter.rendered)
+    user_messages = [
+        m.get("content", "") for m in llm.calls[1]
+        if m.get("role") == "user"
+    ]
+    assert any("no files have been written" in text for text in user_messages)
+
+
+def test_actionable_file_task_recovers_from_short_done_without_write(sample_project):
+    llm = FakeLLM([
+        _resp(text="Done."),
+        _resp(tool_calls=[_tc("write_file", {
+            "path": "demo/index.html",
+            "content": "<h1>Demo</h1>",
+        })]),
+        _resp(text="Done."),
+    ])
+    agent = _build_agent(sample_project, llm)
+    reporter = CaptureReporter()
+
+    result = agent.run("buat website demo di folder demo", reporter=reporter)
+
+    assert result.stopped_reason == "done"
+    assert (sample_project / "demo" / "index.html").read_text() == "<h1>Demo</h1>"
+    assert reporter.discarded == ["Done."]
+    assert reporter.rendered == ["Done."]
+
+
 def test_actionable_file_task_rejects_fake_created_file_claim(sample_project):
     llm = FakeLLM([
         _resp(tool_calls=[_tc("create_folder", {"path": "smoke-folder"})]),
@@ -389,6 +469,47 @@ def test_repeated_unknown_text_tool_json_is_error(sample_project):
     assert "did not recover" in result.final_text
     assert result.iterations == 3
     assert result.tool_calls == 0
+
+
+def test_mixed_text_tool_array_reports_unavailable_tool(sample_project):
+    fake = (
+        '```json\n'
+        '[{"name":"write_file","arguments":{"path":"ok.txt","content":"OK"}},'
+        '{"name":"build_web_app","arguments":{"output_folder":"web-app"}}]\n'
+        '```'
+    )
+    llm = FakeLLM([_resp(text=fake), _resp(text=fake), _resp(text=fake)])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("buat web")
+
+    assert result.stopped_reason == "error"
+    assert "build_web_app" in result.final_text
+    assert "not a RelayCLI tool" in result.final_text
+    assert "write_file`, but that is not" not in result.final_text
+    assert not (sample_project / "ok.txt").exists()
+    user_messages = [
+        m.get("content", "") for m in llm.calls[1]
+        if m.get("role") == "user"
+    ]
+    assert any("build_web_app" in text and "write_file" in text for text in user_messages)
+
+
+def test_malformed_valid_text_tool_reports_format_problem(sample_project):
+    fake = (
+        '```json\n'
+        '{"name":"write_file","arguments":["ok.txt", "OK"]}\n'
+        '```'
+    )
+    llm = FakeLLM([_resp(text=fake), _resp(text=fake), _resp(text=fake)])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("buat file ok.txt")
+
+    assert result.stopped_reason == "error"
+    assert "printed a `write_file` tool request as text" in result.final_text
+    assert "not a RelayCLI tool" not in result.final_text
+    assert not (sample_project / "ok.txt").exists()
 
 
 def test_tool_error_recovery(sample_project):

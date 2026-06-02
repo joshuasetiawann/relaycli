@@ -226,6 +226,10 @@ class RichReporter:
         self.console.file.flush()
         self._streaming = False
 
+    def assistant_discard(self) -> None:
+        self._buf.clear()
+        self._streaming = False
+
     def tool_start(self, call: "ToolCall") -> None:
         self._unspin()
         self._tool_started[call.id] = time.perf_counter()

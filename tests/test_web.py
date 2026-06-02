@@ -321,6 +321,38 @@ def test_web_retries_frontend_task_when_model_only_gives_tutorial(tmp_path):
     assert summary["stopped"] == "done"
 
 
+def test_web_discards_fake_done_claim_before_recovery(tmp_path):
+    from relaycli.llm import ToolCall
+
+    def tc(name, args, call_id):
+        return ToolCall(id=call_id, name=name, arguments=json.dumps(args))
+
+    claim = "I created the marketplace website. Open index.html to preview it."
+    session = WebSession(
+        _settings(),
+        llm=FakeLLM([
+            _resp(claim),
+            LLMResponse(text="", tool_calls=[tc("write_file", {
+                "path": "marketplace-shopee/index.html",
+                "content": "<h1>Marketplace</h1>",
+            }, "c1")], usage=Usage(total_tokens=8)),
+            _resp("done"),
+        ]),
+    )
+
+    assert session.send('buat website marketplace di folder "marketplace-shopee"') is True
+    session._thread.join(timeout=30)
+
+    events = session.events_since(0)
+    assert (tmp_path / "marketplace-shopee" / "index.html").read_text() == (
+        "<h1>Marketplace</h1>"
+    )
+    assert not any(e["kind"] == "text" and claim in e["text"] for e in events)
+    assert any(e["kind"] == "tool" and "marketplace-shopee/index.html" in e["summary"] for e in events)
+    summary = [e for e in events if e["kind"] == "summary"][-1]
+    assert summary["stopped"] == "done"
+
+
 def test_send_slow_local_model_returns_fast_error(monkeypatch):
     import relaycli.web as web_mod
 

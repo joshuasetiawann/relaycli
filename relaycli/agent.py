@@ -107,6 +107,24 @@ _CLARIFICATION_OR_TUTORIAL_TERMS = (
     "steps to create",
     "you can further customize",
 )
+_SHORT_ACTIONABLE_NOOP_REPLIES = {
+    "done",
+    "done.",
+    "finished",
+    "finished.",
+    "complete",
+    "complete.",
+    "completed",
+    "completed.",
+    "ok",
+    "okay",
+    "selesai",
+    "selesai.",
+    "beres",
+    "beres.",
+    "sudah",
+    "sudah.",
+}
 _FILE_DONE_CLAIM_TERMS = (
     "<tool_response>",
     "created file",
@@ -118,6 +136,46 @@ _FILE_DONE_CLAIM_TERMS = (
     "website created",
     "files created",
     "created successfully",
+    "i created",
+    "i've created",
+    "i have created",
+    "created the website",
+    "created the web",
+    "created the app",
+    "built the website",
+    "built the web",
+    "generated the website",
+    "finished the website",
+    "completed the website",
+    "the files are ready",
+    "index.html to preview",
+    "open index.html",
+    "open the index.html",
+    "sudah dibuat",
+    "telah dibuat",
+    "berhasil dibuat",
+    "bisa langsung dibuka",
+)
+_FILE_DONE_CLAIM_PATTERNS = (
+    re.compile(
+        r"\b(?:i|we)\s+(?:created|built|generated|wrote|implemented|finished|completed)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:i(?:'ve| have)|we(?:'ve| have))\s+"
+        r"(?:created|built|generated|written|implemented|finished|completed)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:created|built|generated|wrote|implemented|finished|completed)\s+"
+        r"(?:the\s+)?(?:website|web|site|app|page|frontend|file|files)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:sudah|telah|berhasil)\s+"
+        r"(?:saya\s+)?(?:buat|dibuat|membuat|selesaikan|selesai)\b",
+        re.IGNORECASE,
+    ),
 )
 
 _SYSTEM_TEMPLATE = """You are RelayCLI, a terminal coding agent working inside a user's project.
@@ -206,6 +264,7 @@ class Reporter:
     def model_error(self, n: int, model: str, error: Exception) -> None: ...
     def assistant_token(self, text: str) -> None: ...
     def assistant_end(self) -> None: ...
+    def assistant_discard(self) -> None: ...
     def tool_start(self, call: ToolCall) -> None: ...
     def tool_end(self, call: ToolCall, result: ToolResult | None) -> None: ...
     def iteration(self, n: int) -> None: ...
@@ -242,6 +301,9 @@ class PlainReporter(Reporter):
         if text and not text.endswith("\n"):
             self.console.file.write("\n")
         self.console.file.flush()
+
+    def assistant_discard(self) -> None:
+        self._buf.clear()
 
     def tool_start(self, call: ToolCall) -> None:
         # Escape model-controlled name/arguments so they can't inject Rich markup.
@@ -415,6 +477,16 @@ class Agent:
                     elapsed=time.perf_counter() - started,
                 )
             empty_responses = 0
+            fake_text_tool: str | None = None
+            actionable_text_noop = False
+            if response.text and not active_tool_calls:
+                fake_text_tool = fake_tool_call_text(response.text, self.registry)
+                if fake_text_tool is None:
+                    actionable_text_noop = _should_retry_actionable_file_task(
+                        request,
+                        response.text,
+                        file_write_successes,
+                    )
             if text_calls:
                 self.session.add_assistant_message(
                     LLMResponse(text="", tool_calls=text_calls).to_assistant_message()
@@ -422,38 +494,51 @@ class Agent:
             else:
                 self.session.add_assistant_message(response.to_assistant_message())
             if response.text:
-                reporter.assistant_end()
+                if text_calls or fake_text_tool or actionable_text_noop:
+                    _safe_report(reporter, "assistant_discard")
+                else:
+                    reporter.assistant_end()
             _safe_report(
                 reporter, "model_end", i, self.model,
-                len(active_tool_calls), bool(response.text) and not text_calls, response.usage,
+                len(active_tool_calls),
+                bool(response.text)
+                and not text_calls
+                and not fake_text_tool
+                and not actionable_text_noop,
+                response.usage,
             )
 
             if not active_tool_calls:
-                fake = fake_tool_call_text(response.text)
+                fake = fake_text_tool
                 if fake:
                     text_tool_repairs += 1
                     if text_tool_repairs <= _TEXT_TOOL_REPAIR_RETRIES:
                         self.session.add_user(_unknown_tool_nudge(fake, self.registry))
                         continue
-                    return AgentResult(
-                        final_text=(
+                    if _canonical_tool_name(fake, self.registry):
+                        final_text = (
+                            f"Model printed a `{fake}` tool request as text, but "
+                            "RelayCLI could not execute it after repair attempts. "
+                            "No action was executed. Retry with valid JSON using "
+                            "only available tools and complete arguments."
+                        )
+                    else:
+                        final_text = (
                             f"Model returned a fake tool call `{fake}`, but that is not a RelayCLI tool. "
                             "No action was executed. RelayCLI asked the model to retry with "
                             "real tools, but it did not recover. Switch to a stronger model "
                             "or retry with a narrower request that explicitly asks it to use "
                             "create_folder/write_file/edit_file."
-                        ),
+                        )
+                    return AgentResult(
+                        final_text=final_text,
                         iterations=i,
                         tool_calls=tool_calls,
                         usage=usage,
                         stopped_reason="error",
                         elapsed=time.perf_counter() - started,
                     )
-                if _should_retry_actionable_file_task(
-                    request,
-                    response.text,
-                    file_write_successes,
-                ):
+                if actionable_text_noop:
                     actionable_noop_repairs += 1
                     if actionable_noop_repairs <= _TEXT_TOOL_REPAIR_RETRIES:
                         self.session.add_user(_actionable_file_task_nudge(request))
@@ -548,12 +633,19 @@ class Agent:
         return str(result), None
 
 
-def fake_tool_call_text(text: str) -> str | None:
+def fake_tool_call_text(text: str, registry: ToolRegistry | None = None) -> str | None:
+    fallback: str | None = None
     for payload in _tool_payloads_from_text(text):
         name, _arguments = _tool_name_and_arguments(payload)
-        if name:
+        if not name:
+            continue
+        if fallback is None:
+            fallback = name
+        if registry is not None and _canonical_tool_name(name, registry) is None:
             return name
-    return None
+        if registry is None:
+            return name
+    return fallback
 
 
 def text_tool_call(text: str, registry: ToolRegistry, *, call_id: str = "text_call_1") -> ToolCall | None:
@@ -742,6 +834,15 @@ def _first_json_blob(raw: str) -> str | None:
 
 def _unknown_tool_nudge(fake: str, registry: ToolRegistry) -> str:
     tools = ", ".join(registry.names()) or "(none)"
+    if _canonical_tool_name(fake, registry):
+        return (
+            f"Your previous answer printed a `{fake}` tool request as text, but "
+            "RelayCLI could not execute it. Usually this means the JSON arguments "
+            "were malformed or the response mixed valid tools with unavailable "
+            "tools. Continue the same task now using only valid JSON for these "
+            f"available tools: {tools}. For new files use write_file with "
+            "`path` and full `content`."
+        )
     return (
         f"Your previous answer tried to call `{fake}`, but that is not an available "
         "RelayCLI tool, so nothing was executed. Continue the same task now using "
@@ -763,9 +864,14 @@ def _should_retry_actionable_file_task(
     if not (response_text or "").strip():
         return False
     lowered_response = (response_text or "").lower()
+    compact_response = " ".join(lowered_response.split())
+    if compact_response in _SHORT_ACTIONABLE_NOOP_REPLIES:
+        return True
     if any(term in lowered_response for term in _CLARIFICATION_OR_TUTORIAL_TERMS):
         return True
     if any(term in lowered_response for term in _FILE_DONE_CLAIM_TERMS):
+        return True
+    if any(pattern.search(response_text or "") for pattern in _FILE_DONE_CLAIM_PATTERNS):
         return True
     if "```" in response_text and any(
         lang in lowered_response for lang in ("html", "css", "javascript", "react")
