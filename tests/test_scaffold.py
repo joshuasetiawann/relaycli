@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -10,6 +12,14 @@ import pytest
 def test_package_imports():
     pkg = importlib.import_module("relaycli")
     assert pkg.__version__
+
+
+def test_project_metadata_version_matches_runtime():
+    pkg = importlib.import_module("relaycli")
+    root = Path(__file__).resolve().parents[1]
+    meta = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert meta["project"]["version"] == pkg.__version__
 
 
 @pytest.mark.parametrize(
