@@ -57,6 +57,9 @@ def test_capability_question_gets_local_reply():
 def test_permissive_followup_continues_previous_request():
     previous = "buatkan saya web toko kaya shope, di folder baru namanya shooooi"
     assert is_permissive_followup("apa aja, buat di folder baru ya")
+    assert is_permissive_followup("lanjut")
+    assert is_permissive_followup("gas")
+    assert is_permissive_followup("oke lanjut")
     merged = continuation_for("apa aja, buat di folder baru ya", previous)
     assert merged is not None
     assert previous in merged

@@ -127,6 +127,28 @@ def test_send_greeting_returns_local_guide_without_thread():
     assert events[2]["stopped"] == "done"
 
 
+def test_send_short_followup_continues_previous_request():
+    llm = RecordingLLM([_resp("first done"), _resp("continued")])
+    session = WebSession(_settings(), llm=llm)
+
+    assert session.send('buat website toko di folder "tokoku"') is True
+    session._thread.join(timeout=30)
+    assert session.send("lanjut") is True
+    session._thread.join(timeout=30)
+
+    second_user_messages = [
+        m["content"] for m in llm.calls[1]
+        if m.get("role") == "user"
+    ]
+    assert any("Original request:" in text for text in second_user_messages)
+    assert any('buat website toko di folder "tokoku"' in text for text in second_user_messages)
+    assert any("User follow-up:\nlanjut" in text for text in second_user_messages)
+    assert any(
+        e["kind"] == "note" and "continuing the previous request" in e["text"]
+        for e in session.events_since(0)
+    )
+
+
 def test_send_frontend_prompt_uses_agent_by_default(tmp_path):
     llm = RecordingLLM([_resp("agent handled")])
     session = WebSession(_settings(permission_mode=PermissionMode.full_auto), llm=llm)

@@ -771,6 +771,21 @@ def test_dispatch_plain_text_goes_to_agent(monkeypatch):
     assert called == ["explain this repo"]
 
 
+def test_dispatch_short_followup_continues_previous_request(monkeypatch):
+    repl, console = _hermetic_repl(model="gpt-4o-mini")
+    called = []
+    monkeypatch.setattr(repl, "_run_agent", lambda req: called.append(req))
+
+    assert repl._handle_line('buat website toko di folder "tokoku"') is False
+    assert repl._handle_line("lanjut") is False
+
+    assert called[0] == 'buat website toko di folder "tokoku"'
+    assert "Original request:" in called[1]
+    assert 'buat website toko di folder "tokoku"' in called[1]
+    assert "User follow-up:\nlanjut" in called[1]
+    assert "continuing the previous request" in _out(console)
+
+
 def test_dispatch_greeting_uses_local_guide(monkeypatch):
     repl, console = _hermetic_repl(model="gpt-4o-mini")
     monkeypatch.setattr(

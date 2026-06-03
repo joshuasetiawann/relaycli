@@ -18,6 +18,8 @@ def test_install_script_is_valid_shell():
 def test_install_script_has_smoke_check_and_repair_path():
     text = (ROOT / "scripts" / "install.sh").read_text(encoding="utf-8")
     assert "check_command" in text
+    assert "installed_command" in text
+    assert '[ -x "$BIN_DIR/relaycli" ]' in text
     assert "repairing with private virtualenv" in text
     assert "import typer, rich, pydantic" in text
 

@@ -74,7 +74,9 @@ _CAPABILITY_TEXT = (
 
 _FOLLOWUP_CONSENT_RE = re.compile(
     r"\b("
-    r"apa\s+aja|terserah|bebas|bebas\s+aja|lanjut\s+aja|gas\s+aja|"
+    r"apa\s+aja|terserah|bebas|bebas\s+aja|"
+    r"lanjut|lanjut\s+aja|gas|gas\s+aja|"
+    r"ok\s+lanjut|oke\s+lanjut|siap\s+lanjut|"
     r"pilih\s+sendiri|yang\s+penting|sesuai\s+kamu"
     r")\b",
     re.IGNORECASE,

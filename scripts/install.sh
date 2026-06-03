@@ -42,6 +42,14 @@ check_command() {
   "$1" version >/dev/null 2>&1
 }
 
+installed_command() {
+  if [ -x "$BIN_DIR/relaycli" ]; then
+    printf '%s\n' "$BIN_DIR/relaycli"
+  else
+    command -v relaycli || true
+  fi
+}
+
 if [ -d "$SRC_DIR/.git" ]; then
   say "Updating RelayCLI in $SRC_DIR"
   git -C "$SRC_DIR" pull --ff-only
@@ -54,11 +62,11 @@ relaycli_cmd=""
 if command -v uv >/dev/null 2>&1; then
   say "Installing command with uv tool"
   uv tool install --force "$SRC_DIR"
-  relaycli_cmd="$(command -v relaycli || true)"
+  relaycli_cmd="$(installed_command)"
 elif command -v pipx >/dev/null 2>&1; then
   say "Installing command with pipx"
   pipx install --force "$SRC_DIR"
-  relaycli_cmd="$(command -v relaycli || true)"
+  relaycli_cmd="$(installed_command)"
 else
   install_private_venv
 fi

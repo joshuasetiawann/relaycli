@@ -27,7 +27,7 @@ from relaycli.agent import Agent
 from relaycli.config import CONFIG_DIR, PermissionMode, Settings, ensure_config_dir
 from relaycli.context import ProjectContext
 from relaycli.frontend_scaffold import create_frontend_scaffold, detect_frontend_scaffold
-from relaycli.intent import local_reply_for
+from relaycli.intent import continuation_for, local_reply_for
 from relaycli.llm import is_warm, key_status, preflight_settings
 from relaycli.ollama_runtime import recommended_fast_local_model, slow_local_model_warning
 from relaycli.permissions import PermissionManager
@@ -121,6 +121,7 @@ class Repl:
         self.permissions = PermissionManager(settings.permission_mode, console=self.console)
         self._manual_model_selected = False
         self._manual_slow_warning_shown_for: str | None = None
+        self._last_actionable_request: str | None = None
         from relaycli.mcp import enabled_servers, extend_registry
         from relaycli.tools import default_registry
 
@@ -301,13 +302,18 @@ class Repl:
             return False
         if lowered in ("exit", "quit"):
             return True
-        reply = local_reply_for(line)
+        run_line = continuation_for(line, self._last_actionable_request) or line
+        reply = None if run_line != line else local_reply_for(line)
         if reply is not None:
             render_local_reply(self.console, reply)
             return False
-        if self.settings.local_scaffolds and self._try_frontend_scaffold(line):
+        if run_line != line:
+            self.console.print("[dim]continuing the previous request with your follow-up[/dim]")
+        if self.settings.local_scaffolds and self._try_frontend_scaffold(run_line):
+            self._last_actionable_request = run_line
             return False
-        self._run_agent(line)
+        self._last_actionable_request = run_line
+        self._run_agent(run_line)
         return False
 
     def _run_user_shell(self, cmd: str) -> None:
