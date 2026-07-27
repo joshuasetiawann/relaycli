@@ -535,3 +535,72 @@ def test_registry_run_enforces_rate_limit_end_to_end(sample_project):
     reg.run("list_dir", {}, ctx)
     with pytest.raises(ToolCallLimitError):
         reg.run("list_dir", {}, ctx)
+
+
+# --- file cache integration (v2 Stage 1) --------------------------------
+def test_read_file_hits_cache_on_unchanged_second_read(sample_project):
+    ctx = make_context(sample_project)
+    read_file(ReadFileArgs(path="app.py"), ctx)
+    read_file(ReadFileArgs(path="app.py"), ctx)
+    assert ctx.file_cache.hits == 1
+    assert ctx.file_cache.misses == 1
+
+
+def test_read_file_bypasses_cache_above_max_bytes(sample_project):
+    """A file bigger than the requested cap must not be pulled fully into
+    the cache — read_file's own memory-bounding must still apply."""
+    big = sample_project / "big.txt"
+    big.write_text("x" * 500)
+    ctx = make_context(sample_project)
+    res = read_file(ReadFileArgs(path="big.txt", max_bytes=100), ctx)
+    assert res.ok
+    assert ctx.file_cache.hits == 0
+    assert ctx.file_cache.misses == 0  # never went through the cache at all
+
+
+def test_write_file_invalidates_cache_so_reread_sees_new_content(sample_project):
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    read_file(ReadFileArgs(path="app.py"), ctx)  # warm the cache
+    write_file(WriteFileArgs(path="app.py", content="def hello():\n    return 'bye'\n"), ctx)
+    res = read_file(ReadFileArgs(path="app.py"), ctx)
+    assert "'bye'" in res.output
+    assert ctx.file_cache.misses == 2  # warm read + forced re-read, no stale hit
+
+
+def test_edit_file_invalidates_cache_so_reread_sees_new_content(sample_project):
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    read_file(ReadFileArgs(path="app.py"), ctx)  # warm the cache
+    edit_file(EditFileArgs(path="app.py", old_string="'hi'", new_string="'bye'"), ctx)
+    res = read_file(ReadFileArgs(path="app.py"), ctx)
+    assert "'bye'" in res.output
+    assert ctx.file_cache.misses == 2
+
+
+def test_apply_patch_fallback_invalidates_cache(sample_project):
+    from unittest.mock import patch as mock_patch
+
+    from relaycli.tools.apply_patch import ApplyPatchArgs, apply_patch
+
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    read_file(ReadFileArgs(path="app.py"), ctx)  # warm the cache
+    patch_text = (
+        "--- app.py\n+++ app.py\n@@ -1,2 +1,2 @@\n"
+        " def hello():\n-    return 'hi'\n+    return 'yo'\n"
+    )
+    with mock_patch("subprocess.run", side_effect=FileNotFoundError):
+        result = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
+    assert result.ok
+    res = read_file(ReadFileArgs(path="app.py"), ctx)
+    assert "'yo'" in res.output
+    assert ctx.file_cache.misses == 2
+
+
+def test_search_python_fallback_uses_the_shared_cache(sample_project):
+    from relaycli.tools.search import _python_search
+
+    ctx = make_context(sample_project)
+    matches1 = _python_search(SearchArgs(query="hello"), sample_project, ctx.project, ctx.file_cache)
+    matches2 = _python_search(SearchArgs(query="hello"), sample_project, ctx.project, ctx.file_cache)
+    assert matches1 == matches2
+    assert any("hello" in m for m in matches1)
+    assert ctx.file_cache.hits >= 1  # app.py read once, reused on the second search

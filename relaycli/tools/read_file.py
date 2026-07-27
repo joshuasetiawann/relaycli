@@ -77,11 +77,23 @@ def read_file(args: ReadFileArgs, ctx: ToolContext) -> ToolResult:
             )
 
     # Bound the read itself so a huge file cannot exhaust process memory
-    # (max_bytes previously only bounded what was sent to the model). Read one
-    # extra byte to detect truncation.
+    # (max_bytes previously only bounded what was sent to the model).
     try:
-        with path.open("rb") as fh:
-            data = fh.read(args.max_bytes + 1)
+        total = path.stat().st_size
+    except OSError as exc:
+        return ToolResult.error(f"Could not read '{args.path}': {exc}")
+
+    try:
+        if total <= args.max_bytes:
+            # Whole file fits under the cap either way — safe to go through
+            # the shared cache, which reads (and keeps) the full content.
+            data = ctx.file_cache.read_bytes(path)
+        else:
+            # Larger than the cap: read only max_bytes+1 (one extra byte to
+            # detect truncation) rather than pulling the whole file into
+            # memory just to cache a copy that would immediately be cut down.
+            with path.open("rb") as fh:
+                data = fh.read(args.max_bytes + 1)
     except OSError as exc:
         return ToolResult.error(f"Could not read '{args.path}': {exc}")
 
@@ -90,11 +102,6 @@ def read_file(args: ReadFileArgs, ctx: ToolContext) -> ToolResult:
             f"'{args.path}' appears to be binary; refusing to read it as text.",
             summary=f"read {args.path} (refused: binary)",
         )
-
-    try:
-        total = path.stat().st_size
-    except OSError:
-        total = len(data)
 
     truncated = len(data) > args.max_bytes
     text = data[: args.max_bytes].decode("utf-8", errors="replace")

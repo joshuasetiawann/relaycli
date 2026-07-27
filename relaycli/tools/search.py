@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from relaycli.core.context import PathSafetyError, ProjectContext
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult
+from relaycli.tools.cache import FileCache
 
 NAME = "search"
 DESCRIPTION = (
@@ -43,7 +44,7 @@ def search(args: SearchArgs, ctx: ToolContext) -> ToolResult:
 
     matches = _ripgrep(args, base, proj)
     if matches is None:  # ripgrep unavailable -> python fallback
-        matches = _python_search(args, base, proj)
+        matches = _python_search(args, base, proj, ctx.file_cache)
 
     if not matches:
         return ToolResult(ok=True, output="No matches found.", summary=f"search '{args.query}' (0)")
@@ -95,7 +96,29 @@ def _normalize_rg_line(line: str, proj: ProjectContext) -> str | None:
     return f"{rel}:{lineno}: {text[:_MAX_LINE_LEN].rstrip()}"
 
 
-def _python_search(args: SearchArgs, base: Path, proj: ProjectContext) -> list[str]:
+# Above this size, read the file streamed and uncached rather than pulling
+# it fully into memory just to populate a cache entry for it — matches
+# read_file's own cap (see relaycli/tools/read_file.py).
+_MAX_CACHEABLE_SEARCH_FILE = 2_000_000
+
+
+def _scan_lines(lines, file: Path, pattern: re.Pattern, proj: ProjectContext,
+                 args: SearchArgs, results: list[str]) -> bool:
+    """Append matches from `lines` (a list or a live file iterator — both
+    work with plain enumerate()) to results. Returns True once the
+    per-search result cap is hit, so the caller can stop scanning early."""
+    for lineno, text in enumerate(lines, start=1):
+        if "\x00" in text:
+            break  # binary; stop scanning this file
+        if pattern.search(text):
+            rel = proj.relative(file)
+            results.append(f"{rel}:{lineno}: {text[:_MAX_LINE_LEN].rstrip()}")
+            if len(results) >= args.max_results * 2:
+                return True
+    return False
+
+
+def _python_search(args: SearchArgs, base: Path, proj: ProjectContext, cache: FileCache) -> list[str]:
     if args.fixed_strings:
         pattern = re.compile(re.escape(args.query))
     else:
@@ -112,17 +135,20 @@ def _python_search(args: SearchArgs, base: Path, proj: ProjectContext) -> list[s
         if proj.is_secret(file) or proj.is_ignored(file):
             continue
         try:
-            with file.open("r", encoding="utf-8", errors="ignore") as fh:
-                for lineno, text in enumerate(fh, start=1):
-                    if "\x00" in text:
-                        break  # binary; stop scanning this file
-                    if pattern.search(text):
-                        rel = proj.relative(file)
-                        results.append(f"{rel}:{lineno}: {text[:_MAX_LINE_LEN].rstrip()}")
-                        if len(results) >= args.max_results * 2:
-                            return results
+            size = file.stat().st_size
         except OSError:
             continue
+        try:
+            if size <= _MAX_CACHEABLE_SEARCH_FILE:
+                text = cache.read_bytes(file).decode("utf-8", errors="ignore")
+                stop = _scan_lines(text.splitlines(), file, pattern, proj, args, results)
+            else:
+                with file.open("r", encoding="utf-8", errors="ignore") as fh:
+                    stop = _scan_lines(fh, file, pattern, proj, args, results)
+        except OSError:
+            continue
+        if stop:
+            return results
     return results
 
 
