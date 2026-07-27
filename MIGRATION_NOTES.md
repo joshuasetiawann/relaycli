@@ -99,6 +99,88 @@ positive case, both in `tests/test_llm_unit.py` next to the existing
 
 Full gate re-run after this item: green.
 
+**5d — close the test gaps.** Baseline coverage first, as instructed:
+`pytest --cov=relaycli --cov-report=term-missing -q` → **74% total**
+(7326 stmts, 1909 missed). `pytest-cov` was not a dependency — flagged to
+the user via `AskUserQuestion` before adding it (rule 3), got no response
+inside the timeout (consistent with this project's established
+"lanjutkan" pattern of proceeding on recommended defaults when away), so
+added `pytest-cov==7.1.0` to `pyproject.toml`'s `dev` extras (test-only,
+not shipped) — the master prompt's own Phase 6 gate G10 names this exact
+command, which doesn't work without it.
+
+Per-directory target check against the baseline: `core/` 82.5%,
+`agent/` **66.1%**, `tools/` (post file.py-deletion) 81.6%. `agent/` was
+the one short of 80%, and the baseline run made the reason obvious: its
+two weakest files, `agent/__init__.py` (48%) and `agent/pipeline.py`
+(35%), aren't undertested so much as *dead* — `pipeline.py` is the
+uncatalogued duplicate flagged during Phase 2 (nothing live reaches it,
+and it silently drops task-split routing + truncates its security
+instructions), and a chunk of `__init__.py`'s low coverage was its
+now-unused `from relaycli.agent.pipeline import Relay, RelayResult` line.
+
+Decided to act on the Phase 2 "recommend deleting in a follow-up" note
+now rather than defer it further, since it was actively distorting this
+exact measurement: deleted `relaycli/agent/pipeline.py` outright (fixing
+the 2-name re-export in `agent/__init__.py` that pointed at it — a
+small, contained edit) and `relaycli/tools/files.py` (the third
+uncatalogued dead duplicate found along the way — a 173-statement,
+0%-covered, zero-caller bundle of `list_dir`/`read_file`/`write_file`/
+`edit_file`/`create_folder`/`find_files` under different `register_*`
+names). Verified zero callers for both before deleting (`grep` across
+`relaycli/` and `tests/`, both directions — including the "resolves to
+a package not the module" trap from Phase 2). Left `relaycli/config/menu.py`
+alone despite the same dead-duplicate shape — deleting it cleanly would
+require also editing `config/__init__.py`'s re-export and removing a
+Typer command from `config/manager.py`, more invasive than a coverage
+side-effect justifies; still flagged for the same follow-up.
+
+While in `agent/__init__.py`, noticed its `_json_from_text` is a **second,
+independently-buggy copy** of the exact same function I'd already fixed
+in `agent/loop.py` earlier — same `json_repair` `'""'`-fallback issue,
+masked here only because `fake_tool_call_text` (its one caller) happens
+to double-check `isinstance(dict, list)` before using the result. Applied
+the identical fix for consistency and because the function is exported
+as a small "public-ish" backward-compat surface, not purely private.
+
+Wrote tests for the specific weak spots named in the master prompt, all
+new, none duplicating existing coverage (checked first):
+- **`tests/test_project_context.py`** (new file — no dedicated
+  `ProjectContext` test file existed; `test_permissions.py` is
+  specifically `PermissionManager`, a different class). 23 tests:
+  `..` traversal and absolute-path escape (already indirectly covered
+  elsewhere, added here directly against `ProjectContext` itself),
+  **symlink escaping the project root — a file symlink and a directory
+  symlink, both previously with zero test coverage anywhere in the
+  suite** (`grep -rl symlink tests/` was empty before this), secret-name/
+  pattern/safe-suffix detection, `.gitignore` handling on *both* code
+  paths (the fallback line-parser, and the real `git check-ignore`
+  subprocess path — the latter was entirely unexercised since the shared
+  `sample_project` fixture is never a real git repo), and `relative()`'s
+  exception fallback.
+- **`tests/test_mcp.py`** (+4 tests): `get_client`'s plain sequential
+  reuse of an already-alive client (the existing tests only covered the
+  concurrent-race and failed-start cases, not this simpler, more common
+  path), `MCPTool.run` rejecting malformed JSON string arguments,
+  `server_status()`'s disabled/configured/running state branches.
+- **`tests/test_agent_loop.py`** (+22 tests): `agent/__init__.py`'s
+  `_json_from_text`/`_first_json_blob`/`fake_tool_call_text`/`_compact`
+  (including the plain-prose-returns-None regression guard), and
+  `agent/reporter.py`'s `PlainReporter` (had zero test coverage at all
+  before this — took `agent/reporter.py` from 36%→100%).
+
+One self-caught mistake worth recording: my first `PlainReporter.tool_end`
+test asserted the raw `output` text ("nope") would appear for a failed
+result — wrong, the method prints `result.summary` falling back to a
+literal `"done"`/`"failed"`, never `output`. Caught by actually running
+the test before moving on, not by inspection.
+
+Final per-directory coverage, all three master-prompt targets met:
+**`core/` 83.8%** (was 82.5%), **`agent/` 85.9%** (was 66.1%, now the
+biggest mover), **`tools/` 81.6%** (unchanged aggregate, `files.py`'s
+removal already banked). Total: 74%→78%. Full gate re-run after this
+item: green (details below).
+
 ## Phase 3 — verification gate log
 
 **Attempt 1 — FAILED at G1 (clean install).**

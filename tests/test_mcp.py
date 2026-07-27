@@ -260,3 +260,53 @@ def test_rpc_timeout_does_not_leak_late_response(client):
     # server; we don't wait for it here, but a fresh in-time call must still
     # work correctly on the same shared client/connection.
     assert client.call_tool("echo", {"text": "still alive"}) == "echo: still alive"
+
+
+def test_get_client_reuses_an_already_alive_client():
+    """The plain sequential case (no lock contention): a second get_client()
+    for the same, still-running server must return the exact same client,
+    not spawn a second server process."""
+    config = fake_config(name="reuse-me")
+    try:
+        first = mcp.get_client(config)
+        second = mcp.get_client(config)
+        assert first is second
+        assert first.alive
+    finally:
+        mcp.shutdown_all()
+
+
+def test_mcp_tool_run_rejects_malformed_json_arguments(tmp_path):
+    from relaycli.mcp.bridge import MCPTool
+    from relaycli.tools import ToolError
+
+    tool = MCPTool(
+        name="mcp_fake_echo", description="x", args_model=None, func=lambda *_a, **_k: None,
+        client=None, server_name="fake", remote_name="echo",
+    )
+    with pytest.raises(ToolError, match="malformed JSON"):
+        tool.run("{not valid json", ctx=None)
+
+
+def test_server_status_reports_disabled_configured_and_running(monkeypatch, tmp_path):
+    from relaycli import appconfig
+
+    monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
+    running_config = fake_config(name="running-server")
+    raw = {
+        "mcp": {
+            "running-server": {"command": [sys.executable, FAKE_SERVER]},
+            "disabled-server": {"command": ["true"], "enabled": False},
+            "configured-only": {"command": ["true"]},
+        }
+    }
+    real_configured_servers = mcp.configured_servers
+    monkeypatch.setattr(mcp, "configured_servers", lambda: real_configured_servers(raw))
+    try:
+        mcp.get_client(running_config)
+        rows = {row["name"]: row["state"] for row in mcp.server_status()}
+        assert rows["running-server"] == "running"
+        assert rows["disabled-server"] == "disabled"
+        assert rows["configured-only"] == "configured"
+    finally:
+        mcp.shutdown_all()

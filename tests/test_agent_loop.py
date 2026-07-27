@@ -643,3 +643,155 @@ def test_missing_read_path_suggests_existing_web_candidate(tmp_path):
     assert not result.ok
     assert "src/index.html" in result.output
     assert "belajar-mandarin/index.html" in result.output
+
+
+# --- relaycli.agent's own JSON-extraction helpers (agent/__init__.py) -------
+# A parallel implementation to agent/loop.py's _json_from_text (kept for
+# backward compat, per the module's own docstring) - same coverage gap,
+# same fix applied, so tested the same way here.
+from relaycli.agent import _compact, _first_json_blob, _json_from_text, fake_tool_call_text
+
+
+def test_json_from_text_plain_prose_returns_none():
+    # Regression guard: json_repair's fallback for unparseable input is the
+    # JSON string literal '""' (truthy, never an error) - without requiring
+    # a dict/list result, this incorrectly "succeeds" on any plain sentence.
+    assert _json_from_text("Just a normal sentence.") is None
+    assert _json_from_text("") is None
+    assert _json_from_text("   ") is None
+
+
+def test_json_from_text_direct_dict():
+    assert _json_from_text('{"name": "read_file", "arguments": {}}') == {
+        "name": "read_file", "arguments": {},
+    }
+
+
+def test_json_from_text_code_fenced():
+    text = '```json\n{"name": "write_file", "arguments": {"path": "x"}}\n```'
+    assert _json_from_text(text) == {"name": "write_file", "arguments": {"path": "x"}}
+
+
+def test_json_from_text_bracket_matching_fallback():
+    # Not valid JSON on its own (trailing prose) but a real object is present.
+    text = 'sure, here you go: {"name": "search", "arguments": {"query": "TODO"}} done!'
+    result = _json_from_text(text)
+    assert result == {"name": "search", "arguments": {"query": "TODO"}}
+
+
+def test_first_json_blob_ignores_braces_inside_strings():
+    text = '{"note": "a { b } c", "ok": true}'
+    assert _first_json_blob(text) == text
+
+
+def test_first_json_blob_no_json_present():
+    assert _first_json_blob("no json here at all") is None
+
+
+def test_fake_tool_call_text_detects_name_key():
+    text = '{"name": "read_file", "arguments": {"path": "a.py"}}'
+    assert fake_tool_call_text(text) == "read_file"
+
+
+def test_fake_tool_call_text_detects_nested_function_shape():
+    text = '{"function": {"name": "edit_file"}, "arguments": {}}'
+    assert fake_tool_call_text(text) == "edit_file"
+
+
+def test_fake_tool_call_text_scans_list_for_first_match():
+    text = '[{"tool": "list_dir"}, {"tool": "search"}]'
+    assert fake_tool_call_text(text) == "list_dir"
+
+
+def test_fake_tool_call_text_plain_prose_returns_none():
+    assert fake_tool_call_text("Here's a summary of what I found.") is None
+
+
+def test_compact_short_text_unchanged():
+    assert _compact('{"path": "a.py"}') == '{"path": "a.py"}'
+
+
+def test_compact_truncates_long_text_with_ellipsis():
+    long_args = '{"path": "' + ("a" * 200) + '"}'
+    result = _compact(long_args, limit=80)
+    assert len(result) == 80
+    assert result.endswith("…")
+
+
+def test_compact_handles_none_and_whitespace():
+    assert _compact(None) == ""
+    assert _compact("  multiple   spaces  \n here  ") == "multiple spaces here"
+
+
+# --- relaycli.agent.reporter.PlainReporter (backward-compat, no internal
+# caller today, but a documented public class - tested on its own merits) --
+from relaycli.agent.reporter import PlainReporter
+
+
+def _plain_reporter():
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    return PlainReporter(console), console
+
+
+def test_plain_reporter_model_lifecycle_output():
+    reporter, console = _plain_reporter()
+    reporter.model_start(1, "fake/model")
+    reporter.model_end(1, "fake/model", 2, True, Usage(total_tokens=42))
+    out = console.file.getvalue()
+    assert "step 1" in out and "fake/model" in out
+    assert "2 calls" in out and "42 tok" in out
+
+
+def test_plain_reporter_model_end_singular_call():
+    reporter, console = _plain_reporter()
+    reporter.model_end(1, "fake/model", 1, True, Usage(total_tokens=1))
+    assert "1 call" in console.file.getvalue()
+    assert "1 calls" not in console.file.getvalue()
+
+
+def test_plain_reporter_model_error():
+    reporter, console = _plain_reporter()
+    reporter.model_error(1, "fake/model", RuntimeError("boom"))
+    assert "model error" in console.file.getvalue()
+
+
+def test_plain_reporter_assistant_token_buffers_until_end():
+    reporter, console = _plain_reporter()
+    reporter.assistant_token("Hello ")
+    reporter.assistant_token("world")
+    assert console.file.getvalue() == ""  # nothing flushed yet
+    reporter.assistant_end()
+    assert console.file.getvalue() == "Hello world\n"
+
+
+def test_plain_reporter_assistant_discard_drops_buffer():
+    reporter, console = _plain_reporter()
+    reporter.assistant_token("never shown")
+    reporter.assistant_discard()
+    reporter.assistant_end()
+    assert console.file.getvalue() == ""
+
+
+def test_plain_reporter_tool_start_truncates_long_arguments():
+    reporter, console = _plain_reporter()
+    call = ToolCall(id="c1", name="search", arguments='{"query": "' + ("x" * 200) + '"}')
+    reporter.tool_start(call)
+    out = console.file.getvalue()
+    assert "search" in out
+    assert "…" in out
+    assert reporter.tools_used == ["search"]
+
+
+def test_plain_reporter_tool_end_ok_and_failed_and_none():
+    from relaycli.tools.base import ToolResult
+
+    reporter, console = _plain_reporter()
+    reporter.tool_end(ToolCall(id="c1", name="x", arguments="{}"), ToolResult(ok=True, output="done"))
+    reporter.tool_end(ToolCall(id="c2", name="y", arguments="{}"), ToolResult(ok=False, output="nope"))
+    reporter.tool_end(ToolCall(id="c3", name="z", arguments="{}"), None)
+    out = console.file.getvalue()
+    # tool_end prints result.summary, falling back to a literal "done"/"failed" -
+    # never the raw output text.
+    assert "done" in out
+    assert "failed" in out
+    assert "tool error" in out

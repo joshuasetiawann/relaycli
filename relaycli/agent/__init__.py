@@ -12,7 +12,6 @@ import re
 from json_repair import repair_json
 
 from relaycli.agent.loop import Agent, AgentResult, text_tool_calls
-from relaycli.agent.pipeline import Relay, RelayResult
 from relaycli.agent.reporter import Reporter, PlainReporter
 from relaycli.agent.router import Role, resolve_model, role_enabled, routing_table
 
@@ -65,9 +64,11 @@ def _json_from_text(text: str) -> object | None:
 
     # Strategy 3: direct JSON parse on raw text
     try:
-        return json.loads(raw)
+        direct = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        pass
+        direct = None
+    if isinstance(direct, (dict, list)):
+        return direct
 
     # Strategy 4: bracket-matching fallback
     blob = _first_json_blob(raw)
@@ -81,9 +82,17 @@ def _json_from_text(text: str) -> object | None:
             continue
         seen.add(candidate)
         try:
-            return json.loads(candidate)
+            parsed = json.loads(candidate)
         except (json.JSONDecodeError, TypeError):
             continue
+        # json_repair's fallback for unparseable input is the JSON string
+        # literal '""' (never an error) — without this check, any plain-text
+        # reply would "successfully" parse to an empty string here instead
+        # of correctly falling through to None. (Masked for fake_tool_call_text
+        # today since it double-checks dict/list before use, but this function
+        # is a public-ish helper and should be correct standalone too.)
+        if isinstance(parsed, (dict, list)):
+            return parsed
     return None
 
 
@@ -130,7 +139,7 @@ def _compact(arguments: str, limit: int = 80) -> str:
 
 
 __all__ = [
-    "Agent", "AgentResult", "Relay", "RelayResult",
+    "Agent", "AgentResult",
     "Reporter", "PlainReporter", "Role", "resolve_model",
     "role_enabled", "routing_table", "fake_tool_call_text",
     "text_tool_calls", "_compact",
