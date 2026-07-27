@@ -23,9 +23,9 @@ from relaycli.appconfig import (
     set_base_model,
 )
 from relaycli.config import get_settings, reload_settings
-from relaycli.llm import ollama_models
+from relaycli.core.llm import ollama_models
 from relaycli.model_catalog import model_choices, pull_ollama_model, short_model_name
-from relaycli.roles import BUILTIN_ROLES, TIERS, builtin_role
+from relaycli.core.roles import BUILTIN_ROLES, TIERS, builtin_role
 
 console = Console()
 

@@ -10,9 +10,9 @@ import pytest
 from rich.console import Console
 
 from relaycli.config import PermissionMode, Settings
-from relaycli.llm import ToolCall, Usage
-from relaycli.render import RichReporter, make_unified_diff, render_model_warning, render_task_summary
-from relaycli.repl import Repl
+from relaycli.core.llm import ToolCall, Usage
+from relaycli.ui.render import RichReporter, make_unified_diff, render_model_warning, render_task_summary
+from relaycli.ui.repl import Repl
 from relaycli.tools.base import ToolResult
 
 
@@ -53,8 +53,8 @@ def test_slash_model_switches_model():
 
 
 def test_slash_model_warns_for_slow_local_model(monkeypatch):
-    import relaycli.llm as llm
-    import relaycli.repl as repl_mod
+    import relaycli.core.llm as llm
+    import relaycli.ui.repl as repl_mod
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen3:4b"])
     monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "slow local model")
@@ -68,7 +68,7 @@ def test_slash_model_warns_for_slow_local_model(monkeypatch):
 
 
 def test_repl_skips_agent_for_slow_local_model(monkeypatch):
-    import relaycli.repl as repl_mod
+    import relaycli.ui.repl as repl_mod
 
     monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "slow local model")
     monkeypatch.setattr(repl_mod, "recommended_fast_local_model", lambda settings: None)
@@ -82,7 +82,7 @@ def test_repl_skips_agent_for_slow_local_model(monkeypatch):
 
 
 def test_repl_auto_switches_slow_local_model(monkeypatch):
-    import relaycli.repl as repl_mod
+    import relaycli.ui.repl as repl_mod
     from relaycli.agent import AgentResult
 
     monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "partial gpu")
@@ -110,8 +110,8 @@ def test_repl_auto_switches_slow_local_model(monkeypatch):
 
 
 def test_repl_respects_manually_selected_slow_local_model(monkeypatch):
-    import relaycli.llm as llm
-    import relaycli.repl as repl_mod
+    import relaycli.core.llm as llm
+    import relaycli.ui.repl as repl_mod
     from relaycli.agent import AgentResult
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen3:4b"])
@@ -143,7 +143,7 @@ def test_repl_respects_manually_selected_slow_local_model(monkeypatch):
 
 
 def test_slash_model_rejects_missing_installed_ollama_model(monkeypatch):
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen2.5-coder:0.5b"])
     repl, console = _repl(model="ollama_chat/qwen2.5-coder:0.5b")
@@ -156,7 +156,7 @@ def test_slash_model_rejects_missing_installed_ollama_model(monkeypatch):
 
 
 def test_slash_model_lists_installed_ollama_models(monkeypatch):
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.5: ["qwen2.5-coder:0.5b"])
     repl, console = _repl(model="ollama_chat/qwen2.5-coder:0.5b")
@@ -354,7 +354,7 @@ def test_slash_help_matches_slash_commands_registry():
     are meant to stay in lockstep (see the comment above SLASH_COMMANDS).
     'quit' is a documented alias of /exit (its own SLASH_COMMANDS entry says
     so) rather than a separate row, so it's exempt."""
-    from relaycli.repl import SLASH_COMMANDS
+    from relaycli.ui.repl import SLASH_COMMANDS
 
     repl, console = _repl()
     repl._handle_slash("/help")
@@ -609,7 +609,7 @@ def test_hermetic_helper_actually_isolates(monkeypatch, tmp_path):
 
 
 def test_preflight_missing_key_names_env_var():
-    from relaycli.llm import LLM
+    from relaycli.core.llm import LLM
 
     s = _hermetic(model="gpt-4o-mini")
     problem = LLM(s).preflight()
@@ -617,28 +617,28 @@ def test_preflight_missing_key_names_env_var():
 
 
 def test_preflight_ok_with_key():
-    from relaycli.llm import LLM
+    from relaycli.core.llm import LLM
 
     s = _hermetic(model="gpt-4o-mini", OPENAI_API_KEY="sk-test")
     assert LLM(s).preflight() is None
 
 
 def test_preflight_ollama_needs_no_key():
-    from relaycli.llm import LLM
+    from relaycli.core.llm import LLM
 
     s = _hermetic(model="ollama_chat/llama3.1")
     assert LLM(s).preflight() is None
 
 
 def test_preflight_unknown_provider_is_permissive():
-    from relaycli.llm import LLM
+    from relaycli.core.llm import LLM
 
     s = _hermetic(model="fake/model")
     assert LLM(s).preflight() is None
 
 
 def test_preflight_settings_covers_relay_role_models():
-    from relaycli.llm import preflight_settings
+    from relaycli.core.llm import preflight_settings
 
     s = _hermetic(model="ollama_chat/llama3.1", relay_enabled=True,
                   planner_model="gpt-4o-mini")
@@ -649,7 +649,7 @@ def test_preflight_settings_covers_relay_role_models():
 
 
 def test_setup_panel_contents():
-    from relaycli.render import render_setup_panel
+    from relaycli.ui.render import render_setup_panel
 
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     render_setup_panel(
@@ -666,7 +666,7 @@ def test_setup_panel_contents():
 
 
 def test_setup_panel_export_hint_ignores_spoofed_model_id():
-    from relaycli.render import render_setup_panel
+    from relaycli.ui.render import render_setup_panel
 
     console = Console(file=io.StringIO(), force_terminal=False, width=120)
     render_setup_panel(
@@ -927,7 +927,7 @@ def test_banner_warns_when_workspace_is_home(tmp_path):
     # the context. The banner must say so; a real project dir stays quiet.
     from pathlib import Path
 
-    from relaycli.render import render_welcome
+    from relaycli.ui.render import render_welcome
 
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     render_welcome(console, _hermetic(model="ollama_chat/llama3.1"), Path.home(), "not needed")
@@ -950,7 +950,7 @@ def test_banner_has_claude_style_welcome():
 def _completions(text: str):
     from prompt_toolkit.document import Document
 
-    from relaycli.repl import SlashCompleter
+    from relaycli.ui.repl import SlashCompleter
 
     doc = Document(text, cursor_position=len(text))
     return list(SlashCompleter().get_completions(doc, None))
@@ -1094,8 +1094,8 @@ def test_startup_does_not_import_litellm():
     import sys
 
     code = (
-        "import sys; import relaycli.cli, relaycli.repl, relaycli.llm; "
-        "from relaycli.llm import preflight_settings, key_status; "
+        "import sys; import relaycli.cli, relaycli.ui.repl, relaycli.core.llm; "
+        "from relaycli.core.llm import preflight_settings, key_status; "
         "from relaycli.config import Settings; "
         "s = Settings(_env_file=None, OPENAI_API_KEY=None); "
         "preflight_settings(s); key_status(s); "
@@ -1106,7 +1106,7 @@ def test_startup_does_not_import_litellm():
 
 
 def test_fast_resolver_matches_managed_providers():
-    from relaycli.llm import _resolve_provider
+    from relaycli.core.llm import _resolve_provider
 
     assert _resolve_provider("gpt-4o-mini") == "openai"
     assert _resolve_provider("o3-mini") == "openai"
@@ -1121,7 +1121,7 @@ def test_fast_resolver_matches_managed_providers():
 
 
 def test_preflight_openrouter_prefix_named_var():
-    from relaycli.llm import LLM
+    from relaycli.core.llm import LLM
 
     s = _hermetic(model="openrouter/meta-llama/llama-3-70b")
     problem = LLM(s).preflight()
@@ -1129,7 +1129,7 @@ def test_preflight_openrouter_prefix_named_var():
 
 
 def test_key_status_bare_claude_model():
-    from relaycli.llm import key_status
+    from relaycli.core.llm import key_status
 
     assert key_status(_hermetic(model="claude-3-5-sonnet-latest")) == "missing"
     assert key_status(_hermetic(model="claude-3-5-sonnet-latest",
@@ -1236,7 +1236,7 @@ def test_slow_local_model_warning_can_be_overridden(monkeypatch):
 
 
 def test_recommended_fast_local_model_prefers_small_coder(monkeypatch):
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
     import relaycli.ollama_runtime as runtime
 
     monkeypatch.setattr(
@@ -1252,7 +1252,7 @@ def test_recommended_fast_local_model_prefers_small_coder(monkeypatch):
 
 
 def test_recommended_fast_local_model_prefers_larger_small_coder(monkeypatch):
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
     import relaycli.ollama_runtime as runtime
 
     monkeypatch.setattr(
@@ -1268,7 +1268,7 @@ def test_recommended_fast_local_model_prefers_larger_small_coder(monkeypatch):
 
 
 def test_recommended_fast_local_model_ignores_only_large_models(monkeypatch):
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
     import relaycli.ollama_runtime as runtime
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen3:4b"])

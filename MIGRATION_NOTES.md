@@ -1,7 +1,254 @@
 # MIGRATION_NOTES.md
+<!-- Phase 2 closing summary appended near the top for visibility; detailed
+     per-pair notes are further down in this file, in the order they were
+     written during the work. -->
+
 
 Living decision log for the RelayCLI repair/migration/re-verify task.
 Branch: `repair/merge-and-migration`.
+
+---
+
+## Phase 2 — architecture migration completion
+
+**2a — dead shadowed modules.** `relaycli/agent.py` (deleted in Phase 1, dead
+per its 28-conflict-block status), `relaycli/config.py`, `relaycli/mcp.py`
+(both unconflicted, deleted here) — all three confirmed dead via
+`importlib.util.find_spec`, which resolved `relaycli.agent`/`.config`/`.mcp`
+to their same-named packages' `__init__.py` even before deletion (Python's
+package-over-module shadowing), and confirmed live after deletion by
+re-running the same check plus `import relaycli.<name>` for each.
+
+**2b — the 12 duplicate pairs.** Diffed every pair before touching anything.
+Nine were functionally identical or already-reconciled shims — trivial to
+finish:
+
+- `context.py`, `roles.py`, `roster.py`, `project_hints.py`, `render.py` —
+  already thin re-export shims from Phase 1 conflict resolution, parity
+  already verified then. Deleted the flat file, rewrote every importer to
+  the layered path.
+- `permissions.py`, `memory.py`, `router.py`, `session.py` — diffed
+  byte-for-byte functionally identical to their layered counterpart; only
+  docstrings/comments differed (the flat side consistently had the richer
+  prose — ported that into the layered file, kept the layered file's already-
+  correct internal imports). Deleted the flat file, rewrote every importer.
+
+Import rewriting for these 9 done with a small regex script
+(`/tmp/.../scratchpad/rewrite_imports.py`) rather than hand-editing ~23 call
+sites — anchored to statement-start (`^\s*from relaycli\.<mod>\b`,
+`^\s*import relaycli\.<mod>\b`, and the bare `from relaycli import <mod>[ as
+x]` form) so it can't touch a string or comment that merely mentions one of
+these names. Verified after running: `grep -rnE 'from relaycli\.(context|
+roles|roster|project_hints|permissions|memory|router|session|render)\b'`
+returns nothing, `compileall` clean, and a live `import` of all 9 layered
+modules plus `relaycli.cli` and `relaycli.tools.default_registry()` (21
+tools) all succeed.
+
+The remaining three pairs — `llm.py` ↔ `core/llm.py` (28 KB vs 19 KB),
+`repl.py` ↔ `ui/repl.py` (41 KB vs 31 KB), `web.py` ↔ `ui/web.py` (37 KB vs
+21.6 KB) — are large enough that diffing them by hand is real, independent
+work per pair (disjoint files, no shared state), so this part was delegated
+to three parallel research/reconciliation agents rather than done serially.
+Findings appended below once each reports back.
+
+### `llm.py` ↔ `core/llm.py` (agent-reconciled, self-reviewed)
+
+`relaycli/core/llm.py` rewritten as the union of both sides. Notable finds:
+
+- **Real bug fixed**: `ollama_host_label` existed in flat `llm.py` but was
+  missing from `core/llm.py` entirely — yet `relaycli/ui/render.py` and
+  `relaycli/ui/web.py` already did `from relaycli.core.llm import ...
+  ollama_host_label`. That was a live, latent `ImportError` waiting to
+  happen the moment either module's lazy import actually executed. Fixed by
+  including it.
+- **Real bug fixed**: `LLM._wrap_error`'s core version dropped flat's
+  fallback branch for an unresolvable-provider `AuthenticationError`, so it
+  produced no "rejected" hint text at all.
+  `test_llm_unit.py::test_wrap_error_auth_failure_unknown_provider_still_hints`
+  requires it; verified live after the fix.
+- `tool_capability_warning` message wording: kept flat's ("plain text"),
+  required by `test_tool_capability_warning_for_risky_local_model`.
+- A few judgment calls where no test disambiguates exact wording (error
+  message text in `_missing_key_message`, `_credential_kwargs`) — kept
+  flat's fuller text, flagged, low risk (only substring assertions exist).
+
+### `repl.py` ↔ `ui/repl.py` (agent-reconciled, self-reviewed)
+
+Took flat `repl.py` (the tested anchor — `tests/test_ux.py` imports it
+directly and is 1276 lines of coverage) as the base, with import paths
+corrected to their layered equivalents. Net diff against flat is now three
+hunks: one docstring cross-reference, and two `relaycli.config` →
+`relaycli.core.config` import fixes. Everything else is byte-identical.
+
+- **Real bug found**: `ui/repl.py`'s old `/relay`, `/agents`, `/skill auto`
+  usage strings passed unescaped `[on|off]` to `Console.print`, which Rich
+  interprets as a markup tag and silently drops — verified live, the
+  printed output was `"Usage: /relay "` with the options missing entirely.
+  Flat's `\[on|off]` (escaped) is correct and is what survives.
+- Confirmed `_ensure_runnable_local_model`'s flat behavior (blocks
+  `agent.run()` when no fallback model exists) is required by
+  `test_repl_skips_agent_for_slow_local_model`; `ui/repl.py`'s old version
+  always returned `True` and would have run the agent anyway.
+  `recommended_fast_local_model`/`slow_local_model_warning` also must stay
+  bound at module scope (not a local import) — tests monkeypatch
+  `repl_mod.recommended_fast_local_model` directly.
+- `_try_frontend_scaffold` and the `local_scaffolds` gate in `_handle_line`
+  were missing from `ui/repl.py` entirely — six dedicated tests
+  (`test_repl_frontend_*`) require them.
+- The agent also added a new `except Exception` guard around
+  `agent.run()` in `_run_agent`, reasoning that an unexpected internal bug
+  would otherwise crash the whole interactive session. It's a reasonable
+  idea but it's a **behavior change** with no test requiring it, and rule 5
+  ("behaviour is frozen during Phases 1–3") applies — removed it here so
+  Phase 2 stays a pure migration/no-op-behavior step. Revisit in Phase 5c
+  (actionable error messages) as a deliberate, reviewed addition instead of
+  a side effect of file reconciliation.
+
+**Two more uncatalogued duplicate pairs surfaced, not in the master
+prompt's list of 12 or its list of 15 "unique" flat modules — flagging per
+rule 6 rather than silently fixing or ignoring:**
+
+- `relaycli/relay.py` (594 lines) vs `relaycli/agent/pipeline.py`
+  (256 lines). The master prompt explicitly lists `relay.py` as one of the
+  fifteen "unique flat modules... do not migrate." That's the right call in
+  practice — `tests/test_relay.py` imports `Relay`/`RelayResult` etc. from
+  `relaycli.relay` directly, and `cli.py` does too — but `agent/pipeline.py`
+  is a real, independently-importable, much-less-complete second copy of
+  the same classes (`Relay`, `RelayResult`, `RelayObserver`, `RoleRun`,
+  `parse_tasks`, `parse_verdict`, ...), re-exported (but never actually
+  used) via `relaycli/agent/__init__.py`. Left both alone: `relay.py` per
+  explicit instruction, `agent/pipeline.py` because nothing live reaches it
+  (confirmed via grep — its only consumer is its own unused re-export).
+  `relaycli/ui/render.py`'s TYPE_CHECKING import was pointed at
+  `relaycli.relay` (the live one), not `relaycli.agent.pipeline` (which the
+  broken minimal render.py had mistakenly used — see below).
+- `relaycli/config_menu.py` (flat, also explicitly listed as "unique, leave
+  alone") vs `relaycli/config/menu.py` (layered). Same shape: identical
+  class/function names (`ConfigMenu`, `SettingsMenu`, `run_configuration`,
+  `run_settings`), `tests/test_config_menu.py` and every real call site
+  (`repl.py`, `cli.py`, `config_cli.py`) use the flat one; `config/menu.py`
+  is only reached from `config/manager.py`'s own (currently unmounted —
+  see the `cli.py` decision above) `config_app`. Left both alone for the
+  same reason.
+
+Neither of these is currently causing a test failure or runtime error, so
+no fix was needed — but both are exactly the kind of "two homes for one
+module" state Phase 2 is supposed to eliminate, and the master prompt's own
+enumeration missed them. Recommending a follow-up pass to delete
+`agent/pipeline.py` and `config/menu.py` outright (they're unused) once
+this repair lands, so the migration is actually finished rather than
+finished-except-for-two-more.
+
+### `relaycli/ui/render.py` — a real gap my own Phase 1 verification missed
+
+While reviewing the llm.py agent's report, its call to
+`best_ollama_model()`/`ollama_host_label()` with zero arguments in
+`ui/render.py` (both functions require `settings: Settings`) turned out to
+be a symptom of something much bigger: `relaycli/ui/render.py` was not an
+incomplete migration of the flat `render.py` I read during Phase 1 — it was
+a **different, deliberately minimal reimplementation** (its own docstring:
+`"Minimal clean UI — inspired by opencode / claude code."`), missing or
+altering most of the behavior the test suite actually depends on:
+`render_setup_panel` didn't even reference its own `detected` parameter, had
+no `Panel`, no "Manual fixes" section, and none of the security-conscious
+regex extraction that stops a crafted model id from spoofing a fake
+`_API_KEY` export hint (`test_setup_panel_export_hint_ignores_spoofed_model_id`
+directly tests for this); `render_welcome` had no Claude-Code panel styling,
+no "whole home directory" warning
+(`test_banner_warns_when_workspace_is_home` — a named regression guard for
+a real 2026-07-03 incident); `render_task_summary`'s condition for whether
+to reprint the final text checked `== "error"` instead of `!= "done"`,
+which silently drops the message on `max_iterations`
+(`test_render_task_summary_shows_max_iterations_text`); `render_help`'s
+command table didn't match `SLASH_COMMANDS`
+(`test_slash_help_matches_slash_commands_registry`); several `console.print`
+calls were missing `escape()` on model-id/route text that the flat version
+explicitly escaped with a comment calling out untrusted input.
+
+**Root cause of why my Phase 1 check missed this**: I verified "symbol
+parity" by grepping `^(class |def )` on both sides and confirming every
+name in the flat version also appeared in the layered target — that check
+is necessary but not sufficient, since it says nothing about whether the
+*bodies* match. This is now corrected by fully rewriting
+`relaycli/ui/render.py` to match the tested flat content (verified during
+Phase 1), with only its internal imports adjusted to layered paths. Given
+how consequential this was, the other four Phase-1 shim files (`context.py`,
+`roles.py`, `roster.py`, `project_hints.py` → their `core.*` targets) were
+re-verified by diffing full function bodies against the original `acb74e0`
+git blobs (not just re-checking symbol names) — confirmed genuinely
+cosmetic-only (import-path + docstring/formatting differences, zero logic
+changes) in all four cases. This render.py case really was the outlier.
+
+### `web.py` ↔ `ui/web.py` (agent-reconciled, self-reviewed)
+
+Took flat `web.py` as the base (parity-checked live: constructed a
+`WebSession`, drove `state()`/`send()`/the HTTP handler, including
+DNS-rebind/cross-origin guards). Diff against flat is 12 hunks, all either
+import-path corrections or the one genuinely necessary content change
+(`UI_PATH`'s relative path, adjusted one directory deeper for the file's new
+location — still resolves to the same `relaycli/web_ui.html`).
+
+- **Real bug found and reproduced**: old `ui/web.py`'s `_onboarding_status()`
+  imported `ollama_host_label` from `relaycli.core.llm`, which (at the time)
+  didn't define it — every `state()` call, i.e. every `/api/state` poll from
+  the desktop UI, raised `ImportError`. The main endpoint of the web server
+  was dead on arrival. (This class of bug is also what the `llm.py`
+  reconciliation fixed independently — `core/llm.py` now has
+  `ollama_host_label`; the two agents converged on the same root cause from
+  different directions.)
+- Missing from old `ui/web.py`, all confirmed real and tested: the roster
+  API (`_roster()`, `set_roster()`, `POST /api/roster` —
+  `test_state_includes_full_roster_and_set_roster`), Ollama pull
+  (`pull_ollama()`, `POST /api/ollama/pull` —
+  `test_pull_ollama_records_start_and_done`), the frontend-scaffold branch in
+  `send()` (5 tests, e.g. `test_send_frontend_shop_scaffold_runs_locally_without_llm`
+  asserts no LLM call happens), and the slow-local-model auto-switch (same
+  `recommended_fast_local_model` pattern as `cli.py`/`repl.py` — 4 tests
+  patch it at module scope).
+- **Reconfirms the `agent/pipeline.py` finding from a second, independent
+  angle, and makes it more serious**: comparing `relay.py` against
+  `agent/pipeline.py`'s `Relay` directly (not just symbol names), the
+  layered copy's `_run_tasks` silently ignores a task's `[role]`
+  specialist tag and always builds a plain Coder regardless of task-split
+  assignment — the delegation feature exists in name only there. Its
+  `_SECURITY_BLOCK` is also truncated to one line, dropping the
+  anti-prompt-injection / anti-secret-exfiltration instructions every real
+  role prompt carries elsewhere. Nothing live reaches this code path today
+  (confirmed above), but if anyone ever wires `relaycli.agent.pipeline.Relay`
+  in instead of `relaycli.relay.Relay` — an easy mistake, since
+  `relaycli.agent` re-exports it under the same names — they'd get a
+  silently degraded, less secure pipeline with no error to signal it.
+- Two pre-existing test-fixture issues reproduced identically regardless of
+  which `web.py` is used (not introduced by this repair, not fixed): (1)
+  `mcp/bridge.py`'s `extend_registry()`/`enabled_servers()` resolve through
+  the module's own globals, so `test_web_run_wires_mcp_tools`'s patch on the
+  `relaycli.mcp` re-export path may not reach it; (2) the
+  `appconfig.CONFIG_FILE` monkeypatch in `test_web.py`'s fixture looks like
+  it has the same shim-indirection gap as other ambient-config leaks seen
+  elsewhere in this codebase's test suite. Flagging both for the Phase 3
+  gate run to confirm whether they actually fail, rather than guessing
+  further here.
+
+### Phase 2 close-out
+
+All 12 catalogued duplicate pairs reconciled to one canonical (layered)
+location; all 3 dead shadowed modules deleted; every import across
+`relaycli/` and `tests/` rewritten, including three forms a plain import
+rewrite would miss (a `__import__("relaycli.context", ...)` call in
+`test_memory.py`, a string-literal `monkeypatch.setattr("relaycli.web...", )`
+target in `test_web.py`, and a parametrized list of module-name strings in
+`test_scaffold.py::test_all_modules_importable` — the last one is exactly
+the master prompt's rule 1 case: the test's assertion was correct and
+untouched, only the path *strings* it parametrized over were the obsolete
+part). Verified clean two ways: a repo-wide grep for any of the 12 old
+names in any import form, and `importlib`/`pkgutil.walk_packages` actually
+importing every single submodule under `relaycli` with zero errors — this
+is Phase 3's gate G8, already green ahead of schedule.
+
+Two uncatalogued dormant duplicates (`agent/pipeline.py`, `config/menu.py`)
+were found and deliberately left alone (nothing live reaches either); see
+above for why, and the final report for the recommendation to delete them
+in a follow-up pass.
 
 ---
 

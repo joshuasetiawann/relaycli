@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 from rich.markup import escape
 
-from relaycli import memory
+from relaycli.core import memory
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult
 

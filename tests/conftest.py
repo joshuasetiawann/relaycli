@@ -9,8 +9,8 @@ import pytest
 from rich.console import Console
 
 from relaycli.config import PermissionMode
-from relaycli.context import ProjectContext
-from relaycli.permissions import PermissionManager
+from relaycli.core.context import ProjectContext
+from relaycli.core.permissions import PermissionManager
 from relaycli.tools.base import ToolContext
 
 
@@ -29,7 +29,7 @@ def _hermetic_global_memory(tmp_path_factory, monkeypatch):
     """Point global memory at a per-test temp file so the developer's real
     ~/.relaycli/memory.md never leaks into test prompts (and tests never
     write to it)."""
-    import relaycli.memory as memory
+    import relaycli.core.memory as memory
 
     fake = tmp_path_factory.mktemp("memory") / "memory.md"
     monkeypatch.setattr(memory, "GLOBAL_MEMORY", fake)

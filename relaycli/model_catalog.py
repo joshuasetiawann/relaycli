@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from relaycli.config import Settings
-from relaycli.llm import ollama_models
+from relaycli.core.llm import ollama_models
 
 
 @dataclass(frozen=True)

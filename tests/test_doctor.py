@@ -117,7 +117,7 @@ def test_openrouter_key_probe_non_json_response_does_not_crash():
 
 
 def test_ollama_check_detects_models(monkeypatch):
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings: ["qwen2.5-coder:7b", "llama3.1:8b"])
     check = check_ollama(Settings())
@@ -126,7 +126,7 @@ def test_ollama_check_detects_models(monkeypatch):
 
 
 def test_ollama_check_skips_when_unreachable(monkeypatch):
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings: [])
     check = check_ollama(Settings())

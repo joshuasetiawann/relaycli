@@ -34,7 +34,7 @@ from relaycli.appconfig import (
     set_runtime_option,
 )
 from relaycli.config import PermissionMode
-from relaycli.roles import TIERS, builtin_role
+from relaycli.core.roles import TIERS, builtin_role
 
 ACCENT = "#2D5BFF"
 

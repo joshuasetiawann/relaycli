@@ -11,8 +11,8 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from relaycli.config import PermissionMode, Settings
-from relaycli.llm import LLMResponse, Usage
-from relaycli.web import UI_PATH, WebSession, make_handler
+from relaycli.core.llm import LLMResponse, Usage
+from relaycli.ui.web import UI_PATH, WebSession, make_handler
 
 
 @pytest.fixture(autouse=True)
@@ -317,7 +317,7 @@ def test_text_tool_json_executes_in_web_session(tmp_path):
 
 
 def test_web_retries_frontend_task_when_model_only_gives_tutorial(tmp_path):
-    from relaycli.llm import ToolCall
+    from relaycli.core.llm import ToolCall
 
     def tc(name, args, call_id):
         return ToolCall(id=call_id, name=name, arguments=json.dumps(args))
@@ -344,7 +344,7 @@ def test_web_retries_frontend_task_when_model_only_gives_tutorial(tmp_path):
 
 
 def test_web_discards_fake_done_claim_before_recovery(tmp_path):
-    from relaycli.llm import ToolCall
+    from relaycli.core.llm import ToolCall
 
     def tc(name, args, call_id):
         return ToolCall(id=call_id, name=name, arguments=json.dumps(args))
@@ -376,7 +376,7 @@ def test_web_discards_fake_done_claim_before_recovery(tmp_path):
 
 
 def test_send_slow_local_model_returns_fast_error(monkeypatch):
-    import relaycli.web as web_mod
+    import relaycli.ui.web as web_mod
 
     monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
     monkeypatch.setattr(web_mod, "recommended_fast_local_model", lambda settings: None)
@@ -395,7 +395,7 @@ def test_send_slow_local_model_returns_fast_error(monkeypatch):
 
 
 def test_send_slow_local_model_auto_switches_to_fast_model(monkeypatch):
-    import relaycli.web as web_mod
+    import relaycli.ui.web as web_mod
 
     monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
     monkeypatch.setattr(
@@ -423,7 +423,7 @@ def test_send_slow_local_model_auto_switches_to_fast_model(monkeypatch):
 
 
 def test_send_respects_manually_selected_slow_model(monkeypatch):
-    import relaycli.web as web_mod
+    import relaycli.ui.web as web_mod
 
     monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
     monkeypatch.setattr(
@@ -454,7 +454,7 @@ def test_send_respects_manually_selected_slow_model(monkeypatch):
 
 
 def test_send_warns_once_for_manually_selected_slow_model(monkeypatch):
-    import relaycli.web as web_mod
+    import relaycli.ui.web as web_mod
 
     monkeypatch.setattr(web_mod, "slow_local_model_warning", lambda model: "slow local model")
     monkeypatch.setattr(
@@ -507,7 +507,7 @@ def test_send_permissive_followup_carries_previous_request():
 
 
 def test_pull_ollama_records_start_and_done(monkeypatch):
-    monkeypatch.setattr("relaycli.web.pull_ollama_model", lambda settings, model: model)
+    monkeypatch.setattr("relaycli.ui.web.pull_ollama_model", lambda settings, model: model)
     session = WebSession(_settings())
 
     ok, model = session.pull_ollama("qwen2.5-coder:0.5b")
@@ -726,7 +726,7 @@ def test_stop_halts_a_relay_run():
     # once the Stop flag is set — the should_stop hook is checked per step.
     # send() clears the flag (a new run starts fresh), so Stop must be tripped
     # while the run is in flight: the FakeLLM sets it right after the planner.
-    from relaycli.llm import ToolCall
+    from relaycli.core.llm import ToolCall
 
     class StoppingLLM:
         def __init__(self, session):
@@ -871,7 +871,7 @@ def test_serve_background_starts_and_serves(monkeypatch, tmp_path):
 
     monkeypatch.chdir(tmp_path)
     from relaycli.config import Settings
-    from relaycli.web import serve_background
+    from relaycli.ui.web import serve_background
 
     server, url = serve_background(Settings(), port=0)
     try:
@@ -887,7 +887,7 @@ def test_serve_background_starts_and_serves(monkeypatch, tmp_path):
 def test_serve_background_port_busy_falls_back(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     from relaycli.config import Settings
-    from relaycli.web import serve_background
+    from relaycli.ui.web import serve_background
 
     s1, url1 = serve_background(Settings(), port=0)
     busy_port = int(url1.rsplit(":", 1)[1])
@@ -908,7 +908,7 @@ def test_allow_hosts_extends_guard(monkeypatch, tmp_path):
 
     monkeypatch.chdir(tmp_path)
     from relaycli.config import Settings
-    from relaycli.web import WebSession, make_handler
+    from relaycli.ui.web import WebSession, make_handler
 
     session = WebSession(Settings())
     server = ThreadingHTTPServer(
@@ -1038,7 +1038,7 @@ def test_serve_prints_actual_bound_port_not_requested(monkeypatch, tmp_path, cap
     import threading as _threading
 
     from rich.console import Console as _Console
-    import relaycli.web as web_mod
+    import relaycli.ui.web as web_mod
 
     monkeypatch.chdir(tmp_path)
     printed = {}

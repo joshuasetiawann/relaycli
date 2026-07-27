@@ -7,7 +7,7 @@ import json
 import pytest
 from pydantic import BaseModel, Field
 
-from relaycli.llm import (
+from relaycli.core.llm import (
     LLM,
     LLMError,
     LLMResponse,
@@ -197,7 +197,7 @@ def test_wrap_error_non_auth_unchanged():
 
 def test_best_ollama_model_prefers_tool_capable_hint(monkeypatch):
     from relaycli.config import Settings
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings: ["qwen2.5-coder:7b", "llama3.1:8b"])
     assert best_ollama_model(Settings()) == "ollama_chat/llama3.1:8b"
@@ -205,7 +205,7 @@ def test_best_ollama_model_prefers_tool_capable_hint(monkeypatch):
 
 def test_best_ollama_model_prefers_qwen_coder_over_unknown_small_model(monkeypatch):
     from relaycli.config import Settings
-    import relaycli.llm as llm
+    import relaycli.core.llm as llm
 
     monkeypatch.setattr(llm, "ollama_models", lambda settings: ["smollm2:360m", "qwen2.5-coder:0.5b"])
     assert best_ollama_model(Settings()) == "ollama_chat/qwen2.5-coder:0.5b"

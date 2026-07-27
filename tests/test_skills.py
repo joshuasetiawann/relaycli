@@ -112,7 +112,7 @@ def test_agent_system_prompt_carries_skills_and_survives_braces():
 
 def test_relay_applies_skills_to_coder_only():
     from relaycli.relay import CODER_TEMPLATE, PLANNER_TEMPLATE, Relay
-    from relaycli.router import Role
+    from relaycli.agent.router import Role
     from relaycli.tools import default_registry, planner_registry
 
     settings = Settings(
@@ -129,7 +129,7 @@ def test_relay_applies_skills_to_coder_only():
 
 # --- REPL commands ---------------------------------------------------------
 def _repl():
-    from relaycli.repl import Repl
+    from relaycli.ui.repl import Repl
 
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     settings = Settings(
@@ -171,7 +171,7 @@ def test_slash_skills_lists_builtins_with_source():
 def test_completer_skill_names_are_dynamic():
     from prompt_toolkit.document import Document
 
-    from relaycli.repl import SlashCompleter
+    from relaycli.ui.repl import SlashCompleter
 
     completer = SlashCompleter(arg_providers={"skill": lambda: ("tdd", "debug")})
     doc = Document("/skill t", cursor_position=len("/skill t"))

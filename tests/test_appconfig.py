@@ -18,7 +18,7 @@ from relaycli.appconfig import (
     save_app_config,
     set_runtime_option,
 )
-from relaycli.roles import BUILTIN_ROLES, builtin_role
+from relaycli.core.roles import BUILTIN_ROLES, builtin_role
 
 
 @pytest.fixture

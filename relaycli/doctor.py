@@ -142,7 +142,7 @@ def check_key_drift(settings: Settings, project_root: Path) -> Check:
 
 def check_ollama(settings: Settings) -> Check:
     """Report whether a local Ollama server is reachable and has models."""
-    from relaycli.llm import best_ollama_model, ollama_host_label, ollama_models
+    from relaycli.core.llm import best_ollama_model, ollama_host_label, ollama_models
 
     models = ollama_models(settings)
     if not models:
@@ -159,12 +159,12 @@ def check_ollama(settings: Settings) -> Check:
 
 def check_models(settings: Settings) -> list[Check]:
     """Every model the session would use must resolve to a usable credential."""
-    from relaycli.llm import LLM, tool_capability_warning
+    from relaycli.core.llm import LLM, tool_capability_warning
 
     llm = LLM(settings)
     models = [("model", settings.model)]
     if settings.relay_enabled:
-        from relaycli.router import routing_table
+        from relaycli.agent.router import routing_table
 
         models += [(f"relay {r}", m) for r, m in routing_table(settings).items()]
     checks = []
@@ -204,7 +204,7 @@ def check_installation() -> list[Check]:
     try:
         from relaycli.skills import discover_skills
         from relaycli.tools import default_registry
-        from relaycli.web import UI_PATH
+        from relaycli.ui.web import UI_PATH
 
         skills = discover_skills(None)
         required_skills = {
@@ -243,8 +243,7 @@ def check_installation() -> list[Check]:
 
 
 def check_writable_dirs(project_root: Path) -> list[Check]:
-    from relaycli import memory
-
+    from relaycli.core import memory
     checks = []
     for label, path in (
         ("global memory", memory.GLOBAL_MEMORY.parent),

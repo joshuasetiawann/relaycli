@@ -92,7 +92,7 @@ def main(
         return
 
     # No subcommand and no -p: interactive REPL.
-    from relaycli.repl import run_repl
+    from relaycli.ui.repl import run_repl
 
     run_repl(settings, console=console)
 
@@ -100,13 +100,13 @@ def main(
 def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     """Execute one agent loop and exit (the -p path)."""
     from relaycli.agent import Agent
-    from relaycli.context import ProjectContext
+    from relaycli.core.context import ProjectContext
     from relaycli.frontend_scaffold import create_frontend_scaffold, detect_frontend_scaffold
     from relaycli.intent import local_reply_for
-    from relaycli.llm import key_status, preflight_settings
+    from relaycli.core.llm import key_status, preflight_settings
     from relaycli.ollama_runtime import recommended_fast_local_model, slow_local_model_warning
-    from relaycli.permissions import PermissionManager
-    from relaycli.render import (
+    from relaycli.core.permissions import PermissionManager
+    from relaycli.ui.render import (
         RichReporter,
         render_local_reply,
         render_model_warning,
@@ -187,7 +187,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
 
     if settings.relay_enabled:
         from relaycli.relay import Relay
-        from relaycli.render import (
+        from relaycli.ui.render import (
             RelayRichObserver,
             render_relay_summary,
             render_routing_banner,
@@ -277,7 +277,7 @@ def web(
     ),
 ) -> None:
     """Serve the RelayCLI desktop UI (loopback only by default)."""
-    from relaycli.web import serve
+    from relaycli.ui.web import serve
 
     serve(
         get_settings(), port, open_browser=open_browser,
@@ -290,7 +290,7 @@ def desktop(
     port: int = typer.Option(8484, "--port", help="Port on 127.0.0.1 to serve."),
 ) -> None:
     """Open the RelayCLI desktop UI in your browser (alias of `web --open`)."""
-    from relaycli.web import serve
+    from relaycli.ui.web import serve
 
     serve(get_settings(), port, open_browser=True)
 
@@ -298,8 +298,7 @@ def desktop(
 @app.command()
 def memory() -> None:
     """Show the agent's long-term memory (global + this project)."""
-    from relaycli import memory as mem
-
+    from relaycli.core import memory as mem
     for label, path in (
         ("global", mem.GLOBAL_MEMORY),
         ("project", mem.project_memory_path(Path(os.getcwd()))),

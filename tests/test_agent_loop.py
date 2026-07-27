@@ -9,9 +9,9 @@ from rich.console import Console
 
 from relaycli.agent import Agent
 from relaycli.config import PermissionMode, Settings
-from relaycli.context import ProjectContext
-from relaycli.llm import LLMResponse, ToolCall, Usage
-from relaycli.permissions import PermissionManager
+from relaycli.core.context import ProjectContext
+from relaycli.core.llm import LLMResponse, ToolCall, Usage
+from relaycli.core.permissions import PermissionManager
 from relaycli.tools.base import ToolContext
 from relaycli.tools.read_file import ReadFileArgs, read_file
 

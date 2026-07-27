@@ -57,7 +57,7 @@ def recommended_fast_local_model(settings: Any, *, timeout: float = 0.8) -> str 
     """Return a small installed Ollama model suitable as an automatic fallback."""
 
     try:
-        from relaycli.llm import ollama_models
+        from relaycli.core.llm import ollama_models
 
         installed = ollama_models(settings, timeout=timeout)
     except Exception:

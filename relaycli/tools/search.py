@@ -8,7 +8,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from relaycli.context import PathSafetyError, ProjectContext
+from relaycli.core.context import PathSafetyError, ProjectContext
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult
 

@@ -7,7 +7,7 @@ import pytest
 from relaycli import appconfig
 from relaycli.appconfig import RoleConfig, load_app_config
 from relaycli.config import PermissionMode, Settings
-from relaycli.roster import (
+from relaycli.core.roster import (
     enabled_specialists,
     is_assignable,
     roster_template,

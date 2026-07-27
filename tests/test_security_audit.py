@@ -17,10 +17,10 @@ from rich.console import Console
 from relaycli import config as config_mod
 from relaycli.agent import Agent
 from relaycli.config import PermissionMode, Settings
-from relaycli.context import ProjectContext
-from relaycli.llm import LLM, LLMError, ToolCall, Usage
-from relaycli.permissions import PermissionManager
-from relaycli.session import Session
+from relaycli.core.context import ProjectContext
+from relaycli.core.llm import LLM, LLMError, ToolCall, Usage
+from relaycli.core.permissions import PermissionManager
+from relaycli.core.session import Session
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, atomic_write
 from relaycli.tools.edit_file import EditFileArgs, edit_file
@@ -205,7 +205,7 @@ def _fake_llm_with(response):
 def test_interrupt_stubs_all_tool_results(sample_project):
     reg = ToolRegistry()
     reg.add(Tool(name="boom", description="raises", args_model=_BoomArgs, func=_boom))
-    from relaycli.llm import LLMResponse
+    from relaycli.core.llm import LLMResponse
 
     resp = LLMResponse(
         text="",
@@ -318,7 +318,7 @@ def test_ensure_config_dir_is_private(tmp_path, monkeypatch):
 
 # === L6: an empty/blocked provider response raises LLMError, not a traceback =
 def test_normalize_empty_choices_raises_llmerror(monkeypatch):
-    import relaycli.llm as llm_mod
+    import relaycli.core.llm as llm_mod
 
     # Patch the lazy-import seam: litellm is no longer a module attribute.
     monkeypatch.setattr(
@@ -335,7 +335,7 @@ def test_normalize_empty_choices_raises_llmerror(monkeypatch):
 
 # === L7: streaming requests real usage via stream_options ====================
 def test_streaming_requests_include_usage(monkeypatch):
-    import relaycli.llm as llm_mod
+    import relaycli.core.llm as llm_mod
     captured = {}
 
     def fake_completion(**kwargs):

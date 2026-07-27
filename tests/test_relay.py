@@ -13,13 +13,13 @@ from typer.testing import CliRunner
 import relaycli.cli as cli_module
 from relaycli.agent import Agent
 from relaycli.config import PermissionMode, Settings
-from relaycli.context import ProjectContext
-from relaycli.llm import LLMError, LLMResponse, Usage
-from relaycli.permissions import PermissionManager
+from relaycli.core.context import ProjectContext
+from relaycli.core.llm import LLMError, LLMResponse, Usage
+from relaycli.core.permissions import PermissionManager
 from relaycli.relay import Relay, RelayObserver, RelayResult, parse_verdict
-from relaycli.render import RelayRichObserver, render_relay_summary
-from relaycli.repl import Repl
-from relaycli.router import Role, resolve_model, routing_table
+from relaycli.ui.render import RelayRichObserver, render_relay_summary
+from relaycli.ui.repl import Repl
+from relaycli.agent.router import Role, resolve_model, routing_table
 from relaycli.tools import default_registry, planner_registry, reviewer_registry
 
 
@@ -508,7 +508,7 @@ class TestRelayFailureModes:
     def test_coder_iteration_cap_propagates(self, sample_project):
         import json as _json
 
-        from relaycli.llm import ToolCall
+        from relaycli.core.llm import ToolCall
 
         run_tool = ToolCall(id="c1", name="run_command",
                             arguments=_json.dumps({"command": "true"}))

@@ -14,7 +14,7 @@ from rich.table import Table
 
 from relaycli.appconfig import ProviderConfig, load_app_config, save_app_config
 from relaycli.config import PermissionMode, Settings, reload_settings
-from relaycli.llm import best_ollama_model, ollama_host_label, ollama_models
+from relaycli.core.llm import best_ollama_model, ollama_host_label, ollama_models
 
 PROVIDER_ENV = {
     "openai": "OPENAI_API_KEY",

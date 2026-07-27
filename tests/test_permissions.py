@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from relaycli.config import PermissionMode
-from relaycli.permissions import PermissionManager
+from relaycli.core.permissions import PermissionManager
 
 
 def _recording_prompter():

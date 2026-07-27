@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from relaycli.context import ProjectContext
+from relaycli.core.context import ProjectContext
 from relaycli.tools.base import atomic_write
 
 

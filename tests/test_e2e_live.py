@@ -20,8 +20,8 @@ from rich.console import Console
 
 from relaycli.agent import Agent
 from relaycli.config import PermissionMode, Settings
-from relaycli.context import ProjectContext
-from relaycli.permissions import PermissionManager
+from relaycli.core.context import ProjectContext
+from relaycli.core.permissions import PermissionManager
 
 E2E_MODEL = os.environ.get("RELAYCLI_E2E_MODEL", "")
 

@@ -1,7 +1,7 @@
 """Relay pipeline: Planner → Coder → Reviewer with a bounded revision loop.
 
 Each role is an ordinary :class:`relaycli.agent.Agent` with its own session,
-its own system-prompt template, a routed model (:mod:`relaycli.router`), and a
+its own system-prompt template, a routed model (:mod:`relaycli.agent.router`), and a
 tool subset:
 
 * Planner  — read_file + search (read-only); produces a short numbered plan.
@@ -28,12 +28,12 @@ from rich.console import Console
 
 from relaycli.agent import Agent, AgentResult, Reporter
 from relaycli.config import Settings, get_settings
-from relaycli.context import ProjectContext
-from relaycli.llm import LLM, Usage
-from relaycli.permissions import PermissionManager
+from relaycli.core.context import ProjectContext
+from relaycli.core.llm import LLM, Usage
+from relaycli.core.permissions import PermissionManager
 from relaycli.appconfig import load_app_config
-from relaycli.roster import enabled_specialists, is_assignable, specialist_runtime
-from relaycli.router import Role, resolve_model
+from relaycli.core.roster import enabled_specialists, is_assignable, specialist_runtime
+from relaycli.agent.router import Role, resolve_model
 from relaycli.tools import ToolRegistry, default_registry, planner_registry, reviewer_registry
 
 

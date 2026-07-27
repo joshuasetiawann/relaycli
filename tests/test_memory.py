@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import relaycli.memory as memory
+import relaycli.core.memory as memory
 from relaycli.tools import default_registry
 
 from tests.conftest import make_context
@@ -68,7 +68,7 @@ def test_agent_system_prompt_includes_memory(tmp_path: Path, monkeypatch):
         memory.project_memory_path(tmp_path), "the build uses hatchling"
     )
     agent = Agent(Settings(), project=__import__(
-        "relaycli.context", fromlist=["ProjectContext"]
+        "relaycli.core.context", fromlist=["ProjectContext"]
     ).ProjectContext(tmp_path))
     assert "the build uses hatchling" in agent.session.system_prompt
 
