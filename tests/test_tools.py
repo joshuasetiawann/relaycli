@@ -476,13 +476,26 @@ def test_check_and_stop_unknown_id(sample_project):
 
 
 def test_background_tools_registered():
-    from relaycli.tools import reviewer_registry
-
     names = set(default_registry().names())
     assert {"run_background", "check_process", "stop_process"} <= names
+
+
+def test_reviewer_gets_exec_tier_including_background_tools():
+    """reviewer_registry() is derived from the "read"+"exec" capability
+    tier (relaycli.tools.capabilities) rather than a hand-picked list —
+    run_background/stop_process are exec-tier tools like run_command, so
+    reviewer gets them too now. This doesn't widen what reviewer can do
+    unsupervised: each of these still requires ctx.permissions.confirm()
+    at the point of use in any mode but full-auto, same as run_command —
+    the capability tier controls whether the tool is *offered*, not
+    whether using it needs a human's sign-off."""
+    from relaycli.tools import reviewer_registry
+    from relaycli.tools.capabilities import TOOL_CAPABILITIES
+
     reviewer = set(reviewer_registry().names())
     assert "check_process" in reviewer
-    assert "run_background" not in reviewer and "stop_process" not in reviewer
+    assert "run_background" in reviewer and "stop_process" in reviewer
+    assert not any(TOOL_CAPABILITIES.get(n) == "write" for n in reviewer)
 
 
 # --- background tools THROUGH the registry, not by direct import -------

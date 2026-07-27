@@ -161,25 +161,14 @@ def _register_defaults(reg: ToolRegistry) -> None:
 
 
 def planner_registry() -> ToolRegistry:
-    from relaycli.tools import list_dir as _list_dir, find_files as _find_files
-    from relaycli.tools import read_file as _read_file, search as _search
-    reg = ToolRegistry()
-    _list_dir.register(reg)
-    _find_files.register(reg)
-    _read_file.register(reg)
-    _search.register(reg)
-    return reg
+    """The planner role's tools, derived from its capability tier — see
+    relaycli.tools.capabilities and core.roles.BUILTIN_ROLES["planner"]."""
+    from relaycli.tools.capabilities import registry_for_role
+    return registry_for_role("planner")
 
 
 def reviewer_registry() -> ToolRegistry:
-    from relaycli.tools import list_dir as _list_dir, find_files as _find_files
-    from relaycli.tools import read_file as _read_file, run_command as _run_command, search as _search
-    from relaycli.tools import background as _background
-    reg = ToolRegistry()
-    _list_dir.register(reg)
-    _find_files.register(reg)
-    _read_file.register(reg)
-    _run_command.register(reg)
-    _search.register(reg)
-    _background.register_check_only(reg)
-    return reg
+    """The reviewer role's tools, derived from its capability tier — see
+    relaycli.tools.capabilities and core.roles.BUILTIN_ROLES["reviewer"]."""
+    from relaycli.tools.capabilities import registry_for_role
+    return registry_for_role("reviewer")

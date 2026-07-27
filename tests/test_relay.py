@@ -714,14 +714,30 @@ class TestReplRelayCommand:
 
 
 class TestRegistrySubsets:
+    # planner_registry/reviewer_registry are now derived from the tool
+    # capability matrix (relaycli.tools.capabilities) rather than hand-listed
+    # — see core.roles.BUILTIN_ROLES["planner"/"reviewer"].capabilities. These
+    # assert the actual invariant (exactly the tools the matrix grants that
+    # capability tier) instead of a hardcoded snapshot, so a new read-only or
+    # exec tool added to the matrix doesn't require updating this test to
+    # match — the old hand-lists silently missing several read-only tools
+    # (question, think, todo_list, check_process) nothing had ever gone back
+    # and added is the exact drift this derivation replaces.
     def test_planner_is_read_only(self):
+        from relaycli.tools.capabilities import TOOL_CAPABILITIES
+
         names = set(planner_registry().names())
-        assert names == {"list_dir", "find_files", "read_file", "search"}
+        expected = {name for name, cap in TOOL_CAPABILITIES.items() if cap == "read"}
+        assert names == expected
+        assert "write_file" not in names and "run_command" not in names
 
     def test_reviewer_reads_and_runs_but_never_writes(self):
+        from relaycli.tools.capabilities import TOOL_CAPABILITIES
+
         names = set(reviewer_registry().names())
-        assert names == {"list_dir", "find_files", "read_file", "search",
-                         "run_command", "check_process"}
+        expected = {name for name, cap in TOOL_CAPABILITIES.items() if cap in ("read", "exec")}
+        assert names == expected
+        assert not any(TOOL_CAPABILITIES.get(n) == "write" for n in names)
 
     def test_subset_schemas_match_default(self):
         # The subset must reuse the same tool definitions, not redefine them.
