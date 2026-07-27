@@ -1,0 +1,189 @@
+"""Scheduler — runs a TaskGraph's ready tasks concurrently.
+
+Agent.run() is still synchronous (Stage 2 added escalation to it without
+making the whole loop async — see agent/router.py's call_with_escalation_
+sync docstring). Real concurrency for network-bound model calls still
+needs each one off the event loop thread, so tasks run via
+asyncio.to_thread rather than requiring Agent itself to be async yet.
+
+Loop: compute ready tasks (graph dependencies satisfied AND no lease
+conflict with anything currently running), launch up to
+max_concurrent_agents, wait for the next one to finish, post its outcome
+to the graph/leases/blackboard/budget, refill. Stops when the graph is
+finished, the budget is exhausted, or should_stop() returns true.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from dataclasses import dataclass, field
+from typing import Awaitable, Callable
+
+from relaycli.agent.blackboard import Blackboard, Finding
+from relaycli.agent.budget import BudgetExceeded, BudgetGovernor
+from relaycli.agent.graph import Task, TaskGraph
+from relaycli.agent.leases import LeaseManager
+from relaycli.core.llm import Usage
+from relaycli.core.logging import get_logger
+
+_log = get_logger(__name__)
+
+
+@dataclass
+class TaskOutcome:
+    task_id: str
+    ok: bool
+    summary: str
+    usage: Usage = field(default_factory=Usage)
+    error: str | None = None
+    # Paths this task's agent read (typically ToolContext.read_files) —
+    # posted to the blackboard as the finding's refs, so a later task can
+    # tell this path was already surveyed instead of reading it again.
+    refs: tuple[str, ...] = ()
+
+
+TaskRunner = Callable[[Task], Awaitable[TaskOutcome]]
+
+
+@dataclass
+class SchedulerResult:
+    graph: TaskGraph
+    blackboard: Blackboard
+    budget: BudgetGovernor
+    outcomes: dict[str, TaskOutcome] = field(default_factory=dict)
+    stopped_early: bool = False
+    elapsed: float = 0.0
+
+
+class Scheduler:
+    def __init__(
+        self,
+        graph: TaskGraph,
+        run_task: TaskRunner,
+        *,
+        max_concurrent_agents: int = 3,
+        leases: LeaseManager | None = None,
+        blackboard: Blackboard | None = None,
+        budget: BudgetGovernor | None = None,
+        should_stop: Callable[[], bool] | None = None,
+        should_stop_poll_interval: float = 0.2,
+    ) -> None:
+        self.graph = graph
+        self._run_task = run_task
+        self.max_concurrent_agents = max(1, max_concurrent_agents)
+        self.leases = leases if leases is not None else LeaseManager()
+        self.blackboard = blackboard if blackboard is not None else Blackboard()
+        self.budget = budget if budget is not None else BudgetGovernor()
+        self._should_stop = should_stop
+        self._should_stop_poll_interval = should_stop_poll_interval
+
+    async def run(self) -> SchedulerResult:
+        started = time.perf_counter()
+        outcomes: dict[str, TaskOutcome] = {}
+        running: dict[str, asyncio.Task] = {}
+        stopped_early = False
+
+        while not self.graph.is_finished():
+            if self._should_stop is not None and self._should_stop():
+                stopped_early = True
+                break
+
+            launched_this_round = self._launch_ready(running)
+
+            if self.graph.is_finished():
+                # _launch_ready can itself finish the graph (e.g. a budget
+                # breach marks the last ready task failed without ever
+                # launching it) — that's a normal, successful stop, not a
+                # stall, so the outer while's own condition would already
+                # exit next iteration; breaking now just skips a needless
+                # asyncio.wait() with nothing running.
+                break
+
+            if not running:
+                if not launched_this_round and not self.graph.ready_tasks():
+                    # Nothing running, nothing ready, graph genuinely not
+                    # finished: every remaining task is blocked/waiting on
+                    # something that will never resolve (e.g. a lease held
+                    # by a task that already finished but wasn't released —
+                    # a bug, not a normal state) rather than genuinely stuck.
+                    _log.warning("scheduler stalled: nothing running or ready, "
+                                 "but the graph isn't finished")
+                    stopped_early = True
+                break
+
+            # Bounded wait, not an unbounded FIRST_COMPLETED: should_stop is
+            # only rechecked at the top of this loop, so if every running
+            # task takes longer than this timeout, an unbounded wait would
+            # make a stop request (Ctrl-C) sit unnoticed until some task
+            # finishes on its own — found by a test asserting cancellation
+            # actually happens promptly, not just eventually.
+            done, _pending = await asyncio.wait(
+                running.values(), return_when=asyncio.FIRST_COMPLETED,
+                timeout=self._should_stop_poll_interval,
+            )
+            if not done:
+                continue  # nothing finished within the poll window; recheck should_stop
+            for fut in done:
+                task_id = next(tid for tid, t in running.items() if t is fut)
+                del running[task_id]
+                outcome = await fut
+                outcomes[task_id] = outcome
+                self.leases.release(task_id)
+                try:
+                    self.budget.record(task_id, outcome.usage)
+                except BudgetExceeded as exc:
+                    # The task itself already ran and its outcome stands —
+                    # a breach discovered on completion doesn't retroactively
+                    # undo work that already happened. Its only effect is on
+                    # what gets to launch *next* (check_before_launch, in
+                    # _launch_ready) — logged here so the reason is visible.
+                    _log.warning("%s", exc)
+                self.blackboard.post(Finding(
+                    task_id=task_id, role=self.graph.tasks[task_id].role_id,
+                    kind="task_result", summary=outcome.summary, refs=outcome.refs,
+                ))
+                if outcome.ok:
+                    self.graph.mark_done(task_id)
+                else:
+                    self.graph.mark_failed(task_id)
+                    _log.warning("task '%s' failed: %s", task_id, outcome.error or outcome.summary)
+
+        if stopped_early:
+            for task_id, fut in running.items():
+                fut.cancel()
+                self.leases.release(task_id)
+                self.graph.mark_cancelled(task_id)
+            if running:
+                await asyncio.gather(*running.values(), return_exceptions=True)
+
+        return SchedulerResult(
+            graph=self.graph, blackboard=self.blackboard, budget=self.budget,
+            outcomes=outcomes, stopped_early=stopped_early,
+            elapsed=time.perf_counter() - started,
+        )
+
+    def _launch_ready(self, running: dict[str, asyncio.Task]) -> bool:
+        """Start as many ready, lease-clear, budget-clear tasks as the
+        concurrency cap allows. Returns whether anything was launched this
+        round, so the caller can distinguish "waiting on leases/budget"
+        from "genuinely nothing left to do"."""
+        launched = False
+        for task in self.graph.ready_tasks():
+            if len(running) >= self.max_concurrent_agents:
+                break
+            if task.id in running:
+                continue
+            if self.leases.conflicts_with_running(task.path_claims) is not None:
+                continue  # stays ready; retried next round once the holder finishes
+            try:
+                self.budget.check_before_launch(task.id)
+            except BudgetExceeded as exc:
+                _log.warning("task '%s' cannot start: %s", task.id, exc)
+                self.graph.mark_failed(task.id)
+                continue
+            self.leases.acquire(task.id, task.path_claims)
+            self.graph.mark_running(task.id)
+            running[task.id] = asyncio.ensure_future(self._run_task(task))
+            launched = True
+        return launched
