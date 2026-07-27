@@ -17,6 +17,15 @@ class ApplyPatchArgs(BaseModel):
 
 def apply_patch(args: ApplyPatchArgs, ctx: ToolContext | None) -> ToolResult:
     if ctx is not None:
+        # One pre-flight check covering every file the patch touches,
+        # before either the primary (patch binary) or fallback path runs —
+        # neither knows target paths without parsing the patch text first,
+        # so parsing here once covers both rather than duplicating it.
+        for target_path, _lines in _parse_patches(args.patch):
+            lease_error = ctx.lease_error(target_path)
+            if lease_error is not None:
+                return ToolResult.error(lease_error, summary="patch (no lease)")
+
         preview = args.patch if len(args.patch) <= 2000 else args.patch[:2000] + "\n... (truncated)"
         decision = ctx.permissions.confirm(
             "write", prompt_text=f"Apply this patch?\n{preview}"

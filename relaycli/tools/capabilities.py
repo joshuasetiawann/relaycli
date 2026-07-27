@@ -70,3 +70,22 @@ def registry_for_role(role_id: str) -> ToolRegistry:
         if TOOL_CAPABILITIES.get(name) not in role.capabilities:
             reg.unregister(name)
     return reg
+
+
+def scheduler_task_registry(role_id: str) -> ToolRegistry:
+    """registry_for_role(role_id) plus spawn_agent — for a Scheduler-run
+    task's Agent specifically (agent/scheduler.py's production run_task).
+
+    spawn_agent is deliberately NOT in TOOL_CAPABILITIES / default_registry:
+    it only works when ToolContext.settings is set, which only a
+    scheduler-run task's context has — offering it to the plain
+    single-agent CLI/REPL flow (or any planner_registry/reviewer_registry
+    consumer, which derive from default_registry too) would just be a
+    tool the model can call and immediately get a "not available" refusal
+    from, for no benefit.
+    """
+    from relaycli.tools import spawn_agent as _spawn_agent
+
+    reg = registry_for_role(role_id)
+    _spawn_agent.register(reg)
+    return reg

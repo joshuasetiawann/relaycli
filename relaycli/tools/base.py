@@ -8,13 +8,19 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 
 from relaycli.core.context import ProjectContext
 from relaycli.core.permissions import PermissionManager
 from relaycli.tools.cache import FileCache
+
+if TYPE_CHECKING:  # avoid an import cycle (tools.base -> agent -> ... -> tools.base)
+    from relaycli.agent.budget import BudgetGovernor
+    from relaycli.agent.leases import LeaseManager
+    from relaycli.core.config import Settings
+    from relaycli.core.llm import LLM
 
 # Generous by design: a normal task rarely uses more than a few dozen tool
 # calls even across several iterations. This is a backstop against a
@@ -65,11 +71,45 @@ class ToolContext:
     max_calls_per_session: int | None = DEFAULT_MAX_CALLS_PER_SESSION
     calls_made: int = 0
     file_cache: FileCache = field(default_factory=FileCache)
+    # Stage 3 (parallel orchestration, --experimental-parallel): set by the
+    # scheduler for a task's ToolContext so write tools can enforce path
+    # leases. None (the default, and every non-scheduled flow) means "not
+    # running under the scheduler" — write tools skip the lease check
+    # entirely, matching LeaseManager.check_write_allowed's own
+    # task_id=None-always-passes contract.
+    lease_manager: LeaseManager | None = None
+    current_task_id: str | None = None
+    # Only set for a ToolContext handed to a scheduler-run task's agent —
+    # lets the spawn_agent tool construct a properly-configured child
+    # Agent and charge its usage to the right budget. None everywhere else
+    # (spawn_agent refuses cleanly rather than guessing a default).
+    settings: Settings | None = None
+    llm: LLM | None = None
+    budget: BudgetGovernor | None = None
+    spawn_depth: int = 0
 
     async def confirm_async(self, action: str, prompt_text: str) -> bool:
         """Async permission check — delegates to PermissionManager.confirm_async."""
         decision = await self.permissions.confirm_async(action, prompt_text=prompt_text)
         return decision.approved
+
+    def lease_error(self, rel_path: str) -> str | None:
+        """None if a write to rel_path is allowed; otherwise the message a
+        write tool should return via ToolResult.error(...) ("fail loudly"
+        — Part A §3.3 — rather than silently corrupting a file another
+        task owns). A local import: agent.leases -> agent (package init)
+        -> agent.loop -> ... circles back to this module, so this can't
+        be a module-level import here (see git history for the exact
+        cycle if this ever needs re-deriving)."""
+        if self.lease_manager is None:
+            return None
+        from relaycli.agent.leases import LeaseError
+
+        try:
+            self.lease_manager.check_write_allowed(self.current_task_id, rel_path)
+        except LeaseError as exc:
+            return str(exc)
+        return None
 
 
 @dataclass

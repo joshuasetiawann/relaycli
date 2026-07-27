@@ -30,6 +30,11 @@ def write_file(args: WriteFileArgs, ctx: ToolContext) -> ToolResult:
     except PathSafetyError as exc:
         return ToolResult.error(str(exc), summary=f"write {args.path} (refused)")
 
+    rel = proj.relative(path)
+    lease_error = ctx.lease_error(rel)
+    if lease_error is not None:
+        return ToolResult.error(lease_error, summary=f"write {rel} (no lease)")
+
     if path.exists() and not path.is_file():
         return ToolResult.error(
             f"'{args.path}' exists and is not a regular file.",
@@ -44,7 +49,6 @@ def write_file(args: WriteFileArgs, ctx: ToolContext) -> ToolResult:
             return ToolResult.error(f"Could not read existing '{args.path}': {exc}")
 
     new = args.content
-    rel = proj.relative(path)
 
     if old == new and path.exists():
         return ToolResult(ok=True, output=f"No changes; '{rel}' already has that content.",

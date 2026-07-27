@@ -71,6 +71,10 @@ def create_folder(args: CreateFolderArgs, ctx: ToolContext) -> ToolResult:
         return ToolResult.error(str(exc), summary=f"create folder {raw} (refused)")
 
     rel = proj.relative(path)
+    lease_error = ctx.lease_error(rel)
+    if lease_error is not None:
+        return ToolResult.error(lease_error, summary=f"create folder {rel} (no lease)")
+
     if path.exists():
         if path.is_dir():
             return ToolResult(

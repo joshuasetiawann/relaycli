@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from relaycli.core.roles import BUILTIN_ROLES, CAPABILITIES, builtin_role
-from relaycli.tools.capabilities import TOOL_CAPABILITIES, registry_for_role
+from relaycli.tools.capabilities import TOOL_CAPABILITIES, registry_for_role, scheduler_task_registry
 from relaycli.tools.registry import default_registry
 
 
@@ -107,3 +107,26 @@ def test_registry_for_role_reuses_default_registry_tool_definitions():
 def test_all_16_roles_are_covered():
     assert len(BUILTIN_ROLES) == 16
     assert len({r.id for r in BUILTIN_ROLES}) == 16  # no duplicate ids
+
+
+# --- scheduler_task_registry (Stage 3) --------------------------------
+def test_scheduler_task_registry_adds_spawn_agent_on_top_of_role_tools():
+    reg = scheduler_task_registry("backend")
+    assert "spawn_agent" in reg.names()
+    assert set(reg.names()) - {"spawn_agent"} == set(registry_for_role("backend").names())
+
+
+def test_spawn_agent_is_not_in_default_registry_or_role_registries():
+    """spawn_agent only works with ctx.settings set, which only a
+    scheduler-run task's context has — every other registry must NOT
+    offer it, or the model could call it and just get a refusal."""
+    assert "spawn_agent" not in default_registry().names()
+    assert "spawn_agent" not in TOOL_CAPABILITIES
+    for role in BUILTIN_ROLES:
+        assert "spawn_agent" not in registry_for_role(role.id).names()
+
+
+def test_scheduler_task_registry_works_for_every_role():
+    for role in BUILTIN_ROLES:
+        reg = scheduler_task_registry(role.id)
+        assert "spawn_agent" in reg.names()

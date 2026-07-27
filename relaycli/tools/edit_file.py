@@ -48,6 +48,9 @@ def edit_file(args: EditFileArgs, ctx: ToolContext) -> ToolResult:
         )
 
     rel = proj.relative(path)
+    lease_error = ctx.lease_error(rel)
+    if lease_error is not None:
+        return ToolResult.error(lease_error, summary=f"edit {rel} (no lease)")
 
     if args.old_string == args.new_string:
         return ToolResult.error(
