@@ -28,6 +28,44 @@ Rich console output for users is unchanged; logging is purely additive.
 Full gate re-run after this item: green (566 collected, 563 passed, 3
 known-blocked skips, 0 failed).
 
+**5b — configuration validation.** Audited `Settings` before adding
+anything: `permission_mode` was already a strict enum (pydantic validates
+enum membership automatically), `temperature` already bounded `[0.0, 2.0]`,
+`token_budget`/`max_iterations`/`llm_timeout`/`max_review_cycles` already
+had `ge=` floors. Two genuinely-missing checks added as `@field_validator`s
+with actionable messages (name the field, name the fix):
+
+- `model` must not be blank/whitespace-only.
+- The six provider API key fields reject a value containing whitespace, or
+  shorter than 4 characters — but `None` and `""` are always accepted
+  (meaning "not configured"; confirmed necessary by
+  `test_doctor.py::test_...` which explicitly constructs
+  `Settings(OPENROUTER_API_KEY="")` and expects a SKIP status, not an
+  error). The length floor was chosen empirically, not guessed: grepped
+  every test fixture's placeholder key value first and found the test
+  suite's own shortest convention is `"sk-ant"` (6 chars) — set the floor
+  to 4 so real placeholder values across the suite are never rejected,
+  while still catching single/double/triple-character garbage.
+
+No field for `project_root` or a separate `max_tokens` exists on `Settings`
+as the master prompt's checklist describes — `token_budget` is the closest
+match and was already bounded; `project_root` as a concept lives on
+`ProjectContext` (a different, unrelated class), not `Settings`, so adding
+a same-named field here would be inventing something the codebase doesn't
+have rather than validating something it does.
+
+Added `tests/test_config_validation.py` (new file — no existing test file
+covers `Settings` validation directly, and the project already has the
+convention of small single-concern test files like `test_permissions.py`),
+11 tests: blank/valid model, whitespace/too-short/empty/None/realistic-short
+API keys, plus regression guards for the three pre-existing numeric bounds.
+Confirmed the master prompt's own G13 example
+(`Settings(model='', temperature=9.0)`) now raises with both field names
+and fixes in the message.
+
+Full gate re-run after this item: green (577 collected — 566 + the 11 new
+tests — 574 passed, 3 known-blocked, 0 failed).
+
 ## Phase 3 — verification gate log
 
 **Attempt 1 — FAILED at G1 (clean install).**

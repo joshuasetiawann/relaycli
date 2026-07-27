@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict, TomlConfigSettingsSource
 
 CONFIG_DIR: Path = Path.home() / ".relaycli"
@@ -96,6 +96,38 @@ class Settings(BaseSettings):
     mistral_api_key: str | None = Field(default=None, validation_alias=AliasChoices("MISTRAL_API_KEY", "RELAYCLI_MISTRAL_API_KEY"))
     openrouter_api_key: str | None = Field(default=None, validation_alias=AliasChoices("OPENROUTER_API_KEY", "RELAYCLI_OPENROUTER_API_KEY"))
     ollama_base_url: str = Field(default="http://localhost:11434", validation_alias=AliasChoices("OLLAMA_BASE_URL", "OLLAMA_API_BASE", "RELAYCLI_OLLAMA_BASE_URL"))
+
+    @field_validator("model")
+    @classmethod
+    def _model_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError(
+                "model must not be blank — set one with `relaycli -m <model-id>`, "
+                "`relaycli config set-model <role> <model-id>`, or the RELAYCLI_MODEL "
+                "environment variable."
+            )
+        return v
+
+    @field_validator(
+        "openai_api_key", "anthropic_api_key", "gemini_api_key",
+        "groq_api_key", "mistral_api_key", "openrouter_api_key",
+    )
+    @classmethod
+    def _api_key_looks_plausible(cls, v: str | None, info) -> str | None:
+        if not v:  # None or "" both mean "no key configured" — always fine
+            return v
+        if any(c.isspace() for c in v):
+            raise ValueError(
+                f"{info.field_name} contains whitespace, which is never valid in a real "
+                f"API key — check for a stray newline or copy-paste artifact and re-set it."
+            )
+        if len(v) < 4:
+            raise ValueError(
+                f"{info.field_name} is only {len(v)} character(s) long, too short to be a "
+                f"real API key — double-check the value, or leave it unset if you don't "
+                f"have one yet."
+            )
+        return v
 
     def detected_providers(self) -> dict[str, bool]:
         return {
