@@ -33,6 +33,7 @@ from relaycli.heuristics import load_heuristics
 from relaycli.tools import ToolError, ToolRegistry, default_registry
 from relaycli.tools.base import ToolContext, ToolResult
 from relaycli.agent.reporter import Reporter
+from relaycli.agent.router import HealthTracker, Role, call_with_escalation_sync, is_local
 
 _log = get_logger(__name__)
 
@@ -96,6 +97,7 @@ class Agent:
         llm: LLM | None = None,
         prompt_template: str | None = None,
         model: str | None = None,
+        role: Role | None = None,
         skills_block: str = "",
         should_stop: Callable[[], bool] | None = None,
         pass_tool_schemas: bool = True,
@@ -108,6 +110,16 @@ class Agent:
         self.llm = llm or LLM(self.settings)
         self._prompt_template = prompt_template or _SYSTEM_TEMPLATE
         self._model_override = model
+        # Opt-in escalation (Stage 2 routing policy): pass role= to have a
+        # failing model automatically fall over to the next candidate in
+        # its tier, instead of the whole request failing. None (the
+        # default, and every pre-Stage-2 caller) keeps today's exact
+        # single-model behavior — model_override or settings.model, no
+        # retry. The health tracker persists for this Agent's lifetime, so
+        # once a candidate is known bad this run keeps preferring the one
+        # that worked rather than re-trying the dead one every iteration.
+        self._role = role
+        self._health = HealthTracker()
         self._skills_block = skills_block
         self._should_stop = should_stop
         self._heuristics = load_heuristics()
@@ -145,6 +157,20 @@ class Agent:
     def run(self, request: str, *, reporter: Reporter | None = None) -> AgentResult:
         reporter = reporter or Reporter()
         started = time.perf_counter()
+        if self.settings.offline and not is_local(self.model):
+            # Checked here rather than only inside resolve_candidates
+            # (which only runs when role= is set — most callers, including
+            # the plain single-agent CLI/REPL flow, aren't role-aware) so
+            # --offline is enforced regardless of which flow constructed
+            # this Agent, not just the relay pipeline.
+            return AgentResult(
+                final_text=(
+                    f"--offline is set but the configured model '{self.model}' isn't "
+                    f"local. Use an ollama_chat/... or ollama/... model, or unset --offline."
+                ),
+                iterations=0, tool_calls=0, usage=Usage(), stopped_reason="error",
+                elapsed=time.perf_counter() - started,
+            )
         self._current_request = request[:200] + ("…" if len(request) > 200 else "")
         self.session.add_user(request)
         usage = Usage()
@@ -167,8 +193,16 @@ class Agent:
 
             try:
                 reporter.model_start(i, self.model)
-                response = self.llm.complete(self.session.to_messages(), tools=self._schemas,
-                                              model=self.model, on_token=reporter.assistant_token)
+                if self._role is not None:
+                    def _attempt(candidate_model: str, *, _msgs=self.session.to_messages()) -> LLMResponse:
+                        return self.llm.complete(_msgs, tools=self._schemas,
+                                                  model=candidate_model, on_token=reporter.assistant_token)
+                    response = call_with_escalation_sync(
+                        self.settings, self._role, _attempt, health=self._health
+                    )
+                else:
+                    response = self.llm.complete(self.session.to_messages(), tools=self._schemas,
+                                                  model=self.model, on_token=reporter.assistant_token)
             except LLMError as exc:
                 reporter.model_error(i, self.model, exc)
                 return AgentResult(final_text=f"LLM error: {exc}", iterations=i,

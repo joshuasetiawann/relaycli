@@ -434,6 +434,13 @@ class LLM:
             "timeout": self.settings.llm_timeout,
         }
         args.update(self._credential_kwargs(model))
+        if self.settings.use_9router:
+            # A config path, not an architecture (v2 prompt §4.4): 9Router
+            # is an OpenAI-compatible proxy, so redirecting api_base is the
+            # whole integration. Whatever credential _credential_kwargs
+            # resolved is left in place — 9Router passes it through to the
+            # real upstream provider rather than needing its own.
+            args["api_base"] = self.settings.nine_router_base_url
         if tools:
             args["tools"] = tools
             args["tool_choice"] = "auto"

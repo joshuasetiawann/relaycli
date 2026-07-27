@@ -89,6 +89,21 @@ class Settings(BaseSettings):
     explorer_model: str | None = Field(default=None)
     tester_model: str | None = Field(default=None)
 
+    # Tier-based routing (v2 Part B): a pipeline role's default tier
+    # resolves through relaycli.config.manager.AppConfig.tiers — the same
+    # storage `relaycli config tier <name> <model>` already writes for the
+    # 16-role roster — rather than a second, parallel setting here. See
+    # agent/router.py's _tier_model.
+    offline: bool = Field(
+        default=False,
+        description="Refuse every cloud provider; only local (ollama_chat/ollama) models are used.",
+    )
+    use_9router: bool = Field(
+        default=False,
+        description="Route provider calls through a local 9Router instance instead of calling providers directly.",
+    )
+    nine_router_base_url: str = Field(default="http://localhost:20128/v1")
+
     openai_api_key: str | None = Field(default=None, validation_alias=AliasChoices("OPENAI_API_KEY", "RELAYCLI_OPENAI_API_KEY"))
     anthropic_api_key: str | None = Field(default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "RELAYCLI_ANTHROPIC_API_KEY"))
     gemini_api_key: str | None = Field(default=None, validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY", "RELAYCLI_GEMINI_API_KEY"))

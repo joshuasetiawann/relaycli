@@ -76,6 +76,10 @@ def main(
     debug: bool = typer.Option(
         False, "--debug", "-v", help="Verbose logging to stderr and ~/.relaycli/logs/relaycli.log."
     ),
+    offline: bool = typer.Option(
+        False, "--offline",
+        help="Refuse every cloud provider; only local (ollama_chat/ollama) models are used.",
+    ),
 ) -> None:
     """Launch the REPL, or run a one-shot request with -p."""
     from relaycli.core.logging import configure_logging
@@ -93,6 +97,8 @@ def main(
     _apply_overrides(settings, model, mode)
     if relay is not None:
         settings.relay_enabled = relay
+    if offline:
+        settings.offline = True
 
     if prompt is not None:
         _run_once(settings, prompt, assume_yes=yes)

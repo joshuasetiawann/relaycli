@@ -329,6 +329,7 @@ class Relay:
             llm=self.llm,
             prompt_template=template,
             model=resolve_model(self.settings, role),
+            role=role,
             skills_block=self.skills_block if role is Role.coder else "",
             should_stop=self.should_stop,
         )

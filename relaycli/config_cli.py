@@ -21,6 +21,7 @@ from relaycli.appconfig import (
     mask_key,
     save_app_config,
     set_base_model,
+    set_runtime_option,
 )
 from relaycli.config import get_settings, reload_settings
 from relaycli.core.llm import ollama_models
@@ -165,6 +166,39 @@ def tier(name: str, model: str) -> None:
     cfg.tiers[name] = model
     save_app_config(cfg)
     console.print(f"tier [green]{name}[/green] → {escape(model)}")
+
+
+@config_app.command("use-9router")
+def use_9router(
+    disable: bool = typer.Option(False, "--disable", help="Stop routing through 9Router."),
+    force: bool = typer.Option(
+        False, "--force", help="Enable even if the 9Router probe doesn't succeed right now."
+    ),
+) -> None:
+    """Route every provider call through a local 9Router instance
+    (an OpenAI-compatible proxy doing its own cheapest-model routing,
+    retries, and fallback) instead of calling providers directly."""
+    from relaycli.agent.router import detect_9router
+
+    if disable:
+        set_runtime_option("use_9router", False)
+        console.print("9Router routing [yellow]disabled[/yellow].")
+        return
+
+    settings = get_settings()
+    reachable = detect_9router(settings)
+    if not reachable and not force:
+        _die(
+            f"No 9Router instance found at {settings.nine_router_base_url}. "
+            f"Start it first, or pass --force to enable anyway."
+        )
+    set_runtime_option("use_9router", True)
+    reload_settings()
+    status = "reachable" if reachable else "not reachable yet (--force)"
+    console.print(
+        f"9Router routing [green]enabled[/green] "
+        f"({escape(settings.nine_router_base_url)}, {status})."
+    )
 
 
 @config_app.command("models")

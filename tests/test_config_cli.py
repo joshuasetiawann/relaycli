@@ -58,6 +58,43 @@ def test_enable_disable_persists():
     assert _cfg().role_enabled("planner") is False
 
 
+def test_use_9router_refuses_when_unreachable(monkeypatch):
+    monkeypatch.setattr("relaycli.agent.router.detect_9router", lambda settings: False)
+    r = runner.invoke(config_app, ["use-9router"])
+    assert r.exit_code == 2
+    assert "force" in r.output.lower()
+    assert not get_settings().use_9router
+
+
+def test_use_9router_enables_when_reachable(monkeypatch):
+    monkeypatch.setattr("relaycli.agent.router.detect_9router", lambda settings: True)
+    r = runner.invoke(config_app, ["use-9router"])
+    assert r.exit_code == 0
+    assert "enabled" in r.output.lower()
+    get_settings.cache_clear()
+    assert get_settings().use_9router is True
+
+
+def test_use_9router_force_enables_when_unreachable(monkeypatch):
+    monkeypatch.setattr("relaycli.agent.router.detect_9router", lambda settings: False)
+    r = runner.invoke(config_app, ["use-9router", "--force"])
+    assert r.exit_code == 0
+    get_settings.cache_clear()
+    assert get_settings().use_9router is True
+
+
+def test_use_9router_disable():
+    runner.invoke(config_app, ["use-9router", "--force"])
+    get_settings.cache_clear()
+    assert get_settings().use_9router is True
+
+    r = runner.invoke(config_app, ["use-9router", "--disable"])
+    assert r.exit_code == 0
+    assert "disabled" in r.output.lower()
+    get_settings.cache_clear()
+    assert get_settings().use_9router is False
+
+
 def test_unknown_role_is_rejected():
     r = runner.invoke(config_app, ["set-model", "wizard", "strong"])
     assert r.exit_code == 2 and "Unknown role" in r.output

@@ -28,7 +28,7 @@ DEFAULT_TIERS: dict[str, str] = {
     "balanced": "ollama_chat/qwen2.5-coder:7b",
     "strong": "ollama_chat/qwen2.5-coder:14b",
 }
-RUNTIME_OPTION_KEYS = frozenset({"permission_mode", "relay_enabled", "relay_explorer", "relay_tester", "relay_split_tasks", "skills_auto", "local_scaffolds", "token_budget"})
+RUNTIME_OPTION_KEYS = frozenset({"permission_mode", "relay_enabled", "relay_explorer", "relay_tester", "relay_split_tasks", "skills_auto", "local_scaffolds", "token_budget", "use_9router", "offline"})
 
 
 @dataclass

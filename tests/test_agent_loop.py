@@ -795,3 +795,116 @@ def test_plain_reporter_tool_end_ok_and_failed_and_none():
     assert "done" in out
     assert "failed" in out
     assert "tool error" in out
+
+
+# --- Stage 2 routing: role= wires real escalation into the live loop ------
+class _EscalatingLLM:
+    """Raises LLMError for one model id, succeeds for another — for
+    verifying escalation end-to-end through the real Agent.run() iteration
+    loop, not just call_with_escalation_sync in isolation
+    (test_router_policy.py)."""
+
+    def __init__(self, fails_for: str, response) -> None:
+        self._fails_for = fails_for
+        self._response = response
+        self.attempted_models: list[str] = []
+
+    def complete(self, messages, *, tools=None, model=None, temperature=None,
+                 stream=False, on_token=None):
+        from relaycli.core.llm import LLMError
+
+        self.attempted_models.append(model)
+        if model == self._fails_for:
+            raise LLMError(f"Model call failed for '{model}' (APIConnectionError): Connection refused")
+        if on_token and self._response.text:
+            on_token(self._response.text)
+        return self._response
+
+
+def _set_tiers(monkeypatch, tmp_path, **tiers):
+    """Tier resolution reads relaycli.config.manager.AppConfig.tiers —
+    isolate it from the real ~/.relaycli/config.toml and persist the given
+    tiers, the way `relaycli config tier <name> <model>` does."""
+    from relaycli.config import manager as appconfig
+
+    monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "config.toml")
+    cfg = appconfig.load_app_config()
+    cfg.tiers.update(tiers)
+    appconfig.save_app_config(cfg)
+
+
+def test_agent_run_escalates_to_next_candidate_on_failure(tmp_path, monkeypatch):
+    from relaycli.agent.router import Role
+
+    _set_tiers(monkeypatch, tmp_path, fast="local/flaky", strong="cloud/reliable")
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    settings = Settings(
+        model="fallback/model", permission_mode=PermissionMode.full_auto, max_iterations=5,
+    )
+    llm = _EscalatingLLM("local/flaky", _resp("all done"))
+    agent = Agent(
+        settings, console=console, project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.full_auto, console=console),
+        llm=llm, role=Role.explorer,  # explorer's tier is "fast" -> primary is local/flaky
+    )
+    result = agent.run("do the thing")
+    assert result.stopped_reason == "done"
+    assert llm.attempted_models == ["local/flaky", "cloud/reliable"]
+    assert not agent._health.is_healthy("local/flaky")
+    assert agent._health.is_healthy("cloud/reliable")
+
+
+def test_agent_run_without_role_keeps_single_model_no_escalation(tmp_path):
+    """role=None (every pre-Stage-2 caller) must behave exactly as before:
+    one model, no retry, LLMError propagates as an error result."""
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    settings = Settings(
+        model="fallback/model", permission_mode=PermissionMode.full_auto, max_iterations=5,
+    )
+    llm = _EscalatingLLM("fallback/model", _resp("unreachable"))
+    agent = Agent(
+        settings, console=console, project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.full_auto, console=console),
+        llm=llm,  # no role= -> no escalation
+    )
+    result = agent.run("do the thing")
+    assert result.stopped_reason == "error"
+    assert llm.attempted_models == ["fallback/model"]  # never tried fast_model/strong_model
+
+
+def test_agent_run_offline_blocks_cloud_model_before_any_call(tmp_path):
+    """--offline must refuse a cloud model outright — checked at the top
+    of run(), not just inside resolve_candidates (which only runs when
+    role= is set). Most callers, including the plain single-agent CLI/REPL
+    flow this test mirrors, never pass role= at all."""
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    settings = Settings(
+        model="gpt-4o", offline=True, permission_mode=PermissionMode.full_auto, max_iterations=5,
+    )
+    llm = _EscalatingLLM("never/reached", _resp("should not run"))
+    agent = Agent(
+        settings, console=console, project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.full_auto, console=console),
+        llm=llm,
+    )
+    result = agent.run("do the thing")
+    assert result.stopped_reason == "error"
+    assert "offline" in result.final_text.lower()
+    assert llm.attempted_models == []  # zero network calls made
+
+
+def test_agent_run_offline_allows_local_model(tmp_path):
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    settings = Settings(
+        model="ollama_chat/llama3.1", offline=True, permission_mode=PermissionMode.full_auto,
+        max_iterations=5,
+    )
+    llm = _EscalatingLLM("never/reached", _resp("all done"))
+    agent = Agent(
+        settings, console=console, project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.full_auto, console=console),
+        llm=llm,
+    )
+    result = agent.run("do the thing")
+    assert result.stopped_reason == "done"
+    assert llm.attempted_models == ["ollama_chat/llama3.1"]
