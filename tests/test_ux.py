@@ -29,7 +29,7 @@ def _no_ambient_config(monkeypatch, tmp_path):
         if var.startswith("RELAYCLI_"):
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no-config.toml"))
-    from relaycli import appconfig
+    from relaycli.config import manager as appconfig
 
     monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "app-config.toml")
 
@@ -190,7 +190,7 @@ def test_slash_mode_switches_and_updates_system_prompt():
 
 
 def test_slash_runtime_toggles_persist_to_next_session():
-    from relaycli import appconfig
+    from relaycli.config import manager as appconfig
 
     repl, _console = _repl()
     repl._handle_slash("/mode full-auto")

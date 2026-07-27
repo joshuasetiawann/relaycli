@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from relaycli import appconfig
+from relaycli.config import manager as appconfig
 from relaycli.appconfig import RoleConfig, load_app_config
 from relaycli.config import PermissionMode, Settings
 from relaycli.core.roster import (

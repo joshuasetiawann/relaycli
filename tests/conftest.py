@@ -18,7 +18,7 @@ from relaycli.tools.base import ToolContext
 def _no_ambient_mcp_servers(monkeypatch):
     """Never let a developer's real [mcp] config spawn server processes in
     tests. MCP tests build their own MCPServerConfig / stub this back."""
-    import relaycli.mcp as mcp
+    import relaycli.mcp.bridge as mcp
 
     monkeypatch.setattr(mcp, "enabled_servers", lambda: {})
     yield
@@ -39,8 +39,8 @@ def _hermetic_global_memory(tmp_path_factory, monkeypatch):
 @pytest.fixture(autouse=True)
 def _hermetic_user_config(tmp_path, monkeypatch):
     """Keep tests away from the developer's real ~/.relaycli/config.toml."""
-    import relaycli.appconfig as appconfig
-    import relaycli.config as config
+    import relaycli.config.manager as appconfig
+    import relaycli.core.config as config
 
     fake_dir = tmp_path / ".relaycli"
     fake_file = fake_dir / "config.toml"

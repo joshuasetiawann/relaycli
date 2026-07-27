@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import relaycli.appconfig as appconfig
+import relaycli.config.manager as appconfig
 import relaycli.onboarding as onboarding
 from relaycli.config import Settings
 from relaycli.onboarding import build_plan, normalize_services, run_init

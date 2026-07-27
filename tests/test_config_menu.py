@@ -7,7 +7,7 @@ import io
 import pytest
 from rich.console import Console
 
-from relaycli import appconfig
+from relaycli.config import manager as appconfig
 from relaycli.appconfig import load_app_config
 from relaycli.config_menu import ConfigMenu, SettingsMenu
 

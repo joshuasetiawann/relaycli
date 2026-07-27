@@ -14,7 +14,7 @@ import pytest
 from pydantic import BaseModel
 from rich.console import Console
 
-from relaycli import config as config_mod
+from relaycli.core import config as config_mod
 from relaycli.agent import Agent
 from relaycli.config import PermissionMode, Settings
 from relaycli.core.context import ProjectContext

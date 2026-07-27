@@ -276,43 +276,48 @@ class TestHeuristics:
 class TestPermissionManagerAsync:
     """Validate async compatibility of PermissionManager."""
 
-    @pytest.mark.asyncio
-    async def test_async_auto_approve_full_auto(self):
-        pm = PermissionManager(PermissionMode.full_auto)
-        decision = await pm.confirm_async("edit", prompt_text="edit?")
-        assert decision.approved is True
-        assert decision.auto is True
+    def test_async_auto_approve_full_auto(self):
+        async def _run():
+            pm = PermissionManager(PermissionMode.full_auto)
+            decision = await pm.confirm_async("edit", prompt_text="edit?")
+            assert decision.approved is True
+            assert decision.auto is True
+        asyncio.run(_run())
 
-    @pytest.mark.asyncio
-    async def test_async_auto_approve_auto_edit(self):
-        pm = PermissionManager(PermissionMode.auto_edit)
-        decision = await pm.confirm_async("write", prompt_text="write?")
-        assert decision.approved is True
-        assert decision.auto is True
+    def test_async_auto_approve_auto_edit(self):
+        async def _run():
+            pm = PermissionManager(PermissionMode.auto_edit)
+            decision = await pm.confirm_async("write", prompt_text="write?")
+            assert decision.approved is True
+            assert decision.auto is True
+        asyncio.run(_run())
 
-    @pytest.mark.asyncio
-    async def test_async_secret_never_auto(self):
-        pm = PermissionManager(PermissionMode.full_auto, prompter=lambda _: False)
-        decision = await pm.confirm_async("read_secret", prompt_text="secret?")
-        assert decision.approved is False
+    def test_async_secret_never_auto(self):
+        async def _run():
+            pm = PermissionManager(PermissionMode.full_auto, prompter=lambda _: False)
+            decision = await pm.confirm_async("read_secret", prompt_text="secret?")
+            assert decision.approved is False
+        asyncio.run(_run())
 
-    @pytest.mark.asyncio
-    async def test_async_with_prompter(self):
+    def test_async_with_prompter(self):
         calls = []
         def prompter(text: str) -> bool:
             calls.append(text)
             return True
-        pm = PermissionManager(PermissionMode.suggest, prompter=prompter)
-        decision = await pm.confirm_async("edit", prompt_text="approve?")
-        assert decision.approved is True
-        assert decision.auto is False
-        assert len(calls) == 1
+        async def _run():
+            pm = PermissionManager(PermissionMode.suggest, prompter=prompter)
+            decision = await pm.confirm_async("edit", prompt_text="approve?")
+            assert decision.approved is True
+            assert decision.auto is False
+            assert len(calls) == 1
+        asyncio.run(_run())
 
-    @pytest.mark.asyncio
-    async def test_async_rejected_by_prompter(self):
-        pm = PermissionManager(PermissionMode.suggest, prompter=lambda _: False)
-        decision = await pm.confirm_async("command", prompt_text="run?")
-        assert decision.approved is False
+    def test_async_rejected_by_prompter(self):
+        async def _run():
+            pm = PermissionManager(PermissionMode.suggest, prompter=lambda _: False)
+            decision = await pm.confirm_async("command", prompt_text="run?")
+            assert decision.approved is False
+        asyncio.run(_run())
 
     def test_sync_confirm_still_works(self):
         """Backward compatibility: sync confirm must still function."""

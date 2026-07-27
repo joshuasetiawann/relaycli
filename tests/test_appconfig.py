@@ -99,7 +99,7 @@ def test_resolve_role_model_unset_tier_is_clear_error(cfg_path):
     cfg.tiers = {}  # wipe defaults
     cfg.roles["coder"] = RoleConfig(model="strong")
     # tier_model falls back to DEFAULT_TIERS, so force a truly empty tier
-    from relaycli import appconfig
+    from relaycli.config import manager as appconfig
     saved = dict(appconfig.DEFAULT_TIERS)
     appconfig.DEFAULT_TIERS.clear()
     try:

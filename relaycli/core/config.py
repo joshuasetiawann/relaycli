@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     planner_model: str | None = Field(default=None)
     coder_model: str | None = Field(default=None)
     reviewer_model: str | None = Field(default=None)
-    max_review_cycles: int = Field(default=0, ge=0)
+    max_review_cycles: int = Field(default=2, ge=0)
     relay_explorer: bool = Field(default=False)
     relay_tester: bool = Field(default=False)
     relay_split_tasks: bool = Field(default=False)
@@ -121,7 +121,9 @@ class Settings(BaseSettings):
             init_settings,
             env_settings,
             _FilteredSource(dotenv_settings, _DOTENV_BLOCKED_FIELDS),
-            TomlConfigSettingsSource(settings_cls, toml_file=CONFIG_FILE),
+            TomlConfigSettingsSource(
+                settings_cls, toml_file=settings_cls.model_config.get("toml_file") or CONFIG_FILE
+            ),
             file_secret_settings,
         )
 

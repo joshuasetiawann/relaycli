@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from relaycli import appconfig
+from relaycli.config import manager as appconfig
 from relaycli.config import Settings
 from relaycli import model_catalog
 

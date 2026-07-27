@@ -41,7 +41,7 @@ def _no_ambient_config(monkeypatch, tmp_path):
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no.toml"))
     # The relay reads the roster from appconfig; keep it hermetic too.
-    from relaycli import appconfig
+    from relaycli.config import manager as appconfig
     monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
 
 
@@ -810,7 +810,7 @@ class TestTaskSplit:
 
 class TestAgentsSpecialistsDisplay:
     def test_agents_lists_specialists_when_task_split(self, monkeypatch, tmp_path):
-        from relaycli import appconfig
+        from relaycli.config import manager as appconfig
         monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
         settings = _settings(model="fake/m", relay_split_tasks=True)
         repl = Repl(settings, console=_console())
@@ -821,7 +821,7 @@ class TestAgentsSpecialistsDisplay:
 
 class TestSpecialistRouting:
     def _enable(self, monkeypatch, tmp_path, *roles):
-        from relaycli import appconfig
+        from relaycli.config import manager as appconfig
         from relaycli.appconfig import RoleConfig, load_app_config, save_app_config
         monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
         cfg = load_app_config()

@@ -328,7 +328,7 @@ class Agent:
                 folder_create_nudges += 1
                 self.session.add_user(folder_ready_nudge)
 
-        return AgentResult(final_text=f"Stopped after {self.settings.max_iterations} iterations.",
+        return AgentResult(final_text=f"Stopped after the maximum of {self.settings.max_iterations} iterations.",
                            iterations=self.settings.max_iterations, tool_calls=tool_calls,
                            usage=usage, stopped_reason="max_iterations",
                            elapsed=time.perf_counter() - started)
@@ -441,9 +441,11 @@ def _json_from_text(text: str) -> object | None:
                 candidates.append(repaired_inner)
 
     try:
-        return json.loads(raw)
+        direct = json.loads(raw)
     except (json.JSONDecodeError, TypeError):
-        pass
+        direct = None
+    if isinstance(direct, (dict, list)):
+        return direct
 
     blob = _first_json_blob(raw)
     if blob and blob not in candidates:
@@ -456,9 +458,16 @@ def _json_from_text(text: str) -> object | None:
             continue
         seen.add(candidate)
         try:
-            return json.loads(candidate)
+            parsed = json.loads(candidate)
         except (json.JSONDecodeError, TypeError):
             continue
+        # json_repair's fallback for unparseable input is the JSON string
+        # literal '""' (never an error) — without this check, any plain-text
+        # reply would "successfully" parse to an empty string here instead
+        # of correctly falling through to None. Real tool-call payloads are
+        # always an object or array, never a bare scalar.
+        if isinstance(parsed, (dict, list)):
+            return parsed
     return None
 
 

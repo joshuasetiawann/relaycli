@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from typer.testing import CliRunner
 
-from relaycli import appconfig
+from relaycli.config import manager as appconfig
 from relaycli.config import Settings, get_settings
 from relaycli.appconfig import load_app_config
 from relaycli.config_cli import config_app

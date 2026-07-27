@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-import relaycli.mcp as mcp
+import relaycli.mcp.bridge as mcp
 from relaycli.mcp import (
     MCPClient,
     MCPError,
@@ -159,7 +159,7 @@ def test_mcp_tool_error_result_not_crash(monkeypatch, tmp_path):
 
 
 def test_save_and_remove_server_roundtrip(tmp_path, monkeypatch):
-    import relaycli.appconfig as appconfig
+    import relaycli.config.manager as appconfig
 
     monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "config.toml")
     mcp.save_server("gh", ["npx", "-y", "server-github"], {"TOKEN": "env:GH_TOKEN"})

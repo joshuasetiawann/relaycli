@@ -1,4 +1,154 @@
 # MIGRATION_NOTES.md
+
+## Phase 3 — verification gate log
+
+**Attempt 1 — FAILED at G1 (clean install).**
+`pip install -e ".[dev]"` into a fresh `.venv-work` failed:
+`ERROR: Could not find a version that satisfies the requirement
+json-repair==0.35.1` — PyPI has never published `0.35.1` for `json-repair`
+(confirmed via `pip index versions json-repair`: goes `...0.34.0, 0.35.0,
+0.36.0...`, no `.1` patch in between). This was already broken in the
+original HEAD-side conflict content kept verbatim in Phase 1's
+`pyproject.toml` resolution — not something introduced by this repair, but
+it does mean the package has never been installable as configured, on
+either side of the merge.
+
+Root cause: bad version pin, not a missing/wrong dependency (rule 3 is
+about not adding *new* third-party dependencies, which this isn't — it's
+correcting an unsatisfiable pin on one already declared).
+Fix: `json-repair==0.35.1` → `json-repair==0.35.0` (confirmed installable
+via `pip download`; `json_repair.repair_json`, the only symbol this
+codebase imports from the package, is stable across this range).
+Restarting the full gate from G1.
+
+**Attempt 2 — G1-G6, G8, G9 passed. G7 (full test suite) failed: 68 of 566
+collected tests failed.** Given the scale, ran the whole suite first (not
+one-fix-per-restart) to find shared root causes rather than 68 independent
+ones — nearly all clustered into a handful of causes. Each is logged below
+with its evidence; all are fixed in this attempt before restarting the full
+gate.
+
+1. **Root cause (by far the largest cluster, ~50+ of the 68 failures,
+   spanning test_relay.py almost entirely, test_config_menu.py,
+   test_skills.py, test_ux.py, and more): `Settings.settings_customise_sources`
+   in `relaycli/core/config.py` hardcoded
+   `TomlConfigSettingsSource(settings_cls, toml_file=CONFIG_FILE)`, ignoring
+   `model_config["toml_file"]` entirely** — even though `model_config`
+   declares `toml_file=None` as an explicit key seemingly meant for exactly
+   this override. The entire test suite's standard hermeticity pattern
+   (`monkeypatch.setitem(Settings.model_config, "toml_file", tmp_path)`,
+   used throughout) was a complete no-op: every `Settings()` built during
+   tests was silently reading the developer's *real*
+   `~/.relaycli/config.toml`. Confirmed directly — a `Settings()` built
+   inside a test showed a live OpenRouter key and 16 real configured roles
+   in its repr. This is a genuine production bug (not related to any
+   merge conflict — `core/config.py` was never touched in Phase 1/2), so it
+   satisfies rule 1 ("the production code is wrong, fix it"), not a test or
+   import-path issue.
+   Fix:
+   `toml_file=settings_cls.model_config.get("toml_file") or CONFIG_FILE` —
+   verified with a standalone repro (patch `model_config["toml_file"]` to a
+   tmp path, confirm `relay_enabled` reads back `False` and
+   `openrouter_api_key` reads back `None`).
+2. **Same root symptom, different mechanism — three more shim-indirection
+   bugs, all "a test patches a re-export module's attribute, but the real
+   function is defined in and reads from a different module's own
+   namespace, so the patch never reaches it."** `from X import Y` binds a
+   *new* name in the importing module; reassigning `X.Y` later never
+   affects that already-bound copy. Confirmed via direct trace for each:
+   - `relaycli/config/manager.py`'s `load_app_config`/`save_app_config`/
+     `set_base_model`/etc. all read a `CONFIG_FILE` they imported from
+     `core.config` into their own module globals. ~12 call sites across 9
+     test files patched `relaycli.appconfig.CONFIG_FILE` (a *third*,
+     separately-frozen copy, one more level removed) instead.
+     `test_run_init_writes_flat_model` caught this concretely: the test
+     patches `appconfig.CONFIG_FILE` to a tmp path, then the captured
+     stdout shows `saved /home/joo/.relaycli/config.toml` — my real
+     config file, not the tmp one.
+   - `relaycli/mcp/bridge.py`'s `extend_registry` calls `enabled_servers()`
+     as a bare name resolved via bridge.py's own globals. `test_mcp.py`
+     patched `relaycli.mcp.enabled_servers` (the package re-export) instead.
+   - `relaycli/core/config.py`'s `_FilteredSource` and `ensure_config_dir`'s
+     use of `CONFIG_DIR` — `test_security_audit.py` reached them via
+     `relaycli.config` (`from relaycli import config as config_mod`), which
+     doesn't even expose the private `_FilteredSource` name at all
+     (`AttributeError`), and patching `config_mod.CONFIG_DIR` similarly
+     never reached `core.config`'s own `ensure_config_dir`.
+   Fix strategy: repoint each test's *import alias* at the actual defining
+   module (`relaycli.config.manager`, `relaycli.mcp.bridge`,
+   `relaycli.core.config`) rather than the flat/package re-export — a
+   one-line-per-file change, no assertions touched, exactly the "obsolete
+   path" case in rule 1, just generalized from import paths to
+   monkeypatch-target paths. Applied via a small script across
+   `conftest.py` + 10 test files (22 line changes) rather than by hand.
+   One correction made *within* this fix: `relaycli/ui/repl.py`'s
+   `__init__` does `from relaycli.mcp import enabled_servers,
+   extend_registry` as a **local** import (re-executed fresh on every
+   `Repl()` call, not once at module load) — so for the two `test_ux.py`
+   tests that exercise *that* call site specifically, patching the
+   `relaycli.mcp` **package** (the original code, before this fix pass)
+   was already correct, and blindly redirecting it to `mcp.bridge` (right
+   for `test_mcp.py`, wrong here) briefly broke it. Reverted those two
+   back to `relaycli.mcp` after tracing the actual call path instead of
+   assuming one fix-shape applies everywhere.
+3. **`relaycli/agent/loop.py::_json_from_text` returned `''` instead of
+   `None` for plain, non-JSON text** (`test_malformed_non_json_returns_none`).
+   Root cause: `json_repair.repair_json()` never fails — for text with no
+   recognizable JSON structure it returns the literal string `'""'` (a
+   valid JSON *string* literal), which is truthy, so it was always accepted
+   as a "found a candidate" signal regardless of whether the input
+   contained anything JSON-like. Confirmed directly:
+   `repair_json("Just a normal sentence.")` → `'""'`. Every caller of this
+   function (`fake_tool_call_text`, `_tool_payloads_from_text`) only ever
+   checks `isinstance(data, dict)` / `isinstance(data, list)` — a bare
+   string is never meaningful to them. Fix: only accept a parsed candidate
+   (from either the direct-parse or the repair/candidates path) when it's a
+   `dict` or `list`; otherwise keep looking, and fall through to `None`.
+4. **`relaycli/agent/loop.py`'s max-iterations message read `"Stopped
+   after {N} iterations."`, but both `test_relay.py` and `test_ux.py`
+   expect the substring `"Stopped after the maximum"`.** No test anywhere
+   depends on the shorter wording. Fixed the message text to `"Stopped
+   after the maximum of {N} iterations."`.
+5. **`Settings.max_review_cycles` defaults to `0` in
+   `relaycli/core/config.py`, but `test_relay.py::TestRelayConfig::test_defaults`
+   asserts the default is `2`.** `core/config.py` was never touched by any
+   merge conflict or migration work, so this predates the repair. No other
+   test depends on `0` being the default (the handful of places that pass
+   `max_review_cycles=0` explicitly do so as a scenario override, including
+   a test literally named `test_zero_cycles_means_no_retry` — confirming
+   `0` is a meaningful *non-default* value, not evidence for what the
+   default should be). Fixed the field default to `2`.
+6. **`tests/test_scaffold.py::test_project_metadata_version_matches_runtime`**
+   asserts `pyproject.toml`'s `[project] version` matches
+   `relaycli.__version__`. Flagged back in the Phase 0/Phase 1 notes as a
+   latent mismatch (`0.4.14` vs `0.5.0`) but left alone at the time since
+   Phase 1's mandate was conflict resolution, not new changes. Now that a
+   real test enforces it, and given this whole repair's premise is
+   adopting the layered v0.5.0 architecture as canonical, bumped
+   `pyproject.toml`'s version to `0.5.0` to match, rather than rolling
+   `__version__` back to `0.4.14`.
+7. **Five tests in `test_refactor.py::TestPermissionManagerAsync` used
+   `@pytest.mark.asyncio` / `async def`, which errors without the
+   `pytest-asyncio` plugin** (not in `pyproject.toml`'s dev deps). Adding it
+   would be a new third-party dependency, which rule 3 requires asking
+   about first. Since the standard library already provides everything
+   needed, converted each to a plain `def test_x(self): asyncio.run(_run())`
+   wrapping an inner `async def _run(): ...` — identical coverage, zero new
+   dependencies, `asyncio` was already imported at the top of the file.
+8. **Two `test_model_catalog.py` failures** (openrouter/ollama model lists
+   including extra entries beyond what the test's mock expected) resolved
+   as a side effect of fix #1 — they were reading the real
+   `~/.relaycli/config.toml`'s configured tiers/models, not a distinct bug.
+
+**Attempt 3 — FULL GREEN.** Restarted the entire gate from a fresh
+`.venv-work` (G1). All of G1-G6, G8, G9 pass; G7 (`pytest -q`) collected
+566 tests: 563 passed, 3 skipped, 0 failed. The 3 skips are
+`tests/test_e2e_live.py`'s opt-in live-LLM tests, self-skipping via their
+own `RELAYCLI_E2E_MODEL` guard — exactly the "known-blocked" case the
+master prompt anticipates, not a failure. 3 gate attempts total to reach
+green (G1 dependency-pin fix, then the G7 root-cause batch above, then
+green).
+
 <!-- Phase 2 closing summary appended near the top for visibility; detailed
      per-pair notes are further down in this file, in the order they were
      written during the work. -->

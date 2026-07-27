@@ -29,7 +29,7 @@ def _no_ambient_config(monkeypatch, tmp_path):
     monkeypatch.setitem(Settings.model_config, "toml_file", str(tmp_path / "no.toml"))
     # WebSession reads/writes the roster via appconfig — keep it hermetic so
     # tests never touch the real ~/.relaycli/config.toml.
-    from relaycli import appconfig
+    from relaycli.config import manager as appconfig
     from relaycli import model_catalog
     monkeypatch.setattr(appconfig, "CONFIG_FILE", tmp_path / "roster.toml")
     model_catalog._LIVE_CACHE.clear()
@@ -665,7 +665,7 @@ def test_current_model_surfaces_under_current_group():
 
 
 def test_set_model_and_flags():
-    from relaycli import appconfig
+    from relaycli.config import manager as appconfig
 
     session = WebSession(_settings())
     session.set_model("ollama_chat/llama3.1")
@@ -978,7 +978,7 @@ def test_web_run_wires_mcp_tools(monkeypatch, tmp_path):
     import sys as _sys
 
     import relaycli.agent as agent_mod
-    import relaycli.mcp as mcp_mod
+    import relaycli.mcp.bridge as mcp_mod
 
     fake_server = str(
         __import__("pathlib").Path(__file__).parent / "fake_mcp_server.py"
