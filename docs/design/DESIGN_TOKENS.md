@@ -267,34 +267,42 @@ implementation proposes any of them again:
   Identity lives in the id + role mark; color stays reserved for state,
   which is what needs to be seen peripherally.
 
-## 9. Open conflict — role taxonomy (flag, do not silently resolve)
+## 9. Role taxonomy — resolved
 
-The design's role-mark table (§2) groups roles into 5 families (DISCOVER /
-BUILD / VERIFY / OPERATE / GOVERN) with **17** three-letter codes. The
-codebase's actual roster, `relaycli/core/roles.py::BUILTIN_ROLES`, has **16**
-roles: `orchestrator, planner, architect, researcher, coder, backend,
-frontend, database, devops, tester, debugger, reviewer, refactorer,
-security, documenter, performance`.
+The design's role-mark table (§2) groups roles into 5 families with 17
+three-letter codes, which didn't match `core/roles.py`'s actual 16 roles
+(5 design-only codes — `api`, `e2e`, `infra`, `release`, `observability` —
+and 4 codebase-only roles — `planner`, `coder`, `devops`, `debugger` — with
+no code). **Decided: keep the 16-role roster exactly as-is** (per the master
+prompt's own ground-truth table: `core/roles.py` is "already excellent," "do
+not rewrite the prompts, add capability metadata only") and adapt the
+design's glyphs to fit, rather than expanding the roster to match the
+design. This is the canonical mapping — use this table, not §2's, for
+implementation:
 
-These are not the same list:
+| Family | Glyph | Codes (all 16 roles) |
+|---|---|---|
+| DISCOVER | `◇` | `orc` orchestrator · `rsc` researcher · `arc` architect · `pln` planner |
+| BUILD | `▣` | `bnd` backend · `fnd` frontend · `dat` database · `rfc` refactorer · `cod` coder |
+| VERIFY | `◈` | `tst` tester · `prf` performance · `dbg` debugger |
+| OPERATE | `⊞` | `dvo` devops |
+| GOVERN | `⊙` | `rev` reviewer · `sec` security · `doc` documenter |
 
-- **In the design, not in the code**: `api`, `e2e`, `infra`, `release`,
-  `observability`.
-- **In the code, not in the design**: `planner`, `coder`, `devops`,
-  `debugger`.
-- Everything else maps cleanly by meaning even where the label differs
-  (`dat`→`database`, `rfc`→`refactorer`, `doc`→`documenter`,
-  `prf`→`performance`).
+12 codes carried over unchanged from the design (`orc, rsc, arc, bnd, fnd,
+dat, rfc, tst, prf, rev, sec, doc`). 4 new 3-letter codes assigned to
+existing roles the design didn't cover: `pln` (planner → DISCOVER, since
+decomposition is a discovery-stage activity alongside orchestrator/
+researcher/architect), `cod` (coder → BUILD, the general-purpose builder
+alongside the specialized backend/frontend/database/refactorer roles),
+`dbg` (debugger → VERIFY, alongside tester/performance — root-causing a
+failure is a verification-stage activity), `dvo` (devops → OPERATE, the
+role's sole current member).
 
-This is a product-scope question, not a visual-detail one — the ground-truth
-table in the master prompt (§2) says `core/roles.py` is "already excellent,"
-"do not rewrite the prompts, add capability metadata only." The design
-appears to assume a different, larger role roster. Resolving this (add the 5
-missing roles? rename/retire the 4 orphaned ones? keep 16 roles and just
-pick the closest of the 17 glyph/code pairs for each?) is a real decision,
-not something to guess silently — flagging for the user before Part A's
-`Task.role_id` and Part D's role-mark rendering are built against one
-taxonomy or the other.
+`api`, `e2e`, `infra`/`inf`, `release`/`rel`, `observability`/`obs` are
+**unassigned** — no role currently uses them. Left as reserved family slots
+rather than deleted from the design language: if any of those five roles is
+added to the roster later, its glyph and family are already spoken for and
+consistent with this table.
 
 ## 10. Relationship to the existing desktop web tokens
 
