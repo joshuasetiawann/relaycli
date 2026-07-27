@@ -1,0 +1,160 @@
+"""Entry point for --experimental-parallel.
+
+The Orchestrator role decomposes a request into a TaskGraph with one
+model call (§11 open question 2: "one model call per session is
+affordable; per task is not"); the Scheduler then runs that graph
+concurrently. Sequential relay (relay.py's Relay class, gated by
+settings.relay_enabled) stays the default and is completely unaffected —
+this module is only reached when settings.experimental_parallel is set
+(cli.py/relay.py's call site, not this module, makes that choice).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+
+from rich.console import Console
+
+from relaycli.agent.budget import BudgetGovernor
+from relaycli.agent.graph import TaskGraph, parse_task_graph
+from relaycli.agent.leases import LeaseManager
+from relaycli.agent.loop import Agent
+from relaycli.agent.scheduler import Scheduler, SchedulerResult, TaskOutcome
+from relaycli.core.config import Settings
+from relaycli.core.context import ProjectContext
+from relaycli.core.llm import LLM
+from relaycli.core.logging import get_logger
+from relaycli.core.permissions import PermissionManager
+from relaycli.tools.base import ToolContext
+from relaycli.tools.capabilities import scheduler_task_registry
+
+_log = get_logger(__name__)
+
+ORCHESTRATOR_TASK_LIST_INSTRUCTIONS = (
+    "\n\nRespond with ONLY a JSON task list, no other text: "
+    '{"tasks": [{"id": "short-id", "role": "<roster role id>", "goal": '
+    '"one imperative sentence", "depends_on": ["other-task-id", ...], '
+    '"path_claims": ["glob/or/path", ...]}]}. '
+    "Keep each task focused enough for one agent. Use depends_on only "
+    "for genuine ordering requirements — independent tasks should have "
+    "no depends_on, so they can run concurrently."
+)
+
+
+def build_task_graph(request: str, *, orchestrator_agent: Agent) -> TaskGraph:
+    """Run the Orchestrator role once and parse its output into a
+    TaskGraph. Raises GraphError (from parse_task_graph) if the result
+    isn't a valid graph — the caller decides how to surface that (e.g.
+    falling back to the sequential pipeline)."""
+    from relaycli.core.roles import BUILTIN_ROLES_BY_ID
+
+    plan_result = orchestrator_agent.run(request)
+    return parse_task_graph(plan_result.final_text, valid_role_ids=frozenset(BUILTIN_ROLES_BY_ID))
+
+
+@dataclass
+class TaskAgentFactory:
+    """Builds the Agent (and its ToolContext) for one scheduled task.
+    Production default constructs a real roster specialist Agent; tests
+    substitute a fake via Scheduler's own run_task injection instead of
+    subclassing this — see test_agent_orchestrator.py."""
+
+    settings: Settings
+    console: Console
+    project: ProjectContext
+    permissions: PermissionManager
+    llm: LLM
+    leases: LeaseManager
+    budget: BudgetGovernor
+
+    def __call__(self, role_id: str, task_id: str):
+        from relaycli.appconfig import load_app_config
+        from relaycli.core.roster import specialist_runtime
+
+        cfg = load_app_config()
+        runtime = specialist_runtime(self.settings, cfg, role_id)
+        registry = scheduler_task_registry(role_id)
+        ctx = ToolContext(
+            project=self.project, permissions=self.permissions, console=self.console,
+            lease_manager=self.leases, current_task_id=task_id,
+            settings=self.settings, llm=self.llm, budget=self.budget,
+        )
+        agent = Agent(
+            self.settings, console=self.console, project=self.project,
+            permissions=self.permissions, llm=self.llm,
+            prompt_template=runtime.template, model=runtime.model, registry=registry,
+        )
+        agent.tool_ctx = ctx
+        return agent, ctx
+
+
+def make_run_task(agent_factory):
+    """A Scheduler-compatible run_task callable, closing over agent_factory
+    (production TaskAgentFactory, or a fake for tests) — kept as its own
+    function so it's unit-testable independent of Scheduler.run()'s own
+    concurrency machinery."""
+
+    async def run_task(task) -> TaskOutcome:
+        def _run_sync() -> TaskOutcome:
+            agent, ctx = agent_factory(task.role_id, task.id)
+            result = agent.run(task.goal)
+            return TaskOutcome(
+                task_id=task.id,
+                ok=(result.stopped_reason == "done"),
+                summary=result.final_text[:200],
+                usage=result.usage,
+                error=None if result.stopped_reason == "done" else result.final_text,
+                refs=tuple(sorted(ctx.read_files)),
+            )
+        return await asyncio.to_thread(_run_sync)
+
+    return run_task
+
+
+async def run_parallel(
+    settings: Settings,
+    request: str,
+    *,
+    console: Console | None = None,
+    project: ProjectContext | None = None,
+    permissions: PermissionManager | None = None,
+    llm: LLM | None = None,
+) -> SchedulerResult:
+    """Decompose `request` via the Orchestrator role, then run the
+    resulting graph concurrently. The single real entry point
+    --experimental-parallel uses; everything it calls is independently
+    unit-tested (build_task_graph via parse_task_graph's own tests,
+    make_run_task via test_agent_orchestrator.py with a fake factory,
+    Scheduler via test_agent_scheduler.py) since a live multi-model run
+    isn't something this session can exercise end-to-end.
+    """
+    from relaycli.appconfig import load_app_config
+    from relaycli.core.roster import specialist_runtime
+
+    console = console or Console()
+    project = project or ProjectContext(".")
+    permissions = permissions or PermissionManager(settings.permission_mode, console=console)
+    llm = llm or LLM(settings)
+    cfg = load_app_config()
+
+    orchestrator_runtime = specialist_runtime(settings, cfg, "orchestrator")
+    orchestrator_agent = Agent(
+        settings, console=console, project=project, permissions=permissions, llm=llm,
+        prompt_template=orchestrator_runtime.template + ORCHESTRATOR_TASK_LIST_INSTRUCTIONS,
+        model=orchestrator_runtime.model, pass_tool_schemas=False,
+    )
+    graph = build_task_graph(request, orchestrator_agent=orchestrator_agent)
+    _log.info("orchestrator produced %d tasks", len(graph.tasks))
+
+    leases = LeaseManager()
+    budget = BudgetGovernor(max_tokens_total=settings.token_budget or None)
+    factory = TaskAgentFactory(
+        settings=settings, console=console, project=project, permissions=permissions,
+        llm=llm, leases=leases, budget=budget,
+    )
+    scheduler = Scheduler(
+        graph, make_run_task(factory), max_concurrent_agents=settings.max_concurrent_agents,
+        leases=leases, budget=budget,
+    )
+    return await scheduler.run()

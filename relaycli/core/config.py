@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     explorer_model: str | None = Field(default=None)
     tester_model: str | None = Field(default=None)
 
+    # Part A (parallel orchestration): the master prompt's own rule 2 —
+    # "Parallelism lands behind a flag... users must be able to fall back."
+    # False by default; sequential relay (relay_enabled) is unaffected by
+    # this and keeps working exactly as before regardless of this flag.
+    experimental_parallel: bool = Field(default=False)
+    max_concurrent_agents: int = Field(default=3, ge=1)
+
     # Tier-based routing (v2 Part B): a pipeline role's default tier
     # resolves through relaycli.config.manager.AppConfig.tiers — the same
     # storage `relaycli config tier <name> <model>` already writes for the
