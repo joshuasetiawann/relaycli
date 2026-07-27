@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from rich.markup import escape
 
 from relaycli.core.context import PathSafetyError
-from relaycli.ui.render import render_diff
+from relaycli.ui.render import render_diff, structured_diff
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult, atomic_write
 
@@ -48,10 +48,11 @@ def write_file(args: WriteFileArgs, ctx: ToolContext) -> ToolResult:
 
     if old == new and path.exists():
         return ToolResult(ok=True, output=f"No changes; '{rel}' already has that content.",
-                          summary=f"write {rel} (no change)")
+                          summary=f"write {rel} (no change)", diff=[])
 
     # Always show the diff before applying (in every mode).
     added, removed = render_diff(ctx.console, old, new, rel)
+    file_diff = structured_diff(old, new, rel)
 
     verb = "Overwrite" if path.exists() else "Create"
     decision = ctx.permissions.confirm("write", prompt_text=f"{verb} {escape(rel)}?")
@@ -64,12 +65,14 @@ def write_file(args: WriteFileArgs, ctx: ToolContext) -> ToolResult:
         atomic_write(path, new)
     except OSError as exc:
         return ToolResult.error(f"Failed to write '{rel}': {exc}")
+    ctx.file_cache.invalidate(path)
 
     return ToolResult(
         ok=True,
         output=f"Wrote {len(new)} bytes to '{rel}' (+{added} -{removed}).",
         summary=f"write {rel} (+{added} -{removed})",
         meta={"added": added, "removed": removed, "created": old == ""},
+        diff=[file_diff],
     )
 
 

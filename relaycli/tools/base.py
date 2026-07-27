@@ -14,6 +14,7 @@ from rich.console import Console
 
 from relaycli.core.context import ProjectContext
 from relaycli.core.permissions import PermissionManager
+from relaycli.tools.cache import FileCache
 
 # Generous by design: a normal task rarely uses more than a few dozen tool
 # calls even across several iterations. This is a backstop against a
@@ -63,6 +64,7 @@ class ToolContext:
     # needs more calls than the generous default allows.
     max_calls_per_session: int | None = DEFAULT_MAX_CALLS_PER_SESSION
     calls_made: int = 0
+    file_cache: FileCache = field(default_factory=FileCache)
 
     async def confirm_async(self, action: str, prompt_text: str) -> bool:
         """Async permission check — delegates to PermissionManager.confirm_async."""
@@ -71,11 +73,36 @@ class ToolContext:
 
 
 @dataclass
+class DiffHunk:
+    """One ``@@ ... @@`` hunk from a unified diff."""
+    old_start: int
+    old_lines: int
+    new_start: int
+    new_lines: int
+    added: int
+    removed: int
+    text: str
+
+
+@dataclass
+class FileDiff:
+    """Structured diff for one file — lets a UI render files/hunks/+- counts
+    directly instead of re-parsing ToolResult.output as text."""
+    path: str
+    added: int
+    removed: int
+    hunks: list[DiffHunk] = field(default_factory=list)
+    is_new: bool = False
+    is_deleted: bool = False
+
+
+@dataclass
 class ToolResult:
     ok: bool
     output: str
     summary: str = ""
     meta: dict[str, Any] = field(default_factory=dict)
+    diff: list[FileDiff] | None = None
 
     def __str__(self) -> str:
         return self.output

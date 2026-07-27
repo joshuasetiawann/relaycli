@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 from relaycli.tools.base import ToolContext, ToolResult
 from relaycli.tools.registry import Tool, ToolRegistry
+from relaycli.ui.render import structured_diff
 
 
 class ApplyPatchArgs(BaseModel):
@@ -32,7 +33,7 @@ def apply_patch(args: ApplyPatchArgs, ctx: ToolContext | None) -> ToolResult:
         return ToolResult(ok=True, output=output or "patch applied",
                           summary="patch applied")
     except FileNotFoundError:
-        return _fallback_apply(args.patch, root)
+        return _fallback_apply(args.patch, root, ctx)
     except OSError as exc:
         return ToolResult.error(str(exc))
     except subprocess.TimeoutExpired:
@@ -44,22 +45,28 @@ def apply_patch(args: ApplyPatchArgs, ctx: ToolContext | None) -> ToolResult:
             pass
 
 
-def _fallback_apply(patch_text: str, root: Path) -> ToolResult:
+def _fallback_apply(patch_text: str, root: Path, ctx: ToolContext | None) -> ToolResult:
     """Pure-Python fallback for simple patches when `patch` is unavailable."""
     hunks = _parse_patches(patch_text)
     if not hunks:
         return ToolResult.error("No parseable hunks in patch (and `patch` command not found)")
     results = []
-    for filepath, content in _apply_hunks(hunks, root):
+    diffs = []
+    for filepath, old_content, new_content in _apply_hunks(hunks, root):
+        rel = str(filepath.relative_to(root))
         try:
             filepath.parent.mkdir(parents=True, exist_ok=True)
-            filepath.write_text(content, encoding="utf-8")
-            results.append(f"patched: {filepath.relative_to(root)}")
+            filepath.write_text(new_content, encoding="utf-8")
+            if ctx is not None:
+                ctx.file_cache.invalidate(filepath)
+            diffs.append(structured_diff(old_content, new_content, rel))
+            results.append(f"patched: {rel}")
         except OSError as exc:
-            results.append(f"FAIL: {filepath.relative_to(root)} - {exc}")
+            results.append(f"FAIL: {rel} - {exc}")
     return ToolResult(ok=not any(r.startswith("FAIL") for r in results),
                       output="\n".join(results) or "(no changes)",
-                      summary=f"{len(results)} files patched")
+                      summary=f"{len(results)} files patched",
+                      diff=diffs)
 
 
 _HUNK_RE = re.compile(
@@ -91,7 +98,7 @@ def _apply_hunks(hunks, root):
             content = ""
         new_content = _apply_diff(content, lines)
         if new_content is not None and new_content != content:
-            yield target, new_content
+            yield target, content, new_content
 
 
 def _apply_diff(content: str, diff_lines: list[str]) -> str | None:

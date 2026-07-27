@@ -7,7 +7,7 @@ from rich.markup import escape
 
 from relaycli.core.context import PathSafetyError
 from relaycli.core.project_hints import missing_path_hint
-from relaycli.ui.render import render_diff
+from relaycli.ui.render import render_diff, structured_diff
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult, atomic_write
 
@@ -103,6 +103,7 @@ def edit_file(args: EditFileArgs, ctx: ToolContext) -> ToolResult:
 
     # Always show the diff before applying.
     added, removed = render_diff(ctx.console, old, new, rel)
+    file_diff = structured_diff(old, new, rel)
 
     decision = ctx.permissions.confirm("edit", prompt_text=f"Apply edit to {escape(rel)}?")
     if not decision.approved:
@@ -114,12 +115,14 @@ def edit_file(args: EditFileArgs, ctx: ToolContext) -> ToolResult:
         atomic_write(path, new)
     except OSError as exc:
         return ToolResult.error(f"Failed to write '{rel}': {exc}")
+    ctx.file_cache.invalidate(path)
 
     return ToolResult(
         ok=True,
         output=f"Edited '{rel}' ({count if args.replace_all else 1} replacement(s), +{added} -{removed}).",
         summary=f"edit {rel} (+{added} -{removed})",
         meta={"added": added, "removed": removed, "replacements": count if args.replace_all else 1},
+        diff=[file_diff],
     )
 
 

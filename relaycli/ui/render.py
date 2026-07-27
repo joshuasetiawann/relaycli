@@ -63,6 +63,50 @@ def diff_stats(old: str, new: str) -> tuple[int, int]:
     return added, removed
 
 
+_HUNK_HEADER_RE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+
+
+def structured_diff(old: str, new: str, path: str) -> "FileDiff":
+    """Like make_unified_diff, but returns structured per-hunk data (files,
+    hunks, +/- counts) instead of printed text — so a UI can render a real
+    diff review without re-parsing ToolResult.output."""
+    from relaycli.tools.base import DiffHunk, FileDiff
+
+    diff_text = make_unified_diff(old, new, path)
+    added, removed = diff_stats(old, new)
+
+    hunks: list[DiffHunk] = []
+    current: list[str] = []
+    header: tuple[int, int, int, int] | None = None
+
+    def flush() -> None:
+        if header is None:
+            return
+        h_added = sum(1 for l in current if l.startswith("+") and not l.startswith("+++"))
+        h_removed = sum(1 for l in current if l.startswith("-") and not l.startswith("---"))
+        hunks.append(DiffHunk(*header, added=h_added, removed=h_removed, text="".join(current)))
+
+    for line in diff_text.splitlines(keepends=True):
+        match = _HUNK_HEADER_RE.match(line)
+        if match:
+            flush()
+            current = [line]
+            header = (
+                int(match.group(1)), int(match.group(2) or 1),
+                int(match.group(3)), int(match.group(4) or 1),
+            )
+            continue
+        if header is not None:
+            current.append(line)
+    flush()
+
+    return FileDiff(
+        path=path, added=added, removed=removed, hunks=hunks,
+        is_new=old == "" and new != "",
+        is_deleted=old != "" and new == "",
+    )
+
+
 def render_diff(console: Console, old: str, new: str, path: str) -> tuple[int, int]:
     """Print a colored unified diff and return (added, removed) line counts."""
     diff_text = make_unified_diff(old, new, path)
