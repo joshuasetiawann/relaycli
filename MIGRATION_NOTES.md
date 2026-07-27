@@ -363,12 +363,44 @@ no-op, not explicit `False` generally); `get_logger`'s namespacing
 handler capturing a DEBUG record while stderr is at WARNING (the "log
 tail" half of G12). Verified the regression test actually catches the
 bug before trusting it: `git stash`-ed just the fix and reran
-`tests/test_logging.py` — `test_get_logger_does_not_downgrade_explicit_
-debug` failed with `assert 30 == 10` (WARNING where DEBUG was expected),
-exactly the predicted failure mode; restored the fix and it passed.
+`tests/test_logging.py` —
+`test_get_logger_does_not_downgrade_explicit_debug` failed with
+`assert 30 == 10` (WARNING where DEBUG was expected), exactly the
+predicted failure mode; restored the fix and it passed.
 
 Restarting the full gate from G1 per the loop's own rule (diagnose root
 cause, fix, restart entirely — not just re-check G12).
+
+**Attempt 2 — full G1-G13: green.** Fresh `.venv-work` again (deleted and
+recreated a second time, not reused from attempt 1). G1 clean install; G2
+no conflict markers; G3 compileall; G4 import; G5 `relaycli --help`; G6
+no legacy flat-module imports; G8 `pkgutil.walk_packages` importing every
+submodule with zero errors; G9 `relaycli doctor` exit 0; G11 debug
+residue (no `.orig`/`.rej`/`.bak` files, no `pdb.set_trace`/`breakpoint()`,
+no stray `print()` outside UI/CLI modules, no repair-artifact comments,
+`git status` clean); G12 re-verified with the same fresh-process
+methodology that caught the attempt-1 bug — `debug=False` suppresses a
+`.debug()` record on stderr, `debug=True` now correctly surfaces it, in
+two genuinely separate processes; G13 the master prompt's own named
+example, `Settings(model='', temperature=9.0)`, raises a `ValidationError`
+naming both `model` and `temperature` with an actionable fix for `model`
+in the message.
+
+G7 (full suite): **638 collected, 635 passed, 3 skipped, 0 failed.** The
+3 skips are all of `tests/test_e2e_live.py` — gated behind
+`RELAYCLI_E2E_MODEL` (plus a provider key) by design, since they call a
+real model; not run in this environment, not a gap introduced or hidden
+by this repair.
+
+G10 (coverage threshold): total **78%** (7008 stmts, 1523 missed).
+Per-directory, all three master-prompt targets still met: **core/ 83.8%**,
+**agent/ 85.9%**, **tools/ 82.3%** (up from 81.6% — the rate-limit
+decorator's new lines in `tools/base.py` are exercised by 5e's 6 tests,
+net positive). `config/menu.py` remains at 18% coverage — expected and
+already documented (Phase 5d): it's the still-dormant, deliberately-left
+dead duplicate flagged for a follow-up deletion, not a target directory.
+
+All of G1-G13 green. Proceeding to the Final Report.
 
 ## Phase 3 — verification gate log
 
