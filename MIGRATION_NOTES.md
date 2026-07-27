@@ -1,5 +1,33 @@
 # MIGRATION_NOTES.md
 
+## Phase 5 — quality hardening
+
+**5a — structured logging.** Added `relaycli/core/logging.py`: a
+`relaycli` logger tree with a `DEBUG`-level file handler
+(`~/.relaycli/logs/relaycli.log`) and a concise stderr handler
+(`WARNING` by default, `DEBUG` with `--debug`). Idempotent
+`configure_logging()`/`get_logger()` so import order doesn't matter.
+Added `--debug`/`-v` to `cli.py`'s main callback.
+
+Instrumented the actual silent-catch paths found in the three named
+target areas — `relaycli/agent/loop.py`'s two tool-execution exception
+handlers (`_execute`, `_execute_concurrent`) now log step number, tool
+name, elapsed ms, and a truncated request on both `ToolError` (warning)
+and unexpected exceptions (`error`, `exc_info=True`); same pattern in
+`relaycli/tools/websearch.py`'s network-call handler. Two things the
+master prompt's description didn't quite match reality on:
+`relaycli/relay.py` has no `try`/`except` at all (nothing to
+instrument), and there's no literal `print()`-based error-swallowing
+anywhere in these files — Rich `console.print` calls found elsewhere in
+`tools/*.py` are legitimate user-facing UI (echoing a command, showing a
+question), not silent error handling, and were left alone.
+`relaycli/tools/registry.py`'s one `except Exception` re-raises as
+`ToolError` rather than swallowing, so it's already covered end-to-end
+by the `_execute` catch site above it — no separate log needed there.
+Rich console output for users is unchanged; logging is purely additive.
+Full gate re-run after this item: green (566 collected, 563 passed, 3
+known-blocked skips, 0 failed).
+
 ## Phase 3 — verification gate log
 
 **Attempt 1 — FAILED at G1 (clean install).**

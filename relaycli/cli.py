@@ -73,8 +73,15 @@ def main(
         "--relay/--no-relay",
         help="Run requests through the Planner → Coder → Reviewer relay pipeline.",
     ),
+    debug: bool = typer.Option(
+        False, "--debug", "-v", help="Verbose logging to stderr and ~/.relaycli/logs/relaycli.log."
+    ),
 ) -> None:
     """Launch the REPL, or run a one-shot request with -p."""
+    from relaycli.core.logging import configure_logging
+
+    configure_logging(debug=debug)
+
     if show_version:
         console.print(f"relaycli {__version__}")
         raise typer.Exit()

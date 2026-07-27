@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from pydantic import BaseModel, Field
 
+from relaycli.core.logging import get_logger
 from relaycli.tools.base import ToolContext, ToolResult
 from relaycli.tools.registry import Tool, ToolRegistry
+
+_log = get_logger(__name__)
 
 
 class WebSearchArgs(BaseModel):
@@ -17,6 +21,7 @@ class WebSearchArgs(BaseModel):
 
 
 def websearch(args: WebSearchArgs, ctx: ToolContext | None) -> ToolResult:
+    started = time.perf_counter()
     try:
         results = _search_duckduckgo(args.query, args.max_results or 5)
         if results:
@@ -24,6 +29,11 @@ def websearch(args: WebSearchArgs, ctx: ToolContext | None) -> ToolResult:
             return ToolResult(ok=True, output=output, summary=f"{len(results)} results")
         return ToolResult(ok=True, output="(no results)")
     except Exception as exc:
+        _log.error(
+            "websearch crashed: elapsed_ms=%.0f query=%r",
+            (time.perf_counter() - started) * 1000, args.query[:200],
+            exc_info=True,
+        )
         return ToolResult.error(str(exc))
 
 

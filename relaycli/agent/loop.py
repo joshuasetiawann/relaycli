@@ -25,6 +25,7 @@ from rich.markup import escape
 from relaycli.core.config import PermissionMode, Settings, get_settings
 from relaycli.core.context import ProjectContext
 from relaycli.core.llm import LLM, LLMError, LLMResponse, ToolCall, Usage
+from relaycli.core.logging import get_logger
 from relaycli.core.permissions import PermissionManager
 from relaycli.core.session import Session
 from relaycli.core.memory import memory_prompt_block
@@ -32,6 +33,8 @@ from relaycli.heuristics import load_heuristics
 from relaycli.tools import ToolError, ToolRegistry, default_registry
 from relaycli.tools.base import ToolContext, ToolResult
 from relaycli.agent.reporter import Reporter
+
+_log = get_logger(__name__)
 
 _MODE_DESCRIPTIONS = {
     PermissionMode.suggest: "ask before any edit or command",
@@ -112,6 +115,8 @@ class Agent:
         self.tool_ctx = ToolContext(self.project, self.permissions, self.console, require_read_before_edit=True)
         self._schemas = self.registry.schemas() if pass_tool_schemas else []
         self.session = Session(self._build_system_prompt(), token_budget=self.settings.token_budget, model=self.model)
+        self._current_iteration = 0
+        self._current_request = ""
 
     @property
     def model(self) -> str:
@@ -140,6 +145,7 @@ class Agent:
     def run(self, request: str, *, reporter: Reporter | None = None) -> AgentResult:
         reporter = reporter or Reporter()
         started = time.perf_counter()
+        self._current_request = request[:200] + ("…" if len(request) > 200 else "")
         self.session.add_user(request)
         usage = Usage()
         tool_calls = 0
@@ -155,6 +161,7 @@ class Agent:
                 return AgentResult(final_text="Stopped by user.", iterations=i - 1,
                                    tool_calls=tool_calls, usage=usage, stopped_reason="stopped",
                                    elapsed=time.perf_counter() - started)
+            self._current_iteration = i
             reporter.iteration(i)
             self.session.trim()
 
@@ -334,11 +341,23 @@ class Agent:
                            elapsed=time.perf_counter() - started)
 
     def _execute(self, call: ToolCall) -> tuple[str, ToolResult | None]:
+        started = time.perf_counter()
         try:
             result = self.registry.run(call.name, call.arguments, self.tool_ctx)
         except ToolError as exc:
+            _log.warning(
+                "tool error: step=%d tool=%s elapsed_ms=%.0f request=%r: %s",
+                self._current_iteration, call.name,
+                (time.perf_counter() - started) * 1000, self._current_request, exc,
+            )
             return f"ERROR: {exc}", None
         except Exception as exc:
+            _log.error(
+                "tool crashed: step=%d tool=%s elapsed_ms=%.0f request=%r",
+                self._current_iteration, call.name,
+                (time.perf_counter() - started) * 1000, self._current_request,
+                exc_info=True,
+            )
             return f"ERROR: tool '{call.name}' raised {type(exc).__name__}: {exc}", None
         if isinstance(result, ToolResult):
             return result.output, result
@@ -346,11 +365,23 @@ class Agent:
 
     async def _execute_concurrent(self, calls: list[ToolCall]) -> list[tuple[str, ToolResult | None]]:
         async def arun_one(call: ToolCall) -> tuple[str, ToolResult | None]:
+            started = time.perf_counter()
             try:
                 result = await self.registry.arun(call.name, call.arguments, self.tool_ctx)
             except ToolError as exc:
+                _log.warning(
+                    "tool error: step=%d tool=%s elapsed_ms=%.0f request=%r: %s",
+                    self._current_iteration, call.name,
+                    (time.perf_counter() - started) * 1000, self._current_request, exc,
+                )
                 return f"ERROR: {exc}", None
             except Exception as exc:
+                _log.error(
+                    "tool crashed: step=%d tool=%s elapsed_ms=%.0f request=%r",
+                    self._current_iteration, call.name,
+                    (time.perf_counter() - started) * 1000, self._current_request,
+                    exc_info=True,
+                )
                 return f"ERROR: tool '{call.name}' raised {type(exc).__name__}: {exc}", None
             if isinstance(result, ToolResult):
                 return result.output, result
