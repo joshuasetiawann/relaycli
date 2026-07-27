@@ -245,6 +245,54 @@ G1 clean install, G2 no conflict markers, G3 compileall, G4 import, G5
 G9 `relaycli doctor` (exit 0) all passed on the first attempt. G7 (full
 suite): **631 collected, 628 passed, 3 known-blocked skips, 0 failed.**
 
+**5f — split oversized modules: assessed, deliberately deferred.** The
+master prompt names four files (`ui/repl.py` 982 lines, `ui/web.py` 897,
+`agent/loop.py` 760, `relay.py` 594 — confirmed these are in fact the
+four largest in the tree, `wc -l` across all of `relaycli/`) and frames
+this item conditionally: only attempt it "if everything above is green
+and time allows," and only while keeping the public import surface
+unchanged. Everything above is green; the second condition is a judgment
+call, and I'm choosing not to attempt it this pass, for reasons worth
+recording rather than silently skipping past:
+
+A module split of this shape is categorically different from every
+other Phase 5 item. 5a-5e were additive (new log calls, new validators,
+a new error branch, new tests, a new decorator) — each could be
+independently reverted if it didn't land cleanly, exactly per rule 5.
+Splitting a file apart is subtractive/restructural: code moves between
+modules, which is precisely the failure mode this *specific* codebase
+has demonstrated real, repeated fragility around this session —
+`_json_from_text` duplicated across two modules with the same bug in
+both (5d), and, at greater length, the whole shim-indirection family in
+Phase 3's G7 fix (config re-exports, `mcp.bridge`, `core.config`'s
+`_FilteredSource`/`CONFIG_DIR`) where a name imported into a second
+module silently stopped tracking reassignment of the original. Four
+files this size, decomposed correctly, is realistically its own
+multi-file, multi-hour effort — identify cohesive sub-responsibilities
+per file, extract without behavior change, rewrite every internal and
+test-side import, then re-run the *entire* gate after each file
+individually (not just once at the end), per the very rule this same
+phase has followed for every smaller item so far. Doing that carefully,
+for four files, with nobody able to review it interactively before it
+lands, is a materially different risk/benefit trade than the rest of
+Phase 5 — and the master prompt's own conditional phrasing here (unlike
+5a-5e, which are stated as plain instructions) reads as inviting exactly
+this judgment call rather than mandating the work regardless of
+circumstance.
+
+Weighed against that: Phase 6's final gate and final report are *not*
+conditional, and are more valuable to get right than a structural
+refactor that changes no behavior. Choosing to protect the time and
+attention for Phase 6 rather than spend both on a large, non-additive
+refactor this late in the same pass.
+
+Not treating this as closed — recording it as a concrete, scoped
+recommendation for a dedicated follow-up pass in the Final Report
+(one file at a time, its own gate cycle per file, ideally with a human
+reviewing the diff before the next file starts), the same way the
+still-dormant `config/menu.py` deletion was deferred and flagged rather
+than done or ignored.
+
 ## Phase 3 — verification gate log
 
 **Attempt 1 — FAILED at G1 (clean install).**
