@@ -129,7 +129,8 @@ def _register_defaults(reg: ToolRegistry) -> None:
         edit_file as _edit_file,
         create_folder as _create_folder,
         find_files as _find_files,
-        shell as _shell,
+        run_command as _run_command,
+        background as _background,
         search as _search,
         remember as _remember,
         webfetch as _webfetch,
@@ -146,10 +147,8 @@ def _register_defaults(reg: ToolRegistry) -> None:
     _edit_file.register(reg)
     _create_folder.register(reg)
     _find_files.register(reg)
-    _shell.register_run_command(reg)
-    _shell.register_run_background(reg)
-    _shell.register_check_process(reg)
-    _shell.register_stop_process(reg)
+    _run_command.register(reg)
+    _background.register(reg)
     _search.register(reg)
     _remember.register(reg)
     _webfetch.register(reg)
@@ -174,12 +173,13 @@ def planner_registry() -> ToolRegistry:
 
 def reviewer_registry() -> ToolRegistry:
     from relaycli.tools import list_dir as _list_dir, find_files as _find_files
-    from relaycli.tools import read_file as _read_file, shell as _shell, search as _search
+    from relaycli.tools import read_file as _read_file, run_command as _run_command, search as _search
+    from relaycli.tools import background as _background
     reg = ToolRegistry()
     _list_dir.register(reg)
     _find_files.register(reg)
     _read_file.register(reg)
-    _shell.register_run_command(reg)
+    _run_command.register(reg)
     _search.register(reg)
-    _shell.register_background_check(reg)
+    _background.register_check_only(reg)
     return reg

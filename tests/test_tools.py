@@ -448,6 +448,51 @@ def test_background_tools_registered():
     assert "run_background" not in reviewer and "stop_process" not in reviewer
 
 
+# --- background tools THROUGH the registry, not by direct import -------
+# Regression coverage: relaycli/tools/shell.py used to be what actually
+# backed these three names in every registry, with no permission check on
+# run_background/stop_process at all. Every prior test above calls
+# relaycli.tools.background's functions directly, which never exercised
+# the live dispatch path and so never caught it. These go through
+# default_registry().run(...) specifically to close that blind spot.
+def test_run_background_via_registry_requires_permission(sample_project):
+    reg = default_registry()
+    ctx = make_context(sample_project, PermissionMode.suggest, prompter=lambda _t: False)
+    res = reg.run("run_background", {"command": "sleep 30"}, ctx)
+    assert not res.ok
+    assert "not approved" in res.output
+
+
+def test_stop_process_via_registry_requires_permission(sample_project):
+    reg = default_registry()
+    start_ctx = make_context(sample_project, PermissionMode.full_auto)
+    started = reg.run("run_background", {"command": "sleep 30"}, start_ctx)
+    assert started.ok
+    bg_id = started.meta["id"]
+
+    declining_ctx = make_context(sample_project, PermissionMode.suggest, prompter=lambda _t: False)
+    stop_res = reg.run("stop_process", {"id": bg_id}, declining_ctx)
+    assert not stop_res.ok
+    assert "not approved" in stop_res.output
+
+    # Declined -> the process must still be running, not actually stopped.
+    check = reg.run("check_process", {"id": bg_id}, start_ctx)
+    assert "running" in check.output
+
+    reg.run("stop_process", {"id": bg_id}, start_ctx)  # cleanup
+
+
+def test_run_background_via_registry_approved_starts_and_is_checkable(sample_project):
+    reg = default_registry()
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    started = reg.run("run_background", {"command": "echo via-registry; sleep 30"}, ctx)
+    assert started.ok
+    bg_id = started.meta["id"]
+    check = reg.run("check_process", {"id": bg_id}, ctx)
+    assert "running" in check.output
+    reg.run("stop_process", {"id": bg_id}, ctx)  # cleanup
+
+
 # --- rate limiting (Phase 5e) -------------------------------------------
 def _make_dummy_tool():
     """A trivial Tool whose func just counts invocations, for testing the
