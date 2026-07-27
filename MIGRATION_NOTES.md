@@ -293,6 +293,83 @@ reviewing the diff before the next file starts), the same way the
 still-dormant `config/menu.py` deletion was deferred and flagged rather
 than done or ignored.
 
+## Phase 6 — final verification gate log
+
+**Attempt 1 — FAILED at G12 (new flags work + log tail check).** G1-G9
+repeated clean from a genuinely fresh `.venv-work` (deleted and
+recreated). G10/G11 not yet reached when this surfaced — running the
+checks roughly in order and stopping at first failure.
+
+G12 is a functional check, not just "does the flag parse": does
+`--debug` actually change stderr verbosity, and does the log file
+capture what it should. First pass (`relaycli --debug --version`) looked
+fine — exit 0, no crash — but that command doesn't exercise any code path
+that logs anything, so it couldn't actually prove the flag *does*
+anything. Rebuilt the check to prove the real claim: configure logging
+with `debug=True` in one process, then call `get_logger(...)` (the way
+every instrumented module acquires its logger) and confirm a `.debug()`
+record still reaches stderr. It didn't — even in a genuinely fresh
+process with no prior state.
+
+Root cause, traced directly in `relaycli/core/logging.py`:
+`get_logger()` unconditionally calls the *bare* `configure_logging()`
+(implicit `debug=False`), and `configure_logging`'s idempotent branch
+(`if _configured:`) re-applies whatever `debug` value *that specific
+call* received to the stderr handler's level — even the implicit
+default. So the sequence that happens on every real run is: `cli.py`'s
+`main()` calls `configure_logging(debug=True)` correctly at startup
+(stderr → DEBUG) — then, the first time any module with a module-level
+`_log = get_logger(__name__)` gets imported (confirmed both
+`agent/loop.py` and `tools/websearch.py`, the two modules Phase 5a
+actually instrumented, use exactly this pattern, and imports in this
+codebase are deliberately lazy/local rather than eager at startup), that
+import silently calls bare `configure_logging()` → stderr handler reset
+to WARNING → `--debug` is defeated from that point on. The file handler
+is unaffected only by accident (its level is set once at DEBUG during
+initial setup and never touched again by the idempotent branch) — so the
+persistent log file quietly kept working while stderr verbosity silently
+died, which is exactly the shape of bug that's easy to miss by eyeballing
+the code and easy to catch by actually exercising it. This is a bug
+introduced by this repair itself (`core/logging.py` is new, Phase 5a),
+not a pre-existing issue.
+
+Fix: changed `configure_logging`'s signature from `debug: bool = False`
+to `debug: bool | None = None`. `None` now means "no opinion — ensure
+configured, don't touch an existing verbosity level," so `get_logger`'s
+bare call (still just `configure_logging()`, unchanged) can never again
+clobber an explicit earlier choice. An explicit `True`/`False` (what
+`cli.py` always passes) still sets the level definitively, including
+*changing* an already-set one — confirmed both directions with tests, not
+just the one that was broken. Grepped for every `configure_logging(`
+call site first (only two: `cli.py`'s explicit one, and `get_logger`'s
+bare one) to confirm the fix's blast radius before applying it, and
+grepped for other `_configured`-style idempotent-init guards elsewhere in
+the codebase in case this was a pattern, not a one-off — it isn't;
+`core/logging.py` is the only module shaped like this.
+
+`core/logging.py` had zero test coverage before this (confirmed —
+no existing test file referenced `configure_logging` or `get_logger`),
+which is *why* nothing in the Phase 5a gate re-run caught it: that gate
+was the full test suite, and a bug with no test exercising the affected
+code obviously can't fail a test that doesn't exist. Added
+`tests/test_logging.py` (new file, 7 tests): explicit
+`debug=True`/`debug=False`/default-on-first-setup all set the expected
+stderr level; the regression itself (`configure_logging(debug=True)`
+then `get_logger(...)` must leave stderr at DEBUG, not silently drop to
+WARNING); an explicit `debug=False` sent *after* an explicit
+`debug=True` still overrides (proving only the implicit default is a
+no-op, not explicit `False` generally); `get_logger`'s namespacing
+(`relaycli.x` unchanged, bare `x` becomes `relaycli.x`); and the file
+handler capturing a DEBUG record while stderr is at WARNING (the "log
+tail" half of G12). Verified the regression test actually catches the
+bug before trusting it: `git stash`-ed just the fix and reran
+`tests/test_logging.py` — `test_get_logger_does_not_downgrade_explicit_
+debug` failed with `assert 30 == 10` (WARNING where DEBUG was expected),
+exactly the predicted failure mode; restored the fix and it passed.
+
+Restarting the full gate from G1 per the loop's own rule (diagnose root
+cause, fix, restart entirely — not just re-check G12).
+
 ## Phase 3 — verification gate log
 
 **Attempt 1 — FAILED at G1 (clean install).**

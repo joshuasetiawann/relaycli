@@ -20,19 +20,30 @@ LOG_FILE = LOG_DIR / "relaycli.log"
 _configured = False
 
 
-def configure_logging(*, debug: bool = False) -> logging.Logger:
+def configure_logging(*, debug: bool | None = None) -> logging.Logger:
     """Configure the ``relaycli`` logger tree. Idempotent — safe to call more
     than once (e.g. once from ``cli.py`` with the real ``--debug`` value,
     and again implicitly via :func:`get_logger` from anywhere imported
-    first); later calls only adjust the stderr handler's level.
+    first).
+
+    ``debug=None`` (the default) means "no opinion" — it ensures the tree
+    is configured without touching an already-set verbosity level. This
+    matters because module-level ``_log = get_logger(__name__)`` calls
+    happen lazily, on first import, at unpredictable times relative to
+    ``cli.py``'s startup — if this defaulted to ``False`` instead, the
+    first such lazy import after startup would silently downgrade stderr
+    back to ``WARNING``, defeating an explicit ``--debug`` the moment any
+    module got imported. Pass an explicit ``True``/``False`` to actually
+    set (or change) the stderr verbosity.
     """
     global _configured
     logger = logging.getLogger("relaycli")
 
     if _configured:
-        for handler in logger.handlers:
-            if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stderr:
-                handler.setLevel(logging.DEBUG if debug else logging.WARNING)
+        if debug is not None:
+            for handler in logger.handlers:
+                if isinstance(handler, logging.StreamHandler) and handler.stream is sys.stderr:
+                    handler.setLevel(logging.DEBUG if debug else logging.WARNING)
         return logger
 
     logger.setLevel(logging.DEBUG)
