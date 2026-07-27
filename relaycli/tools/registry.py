@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from pydantic import BaseModel
 
+from relaycli.tools.base import rate_limited
+
 if TYPE_CHECKING:
     from relaycli.tools.base import ToolContext
 
@@ -38,10 +40,12 @@ class Tool:
         params.pop("title", None)
         return {"type": "function", "function": {"name": self.name, "description": self.description, "parameters": params}}
 
+    @rate_limited
     def run(self, arguments: str | dict[str, Any] | None, ctx: ToolContext | None = None) -> Any:
         parsed = self._parse_arguments(arguments)
         return self.func(parsed, ctx)
 
+    @rate_limited
     async def arun(self, arguments: str | dict[str, Any] | None, ctx: ToolContext | None = None) -> Any:
         parsed = self._parse_arguments(arguments)
         result = self.func(parsed, ctx)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from relaycli.config import PermissionMode
@@ -444,3 +446,92 @@ def test_background_tools_registered():
     reviewer = set(reviewer_registry().names())
     assert "check_process" in reviewer
     assert "run_background" not in reviewer and "stop_process" not in reviewer
+
+
+# --- rate limiting (Phase 5e) -------------------------------------------
+def _make_dummy_tool():
+    """A trivial Tool whose func just counts invocations, for testing the
+    @rate_limited decorator in isolation from any real tool's own logic."""
+    from pydantic import BaseModel
+
+    from relaycli.tools.registry import Tool
+
+    class _Args(BaseModel):
+        pass
+
+    calls = {"n": 0}
+
+    def _func(args, ctx):
+        calls["n"] += 1
+        return calls["n"]
+
+    return Tool(name="dummy", description="test", args_model=_Args, func=_func), calls
+
+
+def test_tool_context_default_budget(sample_project):
+    from relaycli.tools.base import DEFAULT_MAX_CALLS_PER_SESSION
+
+    ctx = make_context(sample_project)
+    assert ctx.max_calls_per_session == DEFAULT_MAX_CALLS_PER_SESSION
+    assert ctx.calls_made == 0
+
+
+def test_rate_limited_sync_blocks_after_cap(sample_project):
+    from relaycli.tools.base import ToolCallLimitError
+
+    tool, calls = _make_dummy_tool()
+    ctx = make_context(sample_project)
+    ctx.max_calls_per_session = 2
+
+    assert tool.run({}, ctx) == 1
+    assert tool.run({}, ctx) == 2
+    with pytest.raises(ToolCallLimitError, match=r"tool-call limit \(2\)"):
+        tool.run({}, ctx)
+    assert calls["n"] == 2  # the blocked call never reached the wrapped func
+    assert ctx.calls_made == 2
+
+
+def test_rate_limited_sync_ctx_none_bypasses_budget(sample_project):
+    tool, calls = _make_dummy_tool()
+    for _ in range(5):
+        tool.run({}, None)
+    assert calls["n"] == 5
+
+
+def test_rate_limited_none_cap_disables_budget(sample_project):
+    tool, calls = _make_dummy_tool()
+    ctx = make_context(sample_project)
+    ctx.max_calls_per_session = None
+    for _ in range(10):
+        tool.run({}, ctx)
+    assert calls["n"] == 10
+    assert ctx.calls_made == 0
+
+
+def test_rate_limited_async_blocks_after_cap(sample_project):
+    from relaycli.tools.base import ToolCallLimitError
+
+    tool, calls = _make_dummy_tool()
+    ctx = make_context(sample_project)
+    ctx.max_calls_per_session = 1
+
+    async def _run():
+        assert await tool.arun({}, ctx) == 1
+        with pytest.raises(ToolCallLimitError, match=r"tool-call limit \(1\)"):
+            await tool.arun({}, ctx)
+
+    asyncio.run(_run())
+    assert calls["n"] == 1
+
+
+def test_registry_run_enforces_rate_limit_end_to_end(sample_project):
+    """The decorator must be wired through ToolRegistry.run for real tools,
+    not just exercised against the dummy Tool used in the tests above."""
+    from relaycli.tools.base import ToolCallLimitError
+
+    ctx = make_context(sample_project)
+    ctx.max_calls_per_session = 1
+    reg = default_registry()
+    reg.run("list_dir", {}, ctx)
+    with pytest.raises(ToolCallLimitError):
+        reg.run("list_dir", {}, ctx)

@@ -181,6 +181,70 @@ biggest mover), **`tools/` 81.6%** (unchanged aggregate, `files.py`'s
 removal already banked). Total: 74%→78%. Full gate re-run after this
 item: green (details below).
 
+**5e — rate limiting.** The agent could issue unbounded tool calls per
+session; the master prompt asked for a small decorator in
+`relaycli/tools/base.py` capping calls per session, configurable, generous
+enough not to disturb normal use, with a clear error when the cap is hit.
+
+Added to `relaycli/tools/base.py`: `DEFAULT_MAX_CALLS_PER_SESSION = 300`
+(a normal task rarely uses more than a few dozen calls even across several
+iterations — chosen generous on purpose, as a backstop against a genuinely
+runaway loop rather than a budget normal use would ever approach); a
+`ToolCallLimitError(RuntimeError)`; two new `ToolContext` fields,
+`max_calls_per_session: int | None = DEFAULT_MAX_CALLS_PER_SESSION` and
+`calls_made: int = 0`; and a `rate_limited` decorator built on
+`_check_call_budget()`, which raises `ToolCallLimitError` naming the exact
+cap and how to change it (`max_calls_per_session=<n>`, or `None` to
+disable) once `calls_made >= max_calls_per_session`, and otherwise
+increments the counter and lets the call through. `ctx=None` or
+`max_calls_per_session=None` both bypass the check entirely (no
+increment, no error) — the former so tests/tools that legitimately run
+without a context are unaffected, the latter as the documented opt-out
+for a task that genuinely needs more than 300 calls.
+
+Applied the decorator at one choke-point rather than in each of the ~20
+individual tool modules, per the master prompt's own phrasing ("a small
+decorator... capping calls"): `@rate_limited` on `Tool.run` and
+`Tool.arun` in `relaycli/tools/registry.py`, which is the single place
+every tool dispatch already passes through (`ToolRegistry.run`/`arun` both
+delegate to it). The decorator inspects
+`inspect.iscoroutinefunction(func)` at decoration time to produce either
+an `async def` or plain wrapper, since it's applied to both a sync and an
+async method — verified both paths independently rather than assuming
+symmetry (see tests below).
+
+Smoke-tested manually before writing permanent tests: built a
+`ToolContext` with `max_calls_per_session=3` over a real
+`default_registry()`, confirmed the first 3 `list_dir` calls succeed with
+`calls_made` climbing 1→2→3 and the 4th raises `ToolCallLimitError` with
+the expected message. Then added 6 permanent tests to
+`tests/test_tools.py`: a `_make_dummy_tool()` helper (a `Tool` whose func
+just counts invocations, isolating the decorator's own behaviour from any
+real tool's logic) backs four unit tests — cap-then-block with an exact
+`match=r"tool-call limit \(2\)"` check, `ctx=None` bypass,
+`max_calls_per_session=None` disables tracking entirely (confirmed
+`calls_made` stays `0`, matching `_check_call_budget`'s early return
+before the increment — not just "no error raised"), and the async path
+blocking identically to the sync one. A fifth confirms the
+`ToolContext` default (`DEFAULT_MAX_CALLS_PER_SESSION`, `calls_made=0`
+out of the box). A sixth goes through `default_registry()` + the real
+`list_dir` tool end-to-end, to prove the decorator is actually wired
+through `ToolRegistry.run` and not just exercised against the dummy
+`Tool` used in the other five.
+
+No new third-party dependency needed (`functools`/`inspect` are stdlib).
+No public signature changed for existing callers — both new
+`ToolContext` fields are defaulted, so every existing call site
+(`ToolContext(project=..., permissions=...)`) keeps working unchanged.
+
+Full gate re-run after this item, from a genuinely fresh `.venv-work`
+(deleted and recreated, not just reinstalled) — full G1-G9: **green**.
+G1 clean install, G2 no conflict markers, G3 compileall, G4 import, G5
+`relaycli --help`, G6 no legacy flat-module imports, G8
+`pkgutil.walk_packages` importing every submodule with zero errors, and
+G9 `relaycli doctor` (exit 0) all passed on the first attempt. G7 (full
+suite): **631 collected, 628 passed, 3 known-blocked skips, 0 failed.**
+
 ## Phase 3 — verification gate log
 
 **Attempt 1 — FAILED at G1 (clean install).**
