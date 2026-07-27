@@ -195,6 +195,28 @@ def test_wrap_error_non_auth_unchanged():
     assert "Model call failed for 'openrouter/x/y'" in msg
 
 
+def test_wrap_error_ollama_unreachable_gives_actionable_hint():
+    from relaycli.config import Settings
+
+    llm = LLM(Settings(_env_file=None, ollama_base_url="http://localhost:11434"))
+    msg = str(llm._wrap_error(
+        ConnectionRefusedError("Connection refused"), "ollama_chat/llama3.1",
+    ))
+    assert "ollama serve" in msg
+    assert "localhost:11434" in msg
+
+
+def test_wrap_error_non_ollama_connection_error_unchanged():
+    """The ollama-unreachable hint must not fire for a non-ollama model that
+    happens to raise a connection-shaped error — this is name-scoped, not a
+    generic "any connection error" hint."""
+    from relaycli.config import Settings
+
+    llm = LLM(Settings())
+    msg = str(llm._wrap_error(ConnectionRefusedError("Connection refused"), "openrouter/x/y"))
+    assert "ollama serve" not in msg
+
+
 def test_best_ollama_model_prefers_tool_capable_hint(monkeypatch):
     from relaycli.config import Settings
     import relaycli.core.llm as llm

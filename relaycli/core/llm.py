@@ -685,7 +685,16 @@ class LLM:
             if match:
                 detail = f"Model not found — use '{match.group(1)}' instead."
         msg = f"Model call failed for '{model}' ({name}): {detail}"
-        if "AuthenticationError" in name:
+        is_ollama = model.startswith(("ollama_chat/", "ollama/"))
+        connection_like = any(
+            kw in detail.lower() for kw in ("connection", "refused", "timed out", "timeout")
+        )
+        if is_ollama and connection_like:
+            msg += (
+                f"\nOllama isn't reachable at {ollama_host_label(self.settings)} — "
+                "start it with: ollama serve"
+            )
+        elif "AuthenticationError" in name:
             provider = _resolve_provider(model)
             if provider:
                 msg += (

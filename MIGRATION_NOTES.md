@@ -66,6 +66,39 @@ and fixes in the message.
 Full gate re-run after this item: green (577 collected — 566 + the 11 new
 tests — 574 passed, 3 known-blocked, 0 failed).
 
+**5c — actionable error messages.** Audited the named failure paths before
+changing anything — most were already mature (this codebase was clearly
+built with this in mind well before this repair):
+
+- Missing API key (`render_setup_panel`): already gives "Fastest
+  fixes"/"Manual fixes" with the exact `relaycli init`/`relaycli config
+  set-key` commands, plus a security-conscious anti-spoofing guard on the
+  env-var name it suggests.
+- LLM auth rejected (`LLM._wrap_error`): already names the provider and
+  suggests `relaycli config set-key <provider>`.
+- Model not found: already extracts and suggests the correct slug from the
+  provider's own error body when present.
+- Ollama model not installed (`Repl._cmd_model`): already names the model
+  and suggests `relaycli config ollama-pull <name>`.
+- Path outside project root, permission declined: already name the
+  specific path/root and the specific declined action.
+
+One genuine, evidenced gap found: **`LLM._wrap_error` had no dedicated
+branch for "Ollama isn't running"** — a connection-refused/timeout error
+talking to a local Ollama model fell through to the generic `"Model call
+failed for '<model>' (<ExceptionType>): <detail>"` with no next step,
+unlike the sibling `AuthenticationError` branch two lines below it which
+does suggest a concrete fix. Added an `is_ollama and connection_like`
+branch suggesting `ollama serve`, scoped narrowly (only fires for
+`ollama_chat/`/`ollama/`-prefixed models with a connection/timeout-shaped
+message) so it can't misfire for a real provider's own connection error —
+covered by a same-shape regression test
+(`test_wrap_error_non_ollama_connection_error_unchanged`) alongside the
+positive case, both in `tests/test_llm_unit.py` next to the existing
+`_wrap_error` tests.
+
+Full gate re-run after this item: green.
+
 ## Phase 3 — verification gate log
 
 **Attempt 1 — FAILED at G1 (clean install).**
