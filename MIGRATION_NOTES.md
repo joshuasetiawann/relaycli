@@ -1,5 +1,111 @@
 # MIGRATION_NOTES.md
 
+## Final Report
+
+**Status: green.** All 6 phases of the master prompt complete. Branch
+`repair/merge-and-migration` merges `main`'s uncommitted work with
+`acb74e0`'s incoming branch, resolves all 25 conflicted files, finishes
+the flat→layered architecture migration, and passes a full G1-G13
+verification gate from a clean install. 11 commits (`ce012c7`..`c6ac60d`),
+each labeled and scoped to one phase/item. Working tree clean.
+
+**What was broken:** 25 files with real unresolved conflict markers (96
+blocks); an unpublished `json-repair==0.35.1` pin blocking install;
+`Settings.settings_customise_sources` hardcoding the real config path
+(silently defeating every test's hermeticity monkeypatch — root cause of
+~50/68 initial test failures); three shim-indirection bugs (tests
+patching a re-export module's attribute instead of the defining module's
+own namespace — `config/manager.py`, `mcp/bridge.py`, `core/config.py`);
+`_json_from_text` returning `''` instead of `None` in two independent
+copies (`agent/loop.py`, `agent/__init__.py`); `core/llm.py` missing
+`ollama_host_label` entirely despite `ui/render.py`/`ui/web.py` already
+importing it (a live latent `ImportError` on the web UI's main polling
+endpoint); `ui/render.py` being a different, deliberately minimal
+reimplementation rather than an incomplete migration; `ui/repl.py`'s
+unescaped `[on|off]` Rich-markup bug, an always-`True`
+`_ensure_runnable_local_model`, and a missing frontend-scaffold path;
+`ui/web.py` missing the roster API / Ollama-pull / frontend-scaffold /
+slow-model-switch, and importing the same missing `ollama_host_label`.
+
+**What was changed:** Phase 1 resolved all 25 conflicts (default "keep
+HEAD," ~8 evidenced deviations). Phase 2 deleted 3 dead shadowed modules
+(`agent.py`, `config.py`, `mcp.py`) and reconciled all 12 duplicate
+flat/layered pairs to one canonical location. Phase 3 fixed the
+json-repair pin, the config-source bug, the 3 shim-indirection bugs, the
+`_json_from_text` bug, and rewrote `render.py` — 3 gate attempts to
+green. Phase 5: structured logging + `--debug` (5a), `Settings`
+validators (5b), actionable Ollama-unreachable hint (5c), coverage
+closed to ≥80% on core/agent/tools + 2 more dead duplicates deleted
+(`agent/pipeline.py`, `tools/files.py`) (5d), tool-call rate limiting
+(5e), module-splitting assessed and deliberately deferred (5f). Phase 6
+found and fixed one more real bug (`get_logger()` silently downgrading
+an explicit `--debug` — see its own gate log entry below), then G1-G13
+green.
+
+**Decisions needing judgement:** kept HEAD by default, ~8 evidenced
+deviations (see Phase 1 log); deleted `agent/pipeline.py` (dead,
+degraded duplicate of `relay.py`), left `config/menu.py` alone (same
+dead-duplicate shape, cleanup more invasive — flagged for follow-up);
+removed a sub-agent's unrequested `except Exception` guard added during
+Phase 2 reconciliation (behavior freeze applies); added `pytest-cov` as
+a dev dependency after asking via `AskUserQuestion` and getting no
+response inside the timeout (proceeded per established practice,
+documented); Phase 5f deliberately not attempted (restructural, not
+additive like 5a-5e; this codebase has shown repeated real fragility
+around cross-module references this session — reasoning in the Phase 5f
+entry below).
+
+**Symbols ported:** `ollama_host_label` and the unresolvable-provider
+`AuthenticationError` fallback (flat `llm.py` → `core/llm.py`);
+`_ensure_runnable_local_model`'s real logic, `_try_frontend_scaffold`,
+the `local_scaffolds` gate (flat `repl.py` → `ui/repl.py`); roster API,
+`pull_ollama()`, frontend-scaffold branch, slow-model auto-switch (flat
+`web.py` → `ui/web.py`); the entire tested `render.py`, rewritten into
+`ui/render.py` wholesale; richer docstrings ported flat → layered for 4
+logic-identical pairs.
+
+**Improvements added:** structured logging to
+`~/.relaycli/logs/relaycli.log` + `--debug`/`-v` (5a); `Settings`
+validation for `model`/API keys with actionable fixes (5b); actionable
+hint for an unreachable Ollama server (5c); configurable tool-call rate
+limiting with a clear error on hit (5e).
+
+**Coverage:** total **78%** (7008 stmts, 1523 missed), up from a 74%
+baseline. Per-directory: **`core/` 83.8%**, **`agent/` 85.9%** (was
+66.1%, biggest mover), **`tools/` 82.3%** — all three master-prompt
+targets met.
+
+**Known-blocked tests:** all 3 skips are `tests/test_e2e_live.py`,
+self-gated behind `RELAYCLI_E2E_MODEL` plus a real provider key since
+they call a live model — not run in this environment by design.
+
+**Latent issues found but NOT fixed:** `config/menu.py` remains a
+dormant, unused duplicate of `config_menu.py` (recommend deleting in a
+follow-up pass, needs a small `config/manager.py` edit first); the
+"frozen reference across module boundaries" bug class recurred 6 times
+this session (3 shim-indirection bugs, 2 duplicate-`_json_from_text`
+copies, the Phase 6 logging bug) and has not had an exhaustive
+from-scratch audit to rule out further instances; `core/llm.py`'s
+`_missing_key_message`/`_credential_kwargs` exact wording is a
+low-risk, undisambiguated judgment call; the 4 oversized modules from
+5f remain unsplit.
+
+**How to verify:**
+
+```bash
+rm -rf .venv-work && python3 -m venv .venv-work && source .venv-work/bin/activate
+pip install -e ".[dev]"                                       # G1
+grep -rln '^<<<<<<< ' --include='*.py' --include='*.toml' .   # G2 — expect nothing
+python -m compileall -q relaycli tests                        # G3
+python -c "import relaycli"                                    # G4
+relaycli --help                                                 # G5
+relaycli doctor                                                 # G9
+python -m pytest -q --cov=relaycli --cov-report=term-missing  # G7 + G10 — expect 638 collected, 635 passed, 3 skipped, 0 failed, 78% total
+```
+
+Full reasoning trail and every judgment call are in the phase sections
+below, in the order they were written during the work.
+
 ## Phase 5 — quality hardening
 
 **5a — structured logging.** Added `relaycli/core/logging.py`: a
