@@ -1,0 +1,179 @@
+# RelayCLI heuristics configuration
+# Extracted from agent.py hardcoded tuples for maintainability.
+# Each section is optional; missing keys fall back to built-in defaults.
+
+text_tool_aliases:
+  # Model-output tool name -> canonical registry name
+  ls: list_dir
+  list_directory: list_dir
+  list_files: list_dir
+  read: read_file
+  open_file: read_file
+  cat: read_file
+  write: write_file
+  create_file: write_file
+  save_file: write_file
+  replace_file: write_file
+  mkdir: create_folder
+  create_dir: create_folder
+  create_directory: create_folder
+  make_directory: create_folder
+  run: run_command
+  shell: run_command
+  run_shell: run_command
+  execute_command: run_command
+  terminal: run_command
+  webfetch: webfetch
+  fetch: webfetch
+  web_fetch: webfetch
+  curl: webfetch
+  ask: question
+  askuser: question
+  git: git
+  patch: apply_patch
+  think: think
+  reason: think
+  web_search: websearch
+  search_web: websearch
+
+string_argument_keys:
+  # tool -> single-key fallback when the model passes a plain string
+  list_dir: path
+  read_file: path
+  create_folder: path
+  find_files: pattern
+  search: query
+  run_command: command
+  run_background: command
+  check_process: id
+  stop_process: id
+  webfetch: url
+  websearch: query
+  git: args
+  apply_patch: patch
+  todo_add: content
+  question: question
+  think: thought
+
+create_folder_path_keys:
+  # keys to probe when a model sends create_folder with non-standard arg names
+  - path
+  - folder_name
+  - folder_path
+  - name
+  - directory
+  - directory_name
+  - dir_name
+
+file_action_terms:
+  # Terms that signal a file-changing intent in the user's request
+  - buat
+  - buatin
+  - bikin
+  - create
+  - build
+  - generate
+  - tulis
+  - write
+  - add
+  - tambah
+  - ubah
+  - edit
+  - ganti
+  - update
+  - perbaiki
+  - perbagus
+  - fix
+  - scaffold
+
+file_target_terms:
+  # Terms that identify "what kind of file task" the user wants
+  - website
+  - "web "
+  - " web"
+  - html
+  - css
+  - javascript
+  - " js"
+  - frontend
+  - front end
+  - landing
+  - halaman
+  - platform
+  - aplikasi
+  - file
+  - folder
+  - directory
+  - direktori
+
+clarification_or_tutorial_terms:
+  # Model output patterns that indicate the model is stalling or asking
+  - don't have enough information
+  - do not have enough information
+  - need more information
+  - provide more details
+  - provide more context
+  - provide the details
+  - provide me with
+  - necessary information
+  - here are the steps
+  - steps to create
+  - you can further customize
+
+short_actionable_noop_replies:
+  # Short model replies that claim completion without doing work
+  - "done"
+  - "done."
+  - "finished"
+  - "finished."
+  - "complete"
+  - "complete."
+  - "completed"
+  - "completed."
+  - "ok"
+  - "okay"
+  - "selesai"
+  - "selesai."
+  - "beres"
+  - "beres."
+  - "sudah"
+  - "sudah."
+
+file_done_claim_terms:
+  # Text fragments implying the model *claims* it did file work
+  - "<tool_response>"
+  - "created file"
+  - "created the file"
+  - "file created"
+  - "wrote file"
+  - "wrote the file"
+  - "write complete"
+  - "website created"
+  - "files created"
+  - "created successfully"
+  - "i created"
+  - "i've created"
+  - "i have created"
+  - "created the website"
+  - "created the web"
+  - "created the app"
+  - "built the website"
+  - "built the web"
+  - "generated the website"
+  - "finished the website"
+  - "completed the website"
+  - "the files are ready"
+  - "index.html to preview"
+  - "open index.html"
+  - "open the index.html"
+  - "sudah dibuat"
+  - "telah dibuat"
+  - "berhasil dibuat"
+  - "bisa langsung dibuka"
+
+file_done_claim_patterns:
+  # Regex patterns (Python syntax) that detect a completion claim
+  - "\\b(?:i|we)\\s+(?:created|built|generated|wrote|implemented|finished|completed)\\b"
+  - "\\b(?:i(?:'ve| have)|we(?:'ve| have))\\s+(?:created|built|generated|written|implemented|finished|completed)\\b"
+  - "\\b(?:created|built|generated|wrote|implemented|finished|completed)\\s+(?:the\\s+)?(?:website|web|site|app|page|frontend|file|files)\\b"
+  - "\\b(?:sudah|telah|berhasil)\\s+(?:saya\\s+)?(?:buat|dibuat|membuat|selesaikan|selesai)\\b"
