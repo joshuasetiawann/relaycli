@@ -16,6 +16,14 @@ class ApplyPatchArgs(BaseModel):
 
 
 def apply_patch(args: ApplyPatchArgs, ctx: ToolContext | None) -> ToolResult:
+    if ctx is not None:
+        preview = args.patch if len(args.patch) <= 2000 else args.patch[:2000] + "\n... (truncated)"
+        decision = ctx.permissions.confirm(
+            "write", prompt_text=f"Apply this patch?\n{preview}"
+        )
+        if not decision.approved:
+            return ToolResult.error("Patch was not approved.", summary="patch (declined)")
+
     root = ctx.project.root if ctx else Path.cwd()
     patch_file = root / ".relaycli_patch.tmp"
     try:

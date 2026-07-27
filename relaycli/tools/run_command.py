@@ -97,8 +97,23 @@ def run_command(args: RunCommandArgs, ctx: ToolContext) -> ToolResult:
 
 
 def _scrubbed_env() -> dict[str, str]:
-    """A copy of the environment with RelayCLI's provider keys removed."""
-    return {k: v for k, v in os.environ.items() if k.upper() not in _SENSITIVE_ENV}
+    """A copy of the environment with RelayCLI's provider keys removed.
+
+    Two layers: the explicit _SENSITIVE_ENV list above, plus a name-pattern
+    check for anything ending in _API_KEY. Every current provider field in
+    core/config.py's Settings (openai/anthropic/gemini/groq/mistral/
+    openrouter, each with its own RELAYCLI_-prefixed alias) follows that
+    exact suffix — the pattern check means a new provider added there is
+    scrubbed automatically without _SENSITIVE_ENV needing a matching edit,
+    rather than silently falling out of sync with it over time. Deliberately
+    narrower than a catch-all "key"/"secret"/"token" substring match: a task
+    that needs AWS_SECRET_ACCESS_KEY or GITHUB_TOKEN to do its job (aws-cli,
+    gh-cli, ...) keeps it, matching _SENSITIVE_ENV's own stated intent above.
+    """
+    return {
+        k: v for k, v in os.environ.items()
+        if k.upper() not in _SENSITIVE_ENV and not k.upper().endswith("_API_KEY")
+    }
 
 
 def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:

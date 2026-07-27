@@ -247,6 +247,43 @@ def test_run_command_runs_in_project_root(sample_project):
     assert str(sample_project.resolve()) in res.output
 
 
+def test_run_command_scrubs_any_api_key_suffix(monkeypatch, sample_project):
+    """Regression: a security review flagged that swapping the live
+    run_command implementation (from the now-deleted shell.py, whose scrub
+    was a broad 'key'/'secret'/'token'/... substring match) to this module's
+    explicit-list-only scrub narrowed what got stripped from a spawned
+    command's environment. This is the fix — a name-pattern check that
+    covers any current or future *_API_KEY var, not just the explicitly
+    named ones — verified end-to-end through a real spawned command rather
+    than just unit-testing _scrubbed_env in isolation. Echoes the one
+    variable directly (rather than dumping the whole `env`) so the
+    per-stream output cap can't produce a false negative by truncation.
+    """
+    monkeypatch.setenv("SOME_NEW_PROVIDER_API_KEY", "leaked-if-this-fails")
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    res = run_command(
+        RunCommandArgs(command="echo VALUE=${SOME_NEW_PROVIDER_API_KEY:-UNSET}"), ctx
+    )
+    assert res.ok
+    assert "VALUE=UNSET" in res.output
+    assert "leaked-if-this-fails" not in res.output
+
+
+def test_run_command_scrub_preserves_aws_and_github_credentials(monkeypatch, sample_project):
+    """The *_API_KEY pattern must not catch these — a task legitimately
+    using aws-cli or gh-cli needs them, and run_command.py's own
+    _SENSITIVE_ENV docstring says so explicitly."""
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "aws-should-survive")
+    monkeypatch.setenv("GITHUB_TOKEN", "gh-should-survive")
+    ctx = make_context(sample_project, PermissionMode.full_auto)
+    res = run_command(
+        RunCommandArgs(command="echo AWS=$AWS_SECRET_ACCESS_KEY GH=$GITHUB_TOKEN"), ctx
+    )
+    assert res.ok
+    assert "AWS=aws-should-survive" in res.output
+    assert "GH=gh-should-survive" in res.output
+
+
 # --- registry wiring ---------------------------------------------------
 def test_default_registry_has_all_tools():
     reg = default_registry()

@@ -318,6 +318,52 @@ def test_git_timeout_expired_handling(ctx):
     assert "timeout" in result.output.lower() or "timed out" in result.output.lower()
 
 
+# ── git: permission gating (regression — git_run had zero confirm() at all) ──
+
+def test_git_safe_subcommand_needs_no_confirmation(tmp_path):
+    from relaycli.tools.git_tool import git_run, GitRunArgs
+    import subprocess
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    # suggest mode, no prompter -> any confirm() call would raise/decline.
+    ctx = ToolContext(project=ProjectContext(tmp_path),
+                      permissions=PermissionManager(PermissionMode.suggest, console=console),
+                      console=console)
+    result = git_run(GitRunArgs(args="status"), ctx)
+    assert result.ok
+
+
+def test_git_unsafe_subcommand_requires_permission(tmp_path):
+    from relaycli.tools.git_tool import git_run, GitRunArgs
+    import subprocess
+    subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+
+    declining = ToolContext(
+        project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.suggest, prompter=lambda _t: False, console=console),
+        console=console,
+    )
+    declined = git_run(GitRunArgs(args="commit -m nope"), declining)
+    assert not declined.ok
+    assert "not approved" in declined.output
+
+    approving = ToolContext(
+        project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.suggest, prompter=lambda _t: True, console=console),
+        console=console,
+    )
+    approved = git_run(GitRunArgs(args="branch"), approving)
+    assert approved.ok
+
+
+def test_git_empty_args_is_a_clean_error(ctx):
+    from relaycli.tools.git_tool import git_run, GitRunArgs
+    result = git_run(GitRunArgs(args=""), ctx)
+    assert not result.ok
+    assert "no git subcommand" in result.output.lower()
+
+
 # ── apply_patch ────────────────────────────────────────────────────────
 
 def test_apply_patch_simple(tmp_path, ctx):
@@ -380,6 +426,53 @@ def test_apply_patch_via_registry(tmp_path, ctx):
         mock.return_value.stdout = "done"
         mock.return_value.stderr = ""
         result = r.run("apply_patch", json.dumps({"patch": diff_body}), ctx)
+    assert result.ok
+
+
+# ── apply_patch: permission gating (regression — zero confirm() at all) ──
+
+def test_apply_patch_requires_permission_declined(tmp_path):
+    from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
+    (tmp_path / "f.txt").write_text("old\n")
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    ctx = ToolContext(
+        project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.suggest, prompter=lambda _t: False, console=console),
+        console=console,
+    )
+    diff_body = "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-old\n+new\n"
+    result = apply_patch(ApplyPatchArgs(patch=diff_body), ctx)
+    assert not result.ok
+    assert "not approved" in result.output
+    assert (tmp_path / "f.txt").read_text() == "old\n"
+
+
+def test_apply_patch_requires_permission_approved(tmp_path):
+    from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
+    (tmp_path / "f.txt").write_text("old\n")
+    console = Console(file=io.StringIO(), force_terminal=False, width=100)
+    ctx = ToolContext(
+        project=ProjectContext(tmp_path),
+        permissions=PermissionManager(PermissionMode.suggest, prompter=lambda _t: True, console=console),
+        console=console,
+    )
+    diff_body = "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-old\n+new\n"
+    with mock_patch("subprocess.run", side_effect=FileNotFoundError):
+        result = apply_patch(ApplyPatchArgs(patch=diff_body), ctx)
+    assert result.ok
+    assert (tmp_path / "f.txt").read_text() == "new\n"
+
+
+def test_apply_patch_auto_approved_in_full_auto(tmp_path, ctx):
+    """No prompter is configured on the shared full_auto ctx fixture — this
+    only passes if full_auto genuinely bypasses the prompt rather than
+    hanging or erroring on a missing prompter."""
+    from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
+    (tmp_path / "f.txt").write_text("old\n")
+    ctx2 = ToolContext(project=ProjectContext(tmp_path), permissions=PermissionManager(PermissionMode.full_auto, console=ctx.console), console=ctx.console)
+    diff_body = "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-old\n+new\n"
+    with mock_patch("subprocess.run", side_effect=FileNotFoundError):
+        result = apply_patch(ApplyPatchArgs(patch=diff_body), ctx2)
     assert result.ok
 
 
