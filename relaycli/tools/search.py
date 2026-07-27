@@ -1,4 +1,4 @@
-"""Search tool — grep-like content search across the project."""
+"""search tool — ripgrep-backed code search with a pure-Python fallback."""
 
 from __future__ import annotations
 
@@ -8,84 +8,123 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from relaycli.context import PathSafetyError, ProjectContext
+from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult
-from relaycli.tools.registry import Tool, ToolRegistry
+
+NAME = "search"
+DESCRIPTION = (
+    "Search the project for a pattern (regex by default) and return matching "
+    "'path:line: text' results. Uses ripgrep when available; respects "
+    ".gitignore and skips secret files."
+)
+
+_DEFAULT_MAX_RESULTS = 200
+_MAX_LINE_LEN = 400
 
 
 class SearchArgs(BaseModel):
-    query: str = Field(description="Regex pattern to search for")
-    path: str | None = Field(default=None, description="Directory to search (default: project root)")
-    include: str | None = Field(default=None, description="File pattern (e.g. '*.py', '*.{ts,tsx}')")
-    max_results: int | None = Field(default=30, ge=1, le=200)
+    query: str = Field(description="Pattern to search for.")
+    path: str | None = Field(
+        default=None, description="Optional subdirectory/file to scope the search."
+    )
+    fixed_strings: bool = Field(
+        default=False, description="Treat the query as a literal string, not a regex."
+    )
+    max_results: int = Field(default=_DEFAULT_MAX_RESULTS, ge=1, le=2000)
 
-def search(args: SearchArgs, ctx: ToolContext | None) -> ToolResult:
+
+def search(args: SearchArgs, ctx: ToolContext) -> ToolResult:
+    proj = ctx.project
     try:
-        base = ctx.project.resolve(args.path) if args.path else ctx.project.root
-    except Exception as exc:
-        return ToolResult.error(str(exc))
-    if not base.is_dir():
-        return ToolResult.error(f"Not a directory: {args.path or '.'}")
-    include = args.include or ""
-    cmd = ["rg", "--no-heading", "--line-number", "--color", "never"]
-    if args.max_results:
-        cmd.extend(["-m", str(args.max_results)])
-    if include:
-        cmd.extend(["-g", include])
-    cmd.extend([args.query, str(base)])
+        base = proj.resolve(args.path, must_exist=True) if args.path else proj.root
+    except PathSafetyError as exc:
+        return ToolResult.error(str(exc), summary=f"search (refused: {args.path})")
+
+    matches = _ripgrep(args, base, proj)
+    if matches is None:  # ripgrep unavailable -> python fallback
+        matches = _python_search(args, base, proj)
+
+    if not matches:
+        return ToolResult(ok=True, output="No matches found.", summary=f"search '{args.query}' (0)")
+
+    shown = matches[: args.max_results]
+    body = "\n".join(shown)
+    if len(matches) > len(shown):
+        body += f"\n[... {len(matches) - len(shown)} more matches truncated ...]"
+    return ToolResult(
+        ok=True,
+        output=body,
+        summary=f"search '{args.query}' ({len(matches)} matches)",
+        meta={"count": len(matches)},
+    )
+
+
+def _ripgrep(args: SearchArgs, base: Path, proj: ProjectContext) -> list[str] | None:
+    cmd = ["rg", "--line-number", "--no-heading", "--color", "never"]
+    if args.fixed_strings:
+        cmd.append("--fixed-strings")
+    cmd += ["--", args.query, str(base)]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=15, errors="replace")
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except FileNotFoundError:
-        return _fallback_search(args.query, base, include, args.max_results or 30)
-    except OSError as exc:
-        return ToolResult.error(str(exc))
-    if proc.returncode not in (0, 1):
-        return ToolResult.error(f"Search failed: {proc.stderr[:500]}")
-    output = proc.stdout.strip()
-    if not output:
-        return ToolResult(ok=True, output="(no matches)", summary="found 0 matches")
-    lines = output.split("\n")
-    # Filter ignored files
-    if ctx:
-        filtered = [l for l in lines if not any(ctx.project.is_ignored(l.split(":")[0]) for part in [l])]
-        filtered = lines
+        return None  # signal: fall back to python
+    except subprocess.SubprocessError:
+        return []
+    if proc.returncode not in (0, 1):  # 1 == no matches
+        return []
+
+    results: list[str] = []
+    for line in proc.stdout.splitlines():
+        parsed = _normalize_rg_line(line, proj)
+        if parsed:
+            results.append(parsed)
+    return results
+
+
+def _normalize_rg_line(line: str, proj: ProjectContext) -> str | None:
+    # rg output: <path>:<lineno>:<text>
+    parts = line.split(":", 2)
+    if len(parts) < 3:
+        return None
+    path_str, lineno, text = parts
+    path = Path(path_str)
+    if proj.is_secret(path):
+        return None  # never surface secret-file contents in results
+    rel = proj.relative(path)
+    return f"{rel}:{lineno}: {text[:_MAX_LINE_LEN].rstrip()}"
+
+
+def _python_search(args: SearchArgs, base: Path, proj: ProjectContext) -> list[str]:
+    if args.fixed_strings:
+        pattern = re.compile(re.escape(args.query))
     else:
-        filtered = lines
-    count = len(filtered)
-    result = "\n".join(filtered[:args.max_results or 30])
-    if count > (args.max_results or 30):
-        result += f"\n... and {count - (args.max_results or 30)} more matches"
-    return ToolResult(ok=True, output=result, summary=f"found {count} matches")
+        try:
+            pattern = re.compile(args.query)
+        except re.error as exc:
+            return [f"(invalid regex: {exc})"]
 
-
-def _fallback_search(query: str, base: Path, include: str | None, max_results: int) -> ToolResult:
-    """Pure-Python fallback when ripgrep is unavailable."""
-    matches: list[str] = []
-    try:
-        for path in base.rglob(include or "*"):
-            if not path.is_file():
-                continue
-            try:
-                text = path.read_text(encoding="utf-8", errors="replace")
-            except Exception:
-                continue
-            for i, line in enumerate(text.splitlines(), 1):
-                if re.search(query, line):
-                    rel = str(path.relative_to(base))
-                    matches.append(f"{rel}:{i}:{line[:200]}")
-                    if len(matches) >= max_results:
-                        break
-            if len(matches) >= max_results:
-                break
-    except OSError:
-        pass
-    return ToolResult(ok=True, output="\n".join(matches) if matches else "(no matches)",
-                      summary=f"found {len(matches)} matches")
-
-
-def register_search(reg: ToolRegistry) -> None:
-    reg.add(Tool(name="search", description="Search file contents with regex (uses ripgrep if available)",
-                 args_model=SearchArgs, func=search))
+    results: list[str] = []
+    files = [base] if base.is_file() else base.rglob("*")
+    for file in files:
+        if not file.is_file():
+            continue
+        if proj.is_secret(file) or proj.is_ignored(file):
+            continue
+        try:
+            with file.open("r", encoding="utf-8", errors="ignore") as fh:
+                for lineno, text in enumerate(fh, start=1):
+                    if "\x00" in text:
+                        break  # binary; stop scanning this file
+                    if pattern.search(text):
+                        rel = proj.relative(file)
+                        results.append(f"{rel}:{lineno}: {text[:_MAX_LINE_LEN].rstrip()}")
+                        if len(results) >= args.max_results * 2:
+                            return results
+        except OSError:
+            continue
+    return results
 
 
 def register(reg: ToolRegistry) -> None:
-    register_search(reg)
+    reg.add(Tool(name=NAME, description=DESCRIPTION, args_model=SearchArgs, func=search))

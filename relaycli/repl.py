@@ -29,7 +29,7 @@ from relaycli.context import ProjectContext
 from relaycli.frontend_scaffold import create_frontend_scaffold, detect_frontend_scaffold
 from relaycli.intent import continuation_for, local_reply_for
 from relaycli.llm import is_warm, key_status, preflight_settings
-from relaycli.ollama_runtime import slow_local_model_warning
+from relaycli.ollama_runtime import recommended_fast_local_model, slow_local_model_warning
 from relaycli.permissions import PermissionManager
 from relaycli.render import (
     RichReporter,
@@ -400,9 +400,26 @@ class Repl:
         if self._manual_model_selected:
             self._print_manual_slow_warning_once(warning)
             return True
+        fallback = recommended_fast_local_model(self.settings)
+        if fallback and fallback != self.settings.model:
+            old = self.settings.model
+            self.console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+            self.settings.model = fallback
+            try:
+                from relaycli.appconfig import set_base_model
+
+                set_base_model(fallback)
+            except Exception:
+                pass
+            self.agent.session.model = fallback
+            self.agent.refresh_system_prompt()
+            self.console.print(
+                f"[yellow]model auto-switch:[/yellow] {escape(old)} → {escape(fallback)} "
+                "[dim](requires full GPU / avoids CPU-GPU fallback)[/dim]"
+            )
+            return True
         self.console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
-        self.console.print("[dim]auto-switch disabled — keeping your model. Use `/model` to switch.[/dim]")
-        return True
+        return False
 
     def _print_manual_slow_warning_once(self, warning: str) -> None:
         """Warn once per manually selected slow local model.

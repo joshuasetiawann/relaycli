@@ -67,26 +67,18 @@ def test_slash_model_warns_for_slow_local_model(monkeypatch):
     assert "manual model kept" in out
 
 
-def test_repl_warns_for_slow_local_model_and_proceeds(monkeypatch):
+def test_repl_skips_agent_for_slow_local_model(monkeypatch):
     import relaycli.repl as repl_mod
-    from relaycli.agent import AgentResult
 
     monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "slow local model")
-    repl, console = _repl(model="ollama_chat/qwen3:4b", relay_enabled=False)
-    called = {}
-
-    def fake_run(request, reporter=None):
-        called["request"] = request
-        return AgentResult("ok", 1, 0, Usage(total_tokens=1), "done")
-
-    monkeypatch.setattr(repl.agent, "run", fake_run)
+    monkeypatch.setattr(repl_mod, "recommended_fast_local_model", lambda settings: None)
+    repl, console = _repl(model="ollama_chat/qwen3:4b")
+    monkeypatch.setattr(repl.agent, "run", lambda *args, **kwargs: pytest.fail("agent ran"))
 
     repl._run_agent("jelasin repo ini")
 
-    assert called["request"] == "jelasin repo ini"
     out = _out(console)
     assert "slow local model" in out
-    assert "auto-switch disabled" in out
 
 
 def test_repl_auto_switches_slow_local_model(monkeypatch):
@@ -94,7 +86,12 @@ def test_repl_auto_switches_slow_local_model(monkeypatch):
     from relaycli.agent import AgentResult
 
     monkeypatch.setattr(repl_mod, "slow_local_model_warning", lambda model: "partial gpu")
-    repl, console = _repl(model="ollama_chat/qwen3:4b", relay_enabled=False)
+    monkeypatch.setattr(
+        repl_mod,
+        "recommended_fast_local_model",
+        lambda settings: "ollama_chat/qwen2.5-coder:0.5b",
+    )
+    repl, console = _repl(model="ollama_chat/qwen3:4b")
     called = {}
 
     def fake_run(request, reporter=None):
@@ -106,9 +103,10 @@ def test_repl_auto_switches_slow_local_model(monkeypatch):
     repl._run_agent("jelasin repo ini")
 
     assert called["request"] == "jelasin repo ini"
-    assert repl.settings.model == "ollama_chat/qwen3:4b"
+    assert repl.settings.model == "ollama_chat/qwen2.5-coder:0.5b"
+    assert repl.agent.session.model == "ollama_chat/qwen2.5-coder:0.5b"
     out = _out(console)
-    assert "auto-switch disabled" in out
+    assert "model auto-switch" in out
 
 
 def test_repl_respects_manually_selected_slow_local_model(monkeypatch):
@@ -123,7 +121,7 @@ def test_repl_respects_manually_selected_slow_local_model(monkeypatch):
         "recommended_fast_local_model",
         lambda settings: "ollama_chat/qwen2.5-coder:0.5b",
     )
-    repl, console = _repl(model="ollama_chat/qwen2.5-coder:1.5b", relay_enabled=False)
+    repl, console = _repl(model="ollama_chat/qwen2.5-coder:1.5b")
     called = {}
 
     def fake_run(request, reporter=None):
@@ -140,6 +138,7 @@ def test_repl_respects_manually_selected_slow_local_model(monkeypatch):
     out = _out(console)
     assert "manual model kept" in out
     assert out.count("manual model kept") == 1
+    assert "Switch to a smaller" not in out
     assert "model auto-switch" not in out
 
 
