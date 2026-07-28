@@ -38,6 +38,11 @@ from relaycli.mcp_cli import mcp_app  # noqa: E402
 
 app.add_typer(mcp_app, name="mcp")
 
+# `relaycli plugin …` — plugin management (see plugin_cli).
+from relaycli.plugin_cli import plugin_app  # noqa: E402
+
+app.add_typer(plugin_app, name="plugin")
+
 
 def _apply_overrides(settings: Settings, model: str | None, mode: str | None) -> None:
     if model:
