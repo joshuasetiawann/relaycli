@@ -151,6 +151,7 @@ One-shot mode:
 relaycli -p "find every TODO and summarize them"
 relaycli -p "fix the import error" --mode auto-edit
 relaycli -p "review the current diff" --relay
+relaycli -p "add a health endpoint" --no-experimental-parallel  # single agent, no task graph
 ```
 
 Desktop UI:
@@ -262,6 +263,42 @@ Turn it on with:
 ```
 
 Use `/config` to enable specialists and assign their models.
+
+## Parallel Orchestration
+
+The default pipeline as of this release: an Orchestrator role reads the
+request once and decomposes it into a task graph (independent steps run
+concurrently; dependent steps wait), instead of running Planner → Coder →
+Reviewer in sequence.
+
+```bash
+relaycli -p "add a health endpoint and its test"
+# same thing, explicit:
+relaycli -p "..." --experimental-parallel
+```
+
+Fall back to the sequential relay pipeline for one run, or turn parallel
+off entirely:
+
+```bash
+relaycli -p "..." --no-experimental-parallel   # single agent, one run
+relaycli -p "..." --relay                      # relay pipeline, one run
+```
+
+```toml
+# ~/.relaycli/config.toml
+experimental_parallel = false   # disable permanently
+max_concurrent_agents = 3       # concurrency cap
+```
+
+A live pinned status bar + lane list shows progress while it runs — only
+when running interactively in **full-auto** permission mode, since a
+permission prompt can't safely share the screen with a display that's
+redrawing itself. Any other permission mode prints one line per task as
+it changes state instead.
+
+This path is newer than relay/task-split and has had less real-world
+mileage; if something looks wrong, `--relay` is the well-worn fallback.
 
 ## Skills
 

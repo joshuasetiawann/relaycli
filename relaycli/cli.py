@@ -86,9 +86,12 @@ def main(
         help="Refuse every cloud provider; only local (ollama_chat/ollama) models are used.",
     ),
     experimental_parallel: bool = typer.Option(
-        False, "--experimental-parallel",
+        None, "--experimental-parallel/--no-experimental-parallel",
         help="Decompose the request into a task graph and run roster agents "
-             "concurrently instead of the sequential relay/single-agent pipeline.",
+             "concurrently instead of the sequential relay/single-agent "
+             "pipeline. On by default as of Stage 7 — pass "
+             "--no-experimental-parallel to fall back to sequential relay "
+             "for one run (relay_enabled/--relay is unaffected either way).",
     ),
 ) -> None:
     """Launch the REPL, or run a one-shot request with -p."""
@@ -109,8 +112,8 @@ def main(
         settings.relay_enabled = relay
     if offline:
         settings.offline = True
-    if experimental_parallel:
-        settings.experimental_parallel = True
+    if experimental_parallel is not None:
+        settings.experimental_parallel = experimental_parallel
 
     if prompt is not None:
         _run_once(settings, prompt, assume_yes=yes)

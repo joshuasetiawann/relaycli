@@ -611,7 +611,11 @@ class TestCliRelayFlag:
                 calls["request"] = request
                 return RelayResult(final_text="ok", stopped_reason="done", cycles=0)
 
-        monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
+        # experimental_parallel=False: this class tests relay-vs-single-agent
+        # dispatch specifically, which parallel (default-on, higher
+        # precedence in _run_once) would otherwise short-circuit entirely.
+        monkeypatch.setattr(cli_module, "get_settings",
+                            lambda: _settings(model="fake/m", experimental_parallel=False))
         monkeypatch.setattr("relaycli.relay.Relay", FakeRelay)
         result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "--relay", "-y"])
         assert result.exit_code == 0, result.output
@@ -633,7 +637,8 @@ class TestCliRelayFlag:
                 return AgentResult(final_text="ok", iterations=1, tool_calls=0,
                                    usage=Usage(), stopped_reason="done")
 
-        monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
+        monkeypatch.setattr(cli_module, "get_settings",
+                            lambda: _settings(model="fake/m", experimental_parallel=False))
         monkeypatch.setattr("relaycli.relay.Relay", BoomRelay)
         monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
         result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "-y"])
@@ -656,11 +661,73 @@ class TestCliRelayFlag:
                                    usage=Usage(), stopped_reason="done")
 
         monkeypatch.setattr(cli_module, "get_settings",
-                            lambda: _settings(model="fake/m", relay_enabled=True))
+                            lambda: _settings(model="fake/m", relay_enabled=True,
+                                               experimental_parallel=False))
         monkeypatch.setattr("relaycli.relay.Relay", BoomRelay)
         monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
         result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "--no-relay", "-y"])
         assert result.exit_code == 0, result.output
+
+
+def test_experimental_parallel_defaults_on():
+    """Stage 7: flipped on by default now that Stages 3-6 are green.
+    relay_enabled is unaffected and stays its own separate default."""
+    settings = _settings(model="fake/m")
+    assert settings.experimental_parallel is True
+    assert settings.relay_enabled is False
+
+
+class TestCliExperimentalParallelFlag:
+    def test_no_flag_uses_parallel_by_default(self, sample_project, monkeypatch):
+        """Mirrors test_one_shot_without_flag_uses_single_agent, but for
+        the new default direction: with nothing passed, run_parallel is
+        what actually runs now, not the single Agent path."""
+        monkeypatch.chdir(sample_project)
+        calls: dict = {}
+
+        async def fake_run_parallel(settings, request, **kw):
+            calls["request"] = request
+            from relaycli.agent.graph import Task, TaskGraph
+            from relaycli.agent.scheduler import SchedulerResult
+            from relaycli.agent.budget import BudgetGovernor
+            from relaycli.agent.blackboard import Blackboard
+            graph = TaskGraph.from_tasks([Task(id="t1", role_id="coder", goal="x")])
+            graph.mark_done("t1")  # __post_init__ would force a fresh no-deps task to
+            # "ready" regardless of a status= passed at construction — go through the
+            # real API instead so all_ok() (which _run_once's exit code depends on)
+            # sees a genuinely completed task, not a fixture artifact.
+            return SchedulerResult(graph=graph, blackboard=Blackboard(), budget=BudgetGovernor())
+
+        monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
+        monkeypatch.setattr("relaycli.agent.orchestrator.run_parallel", fake_run_parallel)
+        result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "-y"])
+        assert result.exit_code == 0, result.output
+        assert calls == {"request": "fix app"}
+
+    def test_no_experimental_parallel_flag_falls_back_to_single_agent(self, sample_project, monkeypatch):
+        monkeypatch.chdir(sample_project)
+
+        class BoomOrchestrator:
+            def __call__(self, *a, **kw):
+                raise AssertionError("run_parallel must not run with --no-experimental-parallel")
+
+        class FakeAgent:
+            def __init__(self, *a, **kw):
+                pass
+
+            def run(self, request, *, reporter=None):
+                from relaycli.agent import AgentResult
+                return AgentResult(final_text="ok", iterations=1, tool_calls=0,
+                                   usage=Usage(), stopped_reason="done")
+
+        monkeypatch.setattr(cli_module, "get_settings", lambda: _settings(model="fake/m"))
+        monkeypatch.setattr("relaycli.agent.orchestrator.run_parallel", BoomOrchestrator())
+        monkeypatch.setattr("relaycli.agent.Agent", FakeAgent)
+        result = CliRunner().invoke(
+            cli_module.app, ["-p", "fix app", "--no-experimental-parallel", "-y"]
+        )
+        assert result.exit_code == 0, result.output
+
 
 class TestReplRelayCommand:
     def _repl(self) -> Repl:

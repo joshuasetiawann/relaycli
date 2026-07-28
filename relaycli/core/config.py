@@ -91,9 +91,11 @@ class Settings(BaseSettings):
 
     # Part A (parallel orchestration): the master prompt's own rule 2 —
     # "Parallelism lands behind a flag... users must be able to fall back."
-    # False by default; sequential relay (relay_enabled) is unaffected by
-    # this and keeps working exactly as before regardless of this flag.
-    experimental_parallel: bool = Field(default=False)
+    # Stage 7 flips this to on-by-default now that Stage 3-6 are green;
+    # --relay / relay_enabled (sequential) is unaffected and still there
+    # as the fallback the rule requires — --no-experimental-parallel (or
+    # editing this in config.toml) opts back out per-run or permanently.
+    experimental_parallel: bool = Field(default=True)
     max_concurrent_agents: int = Field(default=3, ge=1)
 
     # Tier-based routing (v2 Part B): a pipeline role's default tier
