@@ -363,3 +363,77 @@ def test_result_elapsed_is_populated():
     graph = _graph(Task(id="a", role_id="coder", goal="x"))
     result = asyncio.run(Scheduler(graph, run_task).run())
     assert result.elapsed >= 0
+
+
+# --- on_tick: the hook a live view (ui/live.py) redraws from ---------------
+def test_on_tick_fires_during_a_normal_run():
+    async def run_task(task):
+        return _instant_ok(task)
+
+    calls = []
+    graph = _graph(Task(id="a", role_id="coder", goal="x"), Task(id="b", role_id="coder", goal="y"))
+    asyncio.run(Scheduler(graph, run_task, on_tick=lambda: calls.append(1)).run())
+    assert calls, "on_tick should fire at least once for a run that does real work"
+
+
+def test_on_tick_can_read_live_scheduler_state_mid_run():
+    # Two-phase setup: the closure needs a scheduler reference, but the
+    # scheduler constructor needs the closure — `holder` breaks the cycle.
+    holder: dict = {}
+    seen_running = []
+
+    def on_tick():
+        statuses = {tid: t.status for tid, t in holder["scheduler"].graph.tasks.items()}
+        if "running" in statuses.values():
+            seen_running.append(statuses)
+
+    async def run_task(task):
+        await asyncio.to_thread(time.sleep, 0.1)
+        return _instant_ok(task)
+
+    graph = _graph(Task(id="a", role_id="coder", goal="x"))
+    sched = Scheduler(graph, run_task, on_tick=on_tick, should_stop_poll_interval=0.02)
+    holder["scheduler"] = sched
+    result = asyncio.run(sched.run())
+
+    assert seen_running, "on_tick should observe the task in a 'running' state before it completes"
+    assert result.graph.tasks["a"].status == "done"
+
+
+def test_on_tick_exception_does_not_crash_the_scheduler():
+    async def run_task(task):
+        return _instant_ok(task)
+
+    def bad_tick():
+        raise RuntimeError("boom — a rendering bug must not take the scheduler down")
+
+    graph = _graph(Task(id="a", role_id="coder", goal="x"))
+    result = asyncio.run(Scheduler(graph, run_task, on_tick=bad_tick).run())
+    assert graph.all_ok()
+    assert not result.stopped_early
+
+
+def test_on_tick_fires_after_should_stop_cancellation_cleanup():
+    async def main():
+        async def run_task(task):
+            await asyncio.to_thread(time.sleep, 1.0)
+            return TaskOutcome(task_id=task.id, ok=True, summary="done")
+
+        graph = _graph(*(Task(id=f"t{i}", role_id="coder", goal="x") for i in range(2)))
+        stop_flag = {"go": False}
+        calls = []
+        sched = Scheduler(
+            graph, run_task, max_concurrent_agents=2, on_tick=lambda: calls.append(1),
+            should_stop=lambda: stop_flag["go"], should_stop_poll_interval=0.05,
+        )
+
+        async def stopper():
+            await asyncio.sleep(0.1)
+            stop_flag["go"] = True
+
+        await asyncio.gather(sched.run(), stopper())
+        return calls, graph
+
+    calls, graph = asyncio.run(main())
+    assert calls
+    assert all(t.status == "cancelled" for t in graph.tasks.values())

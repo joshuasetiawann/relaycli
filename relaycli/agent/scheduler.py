@@ -68,6 +68,7 @@ class Scheduler:
         budget: BudgetGovernor | None = None,
         should_stop: Callable[[], bool] | None = None,
         should_stop_poll_interval: float = 0.2,
+        on_tick: Callable[[], None] | None = None,
     ) -> None:
         self.graph = graph
         self._run_task = run_task
@@ -77,6 +78,20 @@ class Scheduler:
         self.budget = budget if budget is not None else BudgetGovernor()
         self._should_stop = should_stop
         self._should_stop_poll_interval = should_stop_poll_interval
+        self._on_tick = on_tick
+
+    def _tick(self) -> None:
+        """Fired once per loop iteration (see run(), via try/finally, so
+        every break/continue path still ticks) and once more after
+        stopped_early cleanup — a live view (ui/live.py) reads self.graph /
+        self.budget / self.leases from here to redraw. Exceptions from a
+        misbehaving callback must not take the scheduler down with them."""
+        if self._on_tick is None:
+            return
+        try:
+            self._on_tick()
+        except Exception:
+            _log.exception("on_tick callback raised; ignoring")
 
     async def run(self) -> SchedulerResult:
         started = time.perf_counter()
@@ -85,69 +100,78 @@ class Scheduler:
         stopped_early = False
 
         while not self.graph.is_finished():
-            if self._should_stop is not None and self._should_stop():
-                stopped_early = True
-                break
-
-            launched_this_round = self._launch_ready(running)
-
-            if self.graph.is_finished():
-                # _launch_ready can itself finish the graph (e.g. a budget
-                # breach marks the last ready task failed without ever
-                # launching it) — that's a normal, successful stop, not a
-                # stall, so the outer while's own condition would already
-                # exit next iteration; breaking now just skips a needless
-                # asyncio.wait() with nothing running.
-                break
-
-            if not running:
-                if not launched_this_round and not self.graph.ready_tasks():
-                    # Nothing running, nothing ready, graph genuinely not
-                    # finished: every remaining task is blocked/waiting on
-                    # something that will never resolve (e.g. a lease held
-                    # by a task that already finished but wasn't released —
-                    # a bug, not a normal state) rather than genuinely stuck.
-                    _log.warning("scheduler stalled: nothing running or ready, "
-                                 "but the graph isn't finished")
+            # try/finally, not a tick() call at every break/continue site:
+            # on_tick must fire once per iteration on *every* path through
+            # this body (early stall, budget breach, plain timeout, a
+            # completion) without duplicating the call at each exit.
+            try:
+                if self._should_stop is not None and self._should_stop():
                     stopped_early = True
-                break
+                    break
 
-            # Bounded wait, not an unbounded FIRST_COMPLETED: should_stop is
-            # only rechecked at the top of this loop, so if every running
-            # task takes longer than this timeout, an unbounded wait would
-            # make a stop request (Ctrl-C) sit unnoticed until some task
-            # finishes on its own — found by a test asserting cancellation
-            # actually happens promptly, not just eventually.
-            done, _pending = await asyncio.wait(
-                running.values(), return_when=asyncio.FIRST_COMPLETED,
-                timeout=self._should_stop_poll_interval,
-            )
-            if not done:
-                continue  # nothing finished within the poll window; recheck should_stop
-            for fut in done:
-                task_id = next(tid for tid, t in running.items() if t is fut)
-                del running[task_id]
-                outcome = await fut
-                outcomes[task_id] = outcome
-                self.leases.release(task_id)
-                try:
-                    self.budget.record(task_id, outcome.usage)
-                except BudgetExceeded as exc:
-                    # The task itself already ran and its outcome stands —
-                    # a breach discovered on completion doesn't retroactively
-                    # undo work that already happened. Its only effect is on
-                    # what gets to launch *next* (check_before_launch, in
-                    # _launch_ready) — logged here so the reason is visible.
-                    _log.warning("%s", exc)
-                self.blackboard.post(Finding(
-                    task_id=task_id, role=self.graph.tasks[task_id].role_id,
-                    kind="task_result", summary=outcome.summary, refs=outcome.refs,
-                ))
-                if outcome.ok:
-                    self.graph.mark_done(task_id)
-                else:
-                    self.graph.mark_failed(task_id)
-                    _log.warning("task '%s' failed: %s", task_id, outcome.error or outcome.summary)
+                launched_this_round = self._launch_ready(running)
+
+                if self.graph.is_finished():
+                    # _launch_ready can itself finish the graph (e.g. a budget
+                    # breach marks the last ready task failed without ever
+                    # launching it) — that's a normal, successful stop, not a
+                    # stall, so the outer while's own condition would already
+                    # exit next iteration; breaking now just skips a needless
+                    # asyncio.wait() with nothing running.
+                    break
+
+                if not running:
+                    if not launched_this_round and not self.graph.ready_tasks():
+                        # Nothing running, nothing ready, graph genuinely not
+                        # finished: every remaining task is blocked/waiting on
+                        # something that will never resolve (e.g. a lease held
+                        # by a task that already finished but wasn't released —
+                        # a bug, not a normal state) rather than genuinely stuck.
+                        _log.warning("scheduler stalled: nothing running or ready, "
+                                     "but the graph isn't finished")
+                        stopped_early = True
+                    break
+
+                # Bounded wait, not an unbounded FIRST_COMPLETED: should_stop is
+                # only rechecked at the top of this loop, so if every running
+                # task takes longer than this timeout, an unbounded wait would
+                # make a stop request (Ctrl-C) sit unnoticed until some task
+                # finishes on its own — found by a test asserting cancellation
+                # actually happens promptly, not just eventually. The same
+                # timeout doubles as on_tick's cadence (default 0.2s = 5Hz,
+                # comfortably under the design's 15fps redraw ceiling).
+                done, _pending = await asyncio.wait(
+                    running.values(), return_when=asyncio.FIRST_COMPLETED,
+                    timeout=self._should_stop_poll_interval,
+                )
+                if not done:
+                    continue  # nothing finished within the poll window; recheck should_stop
+                for fut in done:
+                    task_id = next(tid for tid, t in running.items() if t is fut)
+                    del running[task_id]
+                    outcome = await fut
+                    outcomes[task_id] = outcome
+                    self.leases.release(task_id)
+                    try:
+                        self.budget.record(task_id, outcome.usage)
+                    except BudgetExceeded as exc:
+                        # The task itself already ran and its outcome stands —
+                        # a breach discovered on completion doesn't retroactively
+                        # undo work that already happened. Its only effect is on
+                        # what gets to launch *next* (check_before_launch, in
+                        # _launch_ready) — logged here so the reason is visible.
+                        _log.warning("%s", exc)
+                    self.blackboard.post(Finding(
+                        task_id=task_id, role=self.graph.tasks[task_id].role_id,
+                        kind="task_result", summary=outcome.summary, refs=outcome.refs,
+                    ))
+                    if outcome.ok:
+                        self.graph.mark_done(task_id)
+                    else:
+                        self.graph.mark_failed(task_id)
+                        _log.warning("task '%s' failed: %s", task_id, outcome.error or outcome.summary)
+            finally:
+                self._tick()
 
         if stopped_early:
             for task_id, fut in running.items():
@@ -156,6 +180,8 @@ class Scheduler:
                 self.graph.mark_cancelled(task_id)
             if running:
                 await asyncio.gather(*running.values(), return_exceptions=True)
+            self._tick()  # the loop's per-iteration tick predates this cleanup;
+            # without this, a live view's last frame would miss the cancellations.
 
         return SchedulerResult(
             graph=self.graph, blackboard=self.blackboard, budget=self.budget,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Callable
 
 from rich.console import Console
 
@@ -120,6 +121,7 @@ async def run_parallel(
     project: ProjectContext | None = None,
     permissions: PermissionManager | None = None,
     llm: LLM | None = None,
+    on_tick: Callable[[], None] | None = None,
 ) -> SchedulerResult:
     """Decompose `request` via the Orchestrator role, then run the
     resulting graph concurrently. The single real entry point
@@ -128,6 +130,11 @@ async def run_parallel(
     make_run_task via test_agent_orchestrator.py with a fake factory,
     Scheduler via test_agent_scheduler.py) since a live multi-model run
     isn't something this session can exercise end-to-end.
+
+    `on_tick`, if given, is forwarded straight to Scheduler (see its
+    docstring) — a live view (ui/live.py) uses it to redraw from
+    `scheduler.graph`/`.budget`/`.leases` as the run progresses, without
+    run_parallel needing to know anything about rendering.
     """
     from relaycli.appconfig import load_app_config
     from relaycli.core.roster import specialist_runtime
@@ -155,6 +162,6 @@ async def run_parallel(
     )
     scheduler = Scheduler(
         graph, make_run_task(factory), max_concurrent_agents=settings.max_concurrent_agents,
-        leases=leases, budget=budget,
+        leases=leases, budget=budget, on_tick=on_tick,
     )
     return await scheduler.run()
