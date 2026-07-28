@@ -140,6 +140,7 @@ def _register_defaults(reg: ToolRegistry) -> None:
         apply_patch as _apply_patch,
         think as _think,
         websearch as _websearch,
+        use_skill as _use_skill,
     )
     _list_dir.register(reg)
     _read_file.register(reg)
@@ -158,6 +159,7 @@ def _register_defaults(reg: ToolRegistry) -> None:
     _apply_patch.register(reg)
     _think.register(reg)
     _websearch.register(reg)
+    _use_skill.register(reg)
 
 
 def planner_registry() -> ToolRegistry:

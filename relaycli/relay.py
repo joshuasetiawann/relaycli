@@ -332,6 +332,11 @@ class Relay:
             role=role,
             skills_block=self.skills_block if role is Role.coder else "",
             should_stop=self.should_stop,
+            # Role's str value already matches a real roster role id for
+            # planner/coder/tester/reviewer (core/roles.py); "explorer" has
+            # no roster equivalent and simply won't match any skill's
+            # roles: list, which is a harmless, correct outcome.
+            roster_role_id=str(role),
         )
 
     def _run_role(
@@ -369,6 +374,7 @@ class Relay:
             model=rt.model,
             skills_block=self.skills_block,
             should_stop=self.should_stop,
+            roster_role_id=role_id,
         )
 
     def _run_tasks(

@@ -292,7 +292,7 @@ def test_default_registry_has_all_tools():
                 "run_background", "check_process", "stop_process",
                 "remember", "webfetch", "websearch", "question",
                 "todo_add", "todo_update", "todo_list", "git",
-                "apply_patch", "think"}
+                "apply_patch", "think", "use_skill"}
     assert set(reg.names()) == expected
     assert "get_time" not in reg.names()
 

@@ -30,6 +30,7 @@ from relaycli.core.permissions import PermissionManager
 from relaycli.core.session import Session
 from relaycli.core.memory import memory_prompt_block
 from relaycli.heuristics import load_heuristics
+from relaycli.skills import discover_skills, skills_catalog_block
 from relaycli.tools import ToolError, ToolRegistry, default_registry
 from relaycli.tools.base import ToolContext, ToolResult
 from relaycli.agent.reporter import Reporter
@@ -101,6 +102,7 @@ class Agent:
         skills_block: str = "",
         should_stop: Callable[[], bool] | None = None,
         pass_tool_schemas: bool = True,
+        roster_role_id: str | None = None,
     ) -> None:
         self.settings = settings or get_settings()
         self.console = console or Console()
@@ -121,6 +123,11 @@ class Agent:
         self._role = role
         self._health = HealthTracker()
         self._skills_block = skills_block
+        # core/roles.py role id ("tester", "backend", ...) — None for the
+        # relay pipeline's advisory roles and single-agent/REPL mode,
+        # where there's no roster role to filter a skills catalog by
+        # (skills_catalog_block treats None as "show everything").
+        self._roster_role_id = roster_role_id
         self._should_stop = should_stop
         self._heuristics = load_heuristics()
         self._memory_block = memory_prompt_block(self.project.root)
@@ -143,6 +150,12 @@ class Agent:
         from relaycli.core.project_hints import project_prompt_block
         extra += project_prompt_block(self.project)
         extra += self._skills_block
+        # Progressive disclosure's "always injected" half — name+description
+        # only, gated on the agent actually having tools (no point
+        # advertising use_skill to an agent that can't call it, e.g. the
+        # Orchestrator's pass_tool_schemas=False planning-only agent).
+        if self._schemas:
+            extra += skills_catalog_block(discover_skills(self.project.root), role_id=self._roster_role_id)
         extra += self._memory_block
         return prompt + extra
 

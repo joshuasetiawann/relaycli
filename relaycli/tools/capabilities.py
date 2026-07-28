@@ -30,6 +30,7 @@ TOOL_CAPABILITIES: dict[str, str] = {
     "todo_list": "read",
     "question": "read",
     "think": "read",
+    "use_skill": "read",
     "write_file": "write",
     "edit_file": "write",
     "create_folder": "write",

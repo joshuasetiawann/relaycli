@@ -104,6 +104,7 @@ class TaskAgentFactory:
             self.settings, console=self.console, project=self.project,
             permissions=self.permissions, llm=self.llm,
             prompt_template=runtime.template, model=runtime.model, registry=registry,
+            roster_role_id=role_id,
         )
         agent.tool_ctx = ctx
         return agent, ctx
