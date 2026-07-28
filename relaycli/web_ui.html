@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -22,7 +22,7 @@
 	      <div class="menu project-menu hidden" id="projectMenu">
 	        <div class="head">Project directory</div>
 	        <div class="crow">
-	          <input id="projectPath" autocomplete="off">
+	          <input id="projectPath" autocomplete="off" aria-label="Project directory">
 	          <button id="projectSet">Set</button>
 	        </div>
 	      </div>
@@ -35,7 +35,7 @@
 	    </button>
 
 	    <div class="menu-wrap">
-      <button class="btn" id="modelBtn">
+      <button class="btn" id="modelBtn" title="Change model">
         <svg viewBox="0 0 24 24" fill="var(--accent)"><path d="M12 2l1.7 6.1L20 10l-6.3 1.9L12 18l-1.7-6.1L4 10l6.3-1.9z"></path></svg>
         <span id="modelName">…</span>
         <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="#6E6F77" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg>
@@ -51,7 +51,7 @@
         <div id="recentItems"></div>
         <div class="provider-grid" id="providerItems"></div>
         <div class="model-tools">
-          <input id="modelQ" placeholder="search selected provider models" autocomplete="off">
+          <input id="modelQ" placeholder="search selected provider models" autocomplete="off" aria-label="Search selected provider models">
         </div>
         <div id="modelItems"></div>
         <div class="custom collapsed" id="modelAdvanced">
@@ -59,12 +59,12 @@
             <div class="h">Custom · any provider / model</div>
             <div class="chips" id="provChips"></div>
             <div class="crow">
-              <input id="customModel" placeholder="e.g. groq/llama-3.3-70b-versatile" autocomplete="off">
+              <input id="customModel" placeholder="e.g. groq/llama-3.3-70b-versatile" autocomplete="off" aria-label="Custom model">
               <button id="customSet">Set</button>
             </div>
             <div class="h" style="margin-top:10px">Ollama · pull local model</div>
             <div class="crow">
-              <input id="ollamaModel" placeholder="qwen2.5-coder:0.5b" autocomplete="off">
+              <input id="ollamaModel" placeholder="qwen2.5-coder:0.5b" autocomplete="off" aria-label="Ollama model to pull">
               <button id="ollamaPull">Pull</button>
             </div>
           </div>
@@ -88,10 +88,10 @@
       <div class="menu settings hidden" id="configMenu">
         <div class="sec">
           <div class="h">Pipeline</div>
-          <div class="setrow"><div class="l"><div class="t">Relay</div><div class="s">Planner → Coder → Reviewer</div></div><div class="tog" data-flag="relay"><span></span></div></div>
-          <div class="setrow"><div class="l"><div class="t">Task-split</div><div class="s">Delegate each step to a specialist</div></div><div class="tog" data-flag="tasks"><span></span></div></div>
-          <div class="setrow"><div class="l"><div class="t">Explorer</div><div class="s">Scout before planning</div></div><div class="tog" data-flag="explorer"><span></span></div></div>
-          <div class="setrow"><div class="l"><div class="t">Tester</div><div class="s">Run the verification step</div></div><div class="tog" data-flag="tester"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Relay</div><div class="s">Planner → Coder → Reviewer</div></div><div class="tog" data-flag="relay" role="switch" tabindex="0" aria-checked="false" aria-label="Relay"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Task-split</div><div class="s">Delegate each step to a specialist</div></div><div class="tog" data-flag="tasks" role="switch" tabindex="0" aria-checked="false" aria-label="Task-split"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Explorer</div><div class="s">Scout before planning</div></div><div class="tog" data-flag="explorer" role="switch" tabindex="0" aria-checked="false" aria-label="Explorer"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Tester</div><div class="s">Run the verification step</div></div><div class="tog" data-flag="tester" role="switch" tabindex="0" aria-checked="false" aria-label="Tester"><span></span></div></div>
         </div>
         <div class="sec">
           <div class="h">Roles &amp; Models · the team</div>
@@ -120,8 +120,8 @@
           <div class="h">Appearance</div>
           <div class="setrow"><div class="l"><div class="t">Accent</div><div class="s">The signal color</div></div>
             <div class="swatches" id="swatches"></div></div>
-          <div class="setrow"><div class="l"><div class="t">Theme</div><div class="s">Light or dark surface</div></div><div class="tog" id="themeTog"><span></span></div></div>
-          <div class="setrow"><div class="l"><div class="t">Reduce motion</div><div class="s">Pause pulses and shimmer</div></div><div class="tog" id="reduceTog"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Theme</div><div class="s">Light or dark surface</div></div><div class="tog" id="themeTog" role="switch" tabindex="0" aria-checked="false" aria-label="Light theme"><span></span></div></div>
+          <div class="setrow"><div class="l"><div class="t">Reduce motion</div><div class="s">Pause pulses and shimmer</div></div><div class="tog" id="reduceTog" role="switch" tabindex="0" aria-checked="false" aria-label="Reduce motion"><span></span></div></div>
         </div>
         <div class="foot"><span class="v" id="ver2"></span></div>
       </div>
@@ -148,8 +148,8 @@
         <div class="cmd-palette hidden" id="cmdPalette"></div>
         <div class="box">
           <span class="caret">❯</span>
-          <input id="input" placeholder="Message the agents…" autocomplete="off">
-          <button class="send" id="send" title="Send">
+          <input id="input" placeholder="Message the agents…" autocomplete="off" aria-label="Message the agents">
+          <button class="send" id="send" title="Send" aria-label="Send">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5"></path></svg>
           </button>
         </div>
@@ -164,7 +164,7 @@
         <span><i style="background:var(--t5)"></i>idle</span>
       </div>
       <div class="zoom">
-        <button id="zOut">−</button><span class="zv" id="zVal">100%</span><button id="zIn">+</button>
+        <button id="zOut" aria-label="Zoom out">−</button><span class="zv" id="zVal">100%</span><button id="zIn" aria-label="Zoom in">+</button>
       </div>
     </div>
 
@@ -202,9 +202,9 @@
       <span class="cnt" id="lineCount"></span>
 	      <button class="thbtn" id="termCopy" title="Copy all output">copy</button>
 	      <button class="thbtn" id="termClear" title="Clear output">clear</button>
-	      <button class="thbtn" id="termSmaller" title="Shorter terminal">−</button>
-	      <button class="thbtn" id="termLarger" title="Taller terminal">+</button>
-	      <button class="chev" id="termToggle"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg></button>
+	      <button class="thbtn" id="termSmaller" title="Shorter terminal" aria-label="Shorter terminal">−</button>
+	      <button class="thbtn" id="termLarger" title="Taller terminal" aria-label="Taller terminal">+</button>
+	      <button class="chev" id="termToggle" aria-label="Toggle terminal"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m6 9 6 6 6-6"></path></svg></button>
     </div>
     <div class="term-body" id="log"></div>
     <button class="newlines hidden" id="newLines">↓ new output</button>

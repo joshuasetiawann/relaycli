@@ -235,16 +235,30 @@ function renderModels() {
   bindModelButtons($("modelItems"), visible);
 }
 
+// A11y: .tog/.swatch are custom controls built from div/span (not
+// button/input), so Enter/Space activation isn't native — bridge it to
+// the same click handler instead of duplicating each one's logic.
+// aria-checked/aria-pressed are synced next to every classList.toggle
+// ("on", ...) call below so the state is visible to assistive tech, not
+// only sighted users.
+function bridgeKeyboard(el) {
+  el.onkeydown = (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); el.click(); }
+  };
+}
+
 // CONFIGURATION panel — pipeline, the roster (roles & models), providers & keys.
 function renderConfig() {
   for (const t of document.querySelectorAll("#configMenu .tog[data-flag]")) {
     const on = !!state[t.dataset.flag];
     t.classList.toggle("on", on);
+    t.setAttribute("aria-checked", String(on));
     t.onclick = async () => {
       const next = !t.classList.contains("on");
       const r = await api("/api/flag", { name: t.dataset.flag, on: next });
       if (r.ok) { await loadState(); }
     };
+    bridgeKeyboard(t);
   }
   renderRoster();
   renderApiKeys();
@@ -254,28 +268,42 @@ function renderConfig() {
 }
 
 // SETTINGS panel — general preferences only (appearance).
+const ACCENT_NAMES = ["blue", "green", "amber", "purple", "red"];
 function renderSettings() {
   $("ver2").textContent = "v" + (state.version || "");
   const sw = $("swatches");
-  sw.innerHTML = ACCENTS.map((c) => `<span class="swatch" data-c="${c}" style="background:${c}"></span>`).join("");
+  sw.innerHTML = ACCENTS.map((c, i) => `<span class="swatch" data-c="${c}" style="background:${c}"
+    role="button" tabindex="0" aria-pressed="false" aria-label="${ACCENT_NAMES[i] || "accent"} accent"></span>`).join("");
   for (const s of sw.children) {
-    s.classList.toggle("on", s.dataset.c === (localStorage.accent || "#5FA8DC"));
+    const on = s.dataset.c === (localStorage.accent || "#5FA8DC");
+    s.classList.toggle("on", on);
+    s.setAttribute("aria-pressed", String(on));
     s.onclick = () => { document.documentElement.style.setProperty("--accent", s.dataset.c);
-      localStorage.accent = s.dataset.c; for (const x of sw.children) x.classList.toggle("on", x === s); };
+      localStorage.accent = s.dataset.c;
+      for (const x of sw.children) { const sel = x === s; x.classList.toggle("on", sel); x.setAttribute("aria-pressed", String(sel)); } };
+    bridgeKeyboard(s);
   }
   const tt = $("themeTog");
-  tt.classList.toggle("on", document.documentElement.dataset.theme === "light");
+  const lightNow = document.documentElement.dataset.theme === "light";
+  tt.classList.toggle("on", lightNow);
+  tt.setAttribute("aria-checked", String(lightNow));
   tt.onclick = () => {
     const light = document.documentElement.dataset.theme !== "light";
     document.documentElement.dataset.theme = light ? "light" : "dark";
     localStorage.theme = light ? "light" : "dark";
     tt.classList.toggle("on", light);
+    tt.setAttribute("aria-checked", String(light));
   };
+  bridgeKeyboard(tt);
   const rt = $("reduceTog");
-  rt.classList.toggle("on", localStorage.reduce === "1");
-  document.body.classList.toggle("reduce", localStorage.reduce === "1");
+  const reduceNow = localStorage.reduce === "1";
+  rt.classList.toggle("on", reduceNow);
+  rt.setAttribute("aria-checked", String(reduceNow));
+  document.body.classList.toggle("reduce", reduceNow);
   rt.onclick = () => { const on = !rt.classList.contains("on"); rt.classList.toggle("on", on);
+    rt.setAttribute("aria-checked", String(on));
     localStorage.reduce = on ? "1" : "0"; document.body.classList.toggle("reduce", on); };
+  bridgeKeyboard(rt);
 }
 
 /* ---- slash command palette ---- */
