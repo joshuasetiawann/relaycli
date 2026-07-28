@@ -745,7 +745,11 @@ function renderTaskLanes() {
     stage.innerHTML = `<div class="hint">parallel orchestrator — <b>send a request</b> to watch tasks run</div>`;
     return;
   }
-  const sorted = ids.slice().sort((a, b) => taskDepth(a, new Set()) - taskDepth(b, new Set()) || a.localeCompare(b));
+  // Depth first, then the orchestrator's own planned order — Array.sort is
+  // stable, so omitting a tiebreak preserves insertion order. An earlier
+  // alphabetical tiebreak floated an unstarted "docs-pass" above the
+  // finished "survey-api" it was planned after, which reads as wrong.
+  const sorted = ids.slice().sort((a, b) => taskDepth(a, new Set()) - taskDepth(b, new Set()));
   stage.innerHTML = sorted.map(id => {
     const t = taskLanes[id];
     const cls = statusClass(t.status);
