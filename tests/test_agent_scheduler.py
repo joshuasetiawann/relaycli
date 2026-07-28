@@ -45,6 +45,31 @@ def test_independent_tasks_all_complete():
     assert not result.stopped_early
 
 
+def test_outcomes_and_task_started_at_are_readable_mid_run_via_on_tick():
+    # A live view (ui/live.py) has no other way to see per-task usage/cost
+    # (Agent.run() only returns a usage total at completion) or per-task
+    # elapsed time — both must be live-readable off the Scheduler instance.
+    holder: dict = {}
+    snapshots = []
+
+    def on_tick():
+        sched = holder["scheduler"]
+        snapshots.append((dict(sched.task_started_at), dict(sched.outcomes)))
+
+    async def run_task(task):
+        await asyncio.to_thread(time.sleep, 0.05)
+        return TaskOutcome(task_id=task.id, ok=True, summary="done", usage=Usage(total_tokens=42))
+
+    graph = _graph(Task(id="a", role_id="coder", goal="x"))
+    sched = Scheduler(graph, run_task, on_tick=on_tick, should_stop_poll_interval=0.01)
+    holder["scheduler"] = sched
+    asyncio.run(sched.run())
+
+    assert any("a" in started for started, _ in snapshots), \
+        "task_started_at should show 'a' while it's running, before it completes"
+    assert sched.outcomes["a"].usage.total_tokens == 42
+
+
 def test_scheduler_result_carries_graph_and_budget_references():
     async def run_task(task):
         return _instant_ok(task)

@@ -23,15 +23,16 @@ class _FakeOrchestratorAgent:
     """Stands in for agent/loop.py's Agent — .run(request) is the only
     method build_task_graph calls."""
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, *, stopped_reason: str = "done"):
         self._text = text
+        self._stopped_reason = stopped_reason
         self.requests: list[str] = []
 
     def run(self, request: str) -> AgentResult:
         self.requests.append(request)
         return AgentResult(
             final_text=self._text, iterations=1, tool_calls=0,
-            usage=Usage(total_tokens=10), stopped_reason="done",
+            usage=Usage(total_tokens=10), stopped_reason=self._stopped_reason,
         )
 
 
@@ -82,6 +83,47 @@ def test_build_task_graph_accepts_every_real_builtin_role():
         )
         graph = build_task_graph("x", orchestrator_agent=agent)
         assert graph.tasks["t1"].role_id == role.id
+
+
+def test_build_task_graph_reports_the_real_error_when_the_call_itself_failed():
+    """Regression: found by actually running --experimental-parallel
+    end to end (Ollama unreachable there) — before this check,
+    build_task_graph fed an LLM-error string straight into the JSON
+    parser and produced a misleading "task #0 is not an object" instead
+    of the real cause."""
+    agent = _FakeOrchestratorAgent(
+        "LLM error: Model call failed for 'ollama_chat/x' (APIConnectionError): "
+        "Ollama isn't reachable at localhost:11434 — start it with: ollama serve",
+        stopped_reason="error",
+    )
+    with pytest.raises(GraphError, match="Ollama isn't reachable"):
+        build_task_graph("do something", orchestrator_agent=agent)
+
+
+def test_build_task_graph_reports_max_iterations_too():
+    agent = _FakeOrchestratorAgent("(ran out of iterations)", stopped_reason="max_iterations")
+    with pytest.raises(GraphError):
+        build_task_graph("do something", orchestrator_agent=agent)
+
+
+def test_orchestrator_task_list_instructions_survive_a_real_prompt_template_format():
+    """Regression: ORCHESTRATOR_TASK_LIST_INSTRUCTIONS is concatenated
+    onto a role template and passed to Agent.__init__, which
+    unconditionally runs the combined string through
+    str.format(cwd=..., mode=..., mode_desc=..., tool_list=...) — found
+    by actually running --experimental-parallel end to end and hitting
+    `KeyError: '"tasks"'` from the instructions' own literal JSON
+    example braces. Every role template must survive this exact call."""
+    from relaycli.agent.orchestrator import ORCHESTRATOR_TASK_LIST_INSTRUCTIONS
+    from relaycli.core.roster import roster_template
+
+    template = roster_template("orchestrator") + ORCHESTRATOR_TASK_LIST_INSTRUCTIONS
+    formatted = template.format(cwd="/tmp/project", mode="full-auto", mode_desc="desc", tool_list="- t: d")
+
+    # The escaping must be transparent: the model-visible text has single
+    # braces, not the doubled {{ }} needed only for str.format's own sake.
+    assert '{"tasks":' in formatted
+    assert '{{' not in formatted
 
 
 # --- make_run_task -------------------------------------------------------

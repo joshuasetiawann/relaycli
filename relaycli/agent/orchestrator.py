@@ -18,7 +18,7 @@ from typing import Callable
 from rich.console import Console
 
 from relaycli.agent.budget import BudgetGovernor
-from relaycli.agent.graph import TaskGraph, parse_task_graph
+from relaycli.agent.graph import GraphError, TaskGraph, parse_task_graph
 from relaycli.agent.leases import LeaseManager
 from relaycli.agent.loop import Agent
 from relaycli.agent.scheduler import Scheduler, SchedulerResult, TaskOutcome
@@ -34,9 +34,16 @@ _log = get_logger(__name__)
 
 ORCHESTRATOR_TASK_LIST_INSTRUCTIONS = (
     "\n\nRespond with ONLY a JSON task list, no other text: "
-    '{"tasks": [{"id": "short-id", "role": "<roster role id>", "goal": '
+    # {{ / }} — not a nested-JSON quirk: this string is concatenated onto
+    # a role template and handed to Agent.__init__, which unconditionally
+    # runs it through str.format(cwd=..., mode=..., mode_desc=...,
+    # tool_list=...). Every literal brace here must be doubled or that
+    # call raises KeyError on the JSON example's own keys (found by
+    # actually running --experimental-parallel end to end — every
+    # existing test avoids a real Agent/LLM construction for this path).
+    '{{"tasks": [{{"id": "short-id", "role": "<roster role id>", "goal": '
     '"one imperative sentence", "depends_on": ["other-task-id", ...], '
-    '"path_claims": ["glob/or/path", ...]}]}. '
+    '"path_claims": ["glob/or/path", ...]}}]}}. '
     "Keep each task focused enough for one agent. Use depends_on only "
     "for genuine ordering requirements — independent tasks should have "
     "no depends_on, so they can run concurrently."
@@ -45,12 +52,24 @@ ORCHESTRATOR_TASK_LIST_INSTRUCTIONS = (
 
 def build_task_graph(request: str, *, orchestrator_agent: Agent) -> TaskGraph:
     """Run the Orchestrator role once and parse its output into a
-    TaskGraph. Raises GraphError (from parse_task_graph) if the result
-    isn't a valid graph — the caller decides how to surface that (e.g.
-    falling back to the sequential pipeline)."""
+    TaskGraph. Raises GraphError (from parse_task_graph, or directly here)
+    if the result isn't a valid graph — the caller decides how to surface
+    that (e.g. falling back to the sequential pipeline).
+
+    Checking stopped_reason before parsing matters: found by actually
+    running --experimental-parallel end to end (Ollama unreachable in
+    that environment) and getting "task #0 is not an object" — a call
+    that failed outright leaves final_text holding a human-readable error
+    string ("LLM error: Model call failed for ..."), not JSON, and
+    without this check that string gets fed straight into the JSON
+    parser, which fails in a way that hides the real cause instead of
+    reporting it.
+    """
     from relaycli.core.roles import BUILTIN_ROLES_BY_ID
 
     plan_result = orchestrator_agent.run(request)
+    if plan_result.stopped_reason != "done":
+        raise GraphError(f"orchestrator's own model call did not complete: {plan_result.final_text}")
     return parse_task_graph(plan_result.final_text, valid_role_ids=frozenset(BUILTIN_ROLES_BY_ID))
 
 
@@ -122,6 +141,7 @@ async def run_parallel(
     permissions: PermissionManager | None = None,
     llm: LLM | None = None,
     on_tick: Callable[[], None] | None = None,
+    on_scheduler_ready: Callable[[Scheduler], None] | None = None,
 ) -> SchedulerResult:
     """Decompose `request` via the Orchestrator role, then run the
     resulting graph concurrently. The single real entry point
@@ -135,6 +155,11 @@ async def run_parallel(
     docstring) — a live view (ui/live.py) uses it to redraw from
     `scheduler.graph`/`.budget`/`.leases` as the run progresses, without
     run_parallel needing to know anything about rendering.
+
+    `on_scheduler_ready`, if given, fires once, synchronously, right after
+    the Scheduler is constructed but before `.run()` starts — the only way
+    a caller can get a direct reference to it at all, since run_parallel
+    otherwise only returns once everything is finished.
     """
     from relaycli.appconfig import load_app_config
     from relaycli.core.roster import specialist_runtime
@@ -164,4 +189,6 @@ async def run_parallel(
         graph, make_run_task(factory), max_concurrent_agents=settings.max_concurrent_agents,
         leases=leases, budget=budget, on_tick=on_tick,
     )
+    if on_scheduler_ready is not None:
+        on_scheduler_ready(scheduler)
     return await scheduler.run()

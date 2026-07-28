@@ -209,7 +209,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         import asyncio
 
         from relaycli.agent.graph import GraphError
-        from relaycli.agent.orchestrator import run_parallel
+        from relaycli.ui.live import run_parallel_with_view
         from relaycli.ui.render import render_parallel_summary
 
         console.print(
@@ -218,7 +218,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         )
         console.print()
         try:
-            parallel_result = asyncio.run(run_parallel(
+            parallel_result = asyncio.run(run_parallel_with_view(
                 settings, request, console=console, project=project, permissions=permissions,
             ))
         except GraphError as exc:

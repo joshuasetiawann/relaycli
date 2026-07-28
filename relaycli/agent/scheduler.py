@@ -79,6 +79,14 @@ class Scheduler:
         self._should_stop = should_stop
         self._should_stop_poll_interval = should_stop_poll_interval
         self._on_tick = on_tick
+        # Public, like graph/budget/leases — on_tick's whole point is
+        # letting a live view read state mid-run, and per-task usage/cost
+        # (outcomes) plus per-task elapsed time (task_started_at) aren't
+        # otherwise visible anywhere: Agent.run() only returns a usage
+        # total at completion, nothing incremental.
+        self.outcomes: dict[str, TaskOutcome] = {}
+        self.task_started_at: dict[str, float] = {}
+        self.task_ended_at: dict[str, float] = {}
 
     def _tick(self) -> None:
         """Fired once per loop iteration (see run(), via try/finally, so
@@ -95,7 +103,6 @@ class Scheduler:
 
     async def run(self) -> SchedulerResult:
         started = time.perf_counter()
-        outcomes: dict[str, TaskOutcome] = {}
         running: dict[str, asyncio.Task] = {}
         stopped_early = False
 
@@ -150,7 +157,8 @@ class Scheduler:
                     task_id = next(tid for tid, t in running.items() if t is fut)
                     del running[task_id]
                     outcome = await fut
-                    outcomes[task_id] = outcome
+                    self.outcomes[task_id] = outcome
+                    self.task_ended_at[task_id] = time.perf_counter()
                     self.leases.release(task_id)
                     try:
                         self.budget.record(task_id, outcome.usage)
@@ -178,6 +186,7 @@ class Scheduler:
                 fut.cancel()
                 self.leases.release(task_id)
                 self.graph.mark_cancelled(task_id)
+                self.task_ended_at[task_id] = time.perf_counter()
             if running:
                 await asyncio.gather(*running.values(), return_exceptions=True)
             self._tick()  # the loop's per-iteration tick predates this cleanup;
@@ -185,7 +194,7 @@ class Scheduler:
 
         return SchedulerResult(
             graph=self.graph, blackboard=self.blackboard, budget=self.budget,
-            outcomes=outcomes, stopped_early=stopped_early,
+            outcomes=self.outcomes, stopped_early=stopped_early,
             elapsed=time.perf_counter() - started,
         )
 
@@ -210,6 +219,7 @@ class Scheduler:
                 continue
             self.leases.acquire(task.id, task.path_claims)
             self.graph.mark_running(task.id)
+            self.task_started_at[task.id] = time.perf_counter()
             running[task.id] = asyncio.ensure_future(self._run_task(task))
             launched = True
         return launched
