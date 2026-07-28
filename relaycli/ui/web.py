@@ -1,10 +1,12 @@
 """relaycli web — the desktop UI in a browser.
 
-A stdlib-only HTTP server (no new dependencies) that serves the single-file
-UI (``web_ui.html``, rebuilt from the user's local design) and a tiny JSON
-API the page polls:
+A stdlib-only HTTP server (no new dependencies) that serves the UI (three
+static files — web_ui.html/styles.css/app.js, rebuilt from the user's
+local design) and a tiny JSON API the page polls:
 
-* ``GET  /``                 → the UI
+* ``GET  /``                 → web_ui.html (structure)
+* ``GET  /styles.css``       → styles.css
+* ``GET  /app.js``           → app.js
 * ``GET  /api/state``        → model, mode, relay, roles, skills, cwd, version
 * ``POST /api/send``         → run one request on a worker thread (409 if busy)
 * ``GET  /api/events?since`` → incremental event log (user/role/text/tool/…)
@@ -48,8 +50,11 @@ from relaycli.model_catalog import (
 from relaycli.ollama_runtime import recommended_fast_local_model, slow_local_model_warning
 from relaycli.ui.render import brief_tool_error, friendly_error_text, short_model_name
 
-# This module lives at relaycli/ui/web.py; web_ui.html ships one level up.
+# This module lives at relaycli/ui/web.py; the UI's 3 files ship one
+# level up: web_ui.html (structure) links to styles.css and app.js.
 UI_PATH = Path(__file__).parent.parent / "web_ui.html"
+STYLES_PATH = Path(__file__).parent.parent / "styles.css"
+APP_JS_PATH = Path(__file__).parent.parent / "app.js"
 
 
 class WebReporter:
@@ -742,18 +747,25 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
             self.end_headers()
             self.wfile.write(body)
 
+        def _serve_file(self, path: Path, content_type: str) -> None:
+            body = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def do_GET(self) -> None:
             if not self._host_ok():
                 self._json({"error": "bad host"}, status=421)
                 return
             url = urlparse(self.path)
             if url.path == "/":
-                body = UI_PATH.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._serve_file(UI_PATH, "text/html; charset=utf-8")
+            elif url.path == "/styles.css":
+                self._serve_file(STYLES_PATH, "text/css; charset=utf-8")
+            elif url.path == "/app.js":
+                self._serve_file(APP_JS_PATH, "text/javascript; charset=utf-8")
             elif url.path == "/api/state":
                 self._json(session.state())
             elif url.path == "/api/events":

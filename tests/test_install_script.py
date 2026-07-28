@@ -45,6 +45,8 @@ def test_wheel_contains_runtime_assets(tmp_path):
         names = set(archive.namelist())
 
     assert "relaycli/web_ui.html" in names
+    assert "relaycli/styles.css" in names
+    assert "relaycli/app.js" in names
     assert "relaycli/tools/create_folder.py" in names
     for skill in ("brainstorm", "debug", "frontend-taste", "ponytail", "tdd", "verify"):
         assert f"relaycli/skills/{skill}.md" in names
