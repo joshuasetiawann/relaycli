@@ -40,6 +40,17 @@ class ManifestError(ValueError):
     still loadable exactly as it was before manifests existed."""
 
 
+def is_safe_plugin_name(name: str) -> bool:
+    """True if `name` is usable as a single path *component* — the
+    only shape relaycli/plugins/manager.py ever joins onto the plugins
+    directory (destination = plugins_dir / name). Path(name).name strips
+    any directory portion off, so comparing the result back to the
+    original is a reliable way to reject anything containing '/' or
+    '\\', or that is exactly '.' or '..' (both of which Path().name
+    reduces to something other than the input too)."""
+    return bool(name) and name not in (".", "..") and Path(name).name == name
+
+
 @dataclass(frozen=True)
 class PluginManifest:
     name: str
@@ -66,6 +77,19 @@ def parse_manifest(text: str) -> PluginManifest:
     name = raw.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ManifestError("plugin.toml needs a non-empty 'name'")
+    name = name.strip()
+    if not is_safe_plugin_name(name):
+        # This name becomes a path COMPONENT (manager.py's install_plugin
+        # builds destination = plugins_dir / name before shutil.copytree/
+        # rmtree) — an untrusted manifest declaring name = "../../.ssh"
+        # must not be able to escape the plugins directory. Reject here,
+        # at the source, rather than relying on manager.py to catch it
+        # (or the user reading a suspicious destination path carefully
+        # enough at the install confirmation prompt).
+        raise ManifestError(
+            f"invalid 'name' {name!r} — must be a single path segment, "
+            "not '.', '..', or contain '/' or '\\'"
+        )
 
     capabilities = tuple(raw.get("capabilities") or ())
     unknown = [c for c in capabilities if c not in KNOWN_CAPABILITIES]
@@ -76,7 +100,7 @@ def parse_manifest(text: str) -> PluginManifest:
         )
 
     return PluginManifest(
-        name=name.strip(),
+        name=name,
         version=str(raw.get("version") or "").strip(),
         description=str(raw.get("description") or "").strip(),
         capabilities=capabilities,

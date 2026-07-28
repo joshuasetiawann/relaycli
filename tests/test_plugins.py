@@ -189,6 +189,29 @@ def test_parse_manifest_rejects_unknown_capability():
         parse_manifest('name = "x"\ncapabilities = ["launch_nukes"]\n')
 
 
+@pytest.mark.parametrize("name", [
+    "../../../etc/passwd", "..", ".", "foo/bar", "/etc/passwd", "a/../../b", "foo/",
+])
+def test_parse_manifest_rejects_path_traversal_in_name(name):
+    """Security fix: name becomes a path component in manager.py's
+    install_plugin (destination = plugins_dir / name, before
+    shutil.copytree/rmtree) — an untrusted manifest must not be able to
+    escape the plugins directory through it."""
+    from relaycli.plugins.manifest import ManifestError, parse_manifest
+
+    with pytest.raises(ManifestError, match="path segment"):
+        parse_manifest(f'name = "{name}"\n')
+
+
+def test_is_safe_plugin_name():
+    from relaycli.plugins.manifest import is_safe_plugin_name
+
+    assert is_safe_plugin_name("my-plugin")
+    assert is_safe_plugin_name("foo")
+    for unsafe in ("../../etc/passwd", "..", ".", "foo/bar", "/etc/passwd", ""):
+        assert not is_safe_plugin_name(unsafe), unsafe
+
+
 def test_parse_manifest_rejects_invalid_toml():
     from relaycli.plugins.manifest import ManifestError, parse_manifest
 
@@ -321,6 +344,48 @@ def test_preview_install_propagates_manifest_errors(tmp_path):
     (src / "plugin.toml").write_text("capabilities = ['read']")  # valid TOML, but missing required 'name'
     with pytest.raises(ManifestError):
         preview_install(src, plugin_dir=tmp_path / "installed")
+
+
+def test_install_plugin_rejects_path_traversal_via_manifest_name(tmp_path):
+    """The actual attack this session's security review caught: a
+    malicious plugin.toml declaring name = "../../../somewhere" must not
+    let install_plugin's shutil.copytree escape the plugins directory."""
+    from relaycli.plugins.manager import PluginInstallError, install_plugin
+    from relaycli.plugins.manifest import ManifestError
+
+    escape_target = tmp_path / "outside" / "should-not-exist"
+    src = tmp_path / "src" / "evil"
+    src.mkdir(parents=True)
+    (src / "__init__.py").write_text("")
+    (src / "plugin.toml").write_text('name = "../outside/should-not-exist"\n')
+    plugin_dir = tmp_path / "installed"
+    plugin_dir.mkdir()
+
+    with pytest.raises((PluginInstallError, ManifestError)):
+        install_plugin(src, plugin_dir=plugin_dir)
+    assert not escape_target.exists()
+    # Nothing should have landed inside the real plugins dir either.
+    assert list(plugin_dir.iterdir()) == []
+
+
+def test_install_plugin_accepts_a_multi_dot_filename(tmp_path):
+    """The no-manifest fallback name (source.stem) runs through the same
+    is_safe_plugin_name check as a manifest's name. Path("my.plugin.py")
+    .stem is "my.plugin" — internal dots, but still one safe path
+    component (not a directory separator or a '..' reference) —
+    confirms the validation doesn't produce a false positive on an
+    unusual-but-legitimate filename."""
+    from relaycli.plugins.manager import install_plugin
+
+    src = tmp_path / "src"
+    src.mkdir()
+    weird = src / "my.plugin.py"
+    weird.write_text("__plugin_name__ = 'weird'\n")
+    plugin_dir = tmp_path / "installed"
+
+    plugin = install_plugin(weird, plugin_dir=plugin_dir)
+    assert plugin.ok
+    assert (plugin_dir / "my.plugin.py").is_file()
 
 
 def test_install_plugin_copies_and_loads(tmp_path):

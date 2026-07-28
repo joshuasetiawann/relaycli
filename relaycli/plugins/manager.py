@@ -20,7 +20,7 @@ from pathlib import Path
 
 from relaycli.plugins import loader
 from relaycli.plugins.loader import Plugin, load_plugin
-from relaycli.plugins.manifest import ManifestError, load_manifest
+from relaycli.plugins.manifest import ManifestError, is_safe_plugin_name, load_manifest
 
 # `import loader` + `loader.PLUGIN_DIRS`, not `from loader import PLUGIN_DIRS`
 # — the latter binds a second, independent name to the same list object at
@@ -74,7 +74,24 @@ def preview_install(source: Path, *, plugin_dir: Path | None = None) -> InstallP
 
     manifest = load_manifest(source) if is_pkg else None  # ManifestError propagates as-is
     name = manifest.name if manifest else source.stem
-    destination = _target_dir(plugin_dir) / (name if is_pkg else f"{name}.py")
+    # manifest.name is already validated by parse_manifest; source.stem
+    # (the no-manifest / single-file fallback) gets the identical check
+    # here for the same reason — either one becomes a path component
+    # below, and destination's own containment check further down is
+    # defense in depth, not a reason to skip validating the name itself.
+    if not is_safe_plugin_name(name):
+        raise PluginInstallError(
+            f"invalid plugin name {name!r} — must be a single path segment, "
+            "not '.', '..', or contain '/' or '\\'"
+        )
+    target_dir = _target_dir(plugin_dir).resolve()
+    destination = target_dir / (name if is_pkg else f"{name}.py")
+    if destination.parent != target_dir:
+        # Should be unreachable given the name check above — kept as an
+        # explicit, independent guard (matching core/context.py's
+        # ProjectContext.resolve() containment check) rather than trusting
+        # a single validation layer to never have a gap.
+        raise PluginInstallError(f"refusing to install outside {target_dir}")
     return InstallPreview(
         name=name,
         version=manifest.version if manifest else "",
