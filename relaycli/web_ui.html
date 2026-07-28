@@ -8,12 +8,19 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  /* Tokens from the local design (docs/design/RelayCLI.dc.html) */
+  /* SLATE INSTRUMENT tokens (docs/design/DESIGN_TOKENS.md) — same custom-
+     property NAMES as before so every var(--x) reference below is
+     unchanged; only the values move off the old Claude-clay accent
+     (#2D5BFF) onto the shared terminal/web/landing palette. Where §1 has
+     no direct equivalent (--raise/--card/--well, the --t1..t5 text-gray
+     scale) the closest extra surface token is reused, or — --card only —
+     a small tint is interpolated between --panel and --raise, per §1's
+     own "re-derive a tint rather than hardcoding a one-off hex" rule. */
   :root {
-    --accent: #2D5BFF; --bg: #060608; --panel: #0B0B0E; --raise: #14151A;
-    --card: #101116; --well: #0E0F13; --border: #24252B; --border2: #202127;
-    --t1: #E7E7EA; --t2: #B7B8BE; --t3: #8A8B92; --t4: #6E6F77; --t5: #4D4E55;
-    --green: #3FB950; --amber: #E3A008; --red: #F0554E;
+    --accent: #5FA8DC; --bg: #080C0F; --panel: #0D1216; --raise: #131E26;
+    --card: #111820; --well: #080C0F; --border: #24323B; --border2: #1B252C;
+    --t1: #E4EBF0; --t2: #C3CED6; --t3: #8CA0AE; --t4: #64798A; --t5: #3B4A55;
+    --green: #6FB77F; --amber: #D6A05C; --red: #D4695C;
     --mono: 'JetBrains Mono', ui-monospace, monospace;
     --sans: 'Geist', -apple-system, system-ui, sans-serif;
   }
@@ -735,7 +742,10 @@ const DESC = {
   reviewer: "reviews the result", agent: "single-agent run",
 };
 const GLYPH = { explorer: "◎", planner: "≣", coder: "⟨⟩", tester: "✓", reviewer: "⌕", agent: "❯" };
-const ACCENTS = ["#2D5BFF", "#3FB950", "#E3A008", "#B060F0", "#F0554E"];
+// SLATE INSTRUMENT accent/success/warning/waiting/danger — the same 5
+// hues used everywhere else, so picking "the green swatch" here matches
+// the green used for state elsewhere instead of a mismatched leftover.
+const ACCENTS = ["#5FA8DC", "#6FB77F", "#D6A05C", "#8E93CC", "#D4695C"];
 let since = 0, mode = "auto-edit", busy = false, state = null;
 const activity = {}, status = {}, steps = {};
 	let runStart = 0, elapsedTimer = null;
@@ -980,7 +990,7 @@ function renderSettings() {
   const sw = $("swatches");
   sw.innerHTML = ACCENTS.map((c) => `<span class="swatch" data-c="${c}" style="background:${c}"></span>`).join("");
   for (const s of sw.children) {
-    s.classList.toggle("on", s.dataset.c === (localStorage.accent || "#2D5BFF"));
+    s.classList.toggle("on", s.dataset.c === (localStorage.accent || "#5FA8DC"));
     s.onclick = () => { document.documentElement.style.setProperty("--accent", s.dataset.c);
       localStorage.accent = s.dataset.c; for (const x of sw.children) x.classList.toggle("on", x === s); };
   }

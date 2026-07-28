@@ -50,6 +50,12 @@ LIGHT = Palette(
     danger="#A93B2C", warning="#8A6312", muted="#5F7180", rule="#C2CDD4", text="#1B262E",
 )
 
+# §1's own base hex for each theme — the terminal surface never needs this
+# as an explicit token (it inherits the real terminal background), but a
+# non-terminal surface (the desktop web console) does.
+DARK_BASE = "#0D1216"
+LIGHT_BASE = "#EFF2F4"
+
 # Dark-only extra surface tokens (§1) — no documented light equivalents.
 DARK_SURFACE: dict[str, str] = {
     "page_bg": "#080C0F", "heading": "#E4EBF0", "text_secondary": "#8CA0AE",
