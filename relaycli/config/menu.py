@@ -15,8 +15,9 @@ from relaycli.config.manager import (
 )
 from relaycli.core.config import PermissionMode
 from relaycli.core.roles import TIERS, builtin_role
+from relaycli.ui.theme import DARK as _DARK
 
-ACCENT = "#2D5BFF"
+ACCENT = _DARK.accent
 
 
 @dataclass

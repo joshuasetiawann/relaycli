@@ -44,13 +44,15 @@ from relaycli.ui.render import (
 from relaycli.slash import ARG_COMPLETIONS as _ARG_COMPLETIONS
 from relaycli.slash import COMMANDS as SLASH_COMMAND_ROWS
 from relaycli.slash import SLASH_COMMANDS
+from relaycli.ui import theme as _theme
 
 
-# Claude Code-ish chrome: orange caret, quiet gray toolbar (no reverse
-# video), dark completion menu with a subtle selection highlight.
+# SLATE INSTRUMENT chrome (docs/design/DESIGN_TOKENS.md): accent caret,
+# quiet gray toolbar (no reverse video), dark completion menu with a
+# subtle selection highlight.
 _PT_STYLE = Style.from_dict(
     {
-        "prompt": "#D97757 bold",
+        "prompt": f"{_theme.DARK.accent} bold",
         "bottom-toolbar": "noreverse fg:#808080 bg:default",
         "completion-menu": "bg:#1c1c1c fg:#b8b8b8",
         "completion-menu.completion.current": "bg:#3a3a3a fg:#ffffff",

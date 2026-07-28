@@ -15,6 +15,7 @@ from rich.table import Table
 from relaycli.appconfig import ProviderConfig, load_app_config, save_app_config
 from relaycli.config import PermissionMode, Settings, reload_settings
 from relaycli.core.llm import best_ollama_model, ollama_host_label, ollama_models
+from relaycli.ui.theme import DARK as _DARK
 
 PROVIDER_ENV = {
     "openai": "OPENAI_API_KEY",
@@ -157,7 +158,7 @@ def render_plan(console: Console, settings: Settings, plan: InitPlan) -> None:
         table.add_row("ollama", escape(f"{len(installed)} model(s): {', '.join(installed[:4])}"))
     for note in plan.notes:
         table.add_row("note", escape(note))
-    console.print(Panel(table, title="relaycli init", title_align="left", border_style="#2D5BFF"))
+    console.print(Panel(table, title="relaycli init", title_align="left", border_style=_DARK.accent))
 
 
 def run_init(

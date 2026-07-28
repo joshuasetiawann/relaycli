@@ -18,6 +18,8 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
+from relaycli.ui import theme
+
 if TYPE_CHECKING:  # avoid an import cycle (agent -> tools -> render -> agent)
     from pathlib import Path
 
@@ -121,8 +123,9 @@ def render_diff(console: Console, old: str, new: str, path: str) -> tuple[int, i
     return (added, removed)
 
 
-# Claude Code's brand accent — used for the welcome chrome and the prompt.
-CLAUDE_ACCENT = "#D97757"
+# SLATE INSTRUMENT accent (docs/design/DESIGN_TOKENS.md §0-1) — used for the
+# welcome chrome and the prompt. Replaces the former Claude-clay #D97757.
+ACCENT = theme.DARK.accent
 
 _STOP_STYLE = {"done": "green", "max_iterations": "yellow", "error": "red",
                "review_exhausted": "yellow", "stopped": "yellow"}
@@ -175,7 +178,7 @@ def render_local_reply(console: Console, reply) -> None:
         escape(text),
         title="guide",
         title_align="left",
-        border_style=CLAUDE_ACCENT,
+        border_style=ACCENT,
         expand=False,
     ))
 
@@ -484,7 +487,7 @@ def render_welcome(
     # truncating the very info the banner exists to show helps no one.
     grid.add_column(overflow="fold")
     grid.add_row(
-        "", f"[bold {CLAUDE_ACCENT}]✻[/bold {CLAUDE_ACCENT}] "
+        "", f"[bold {ACCENT}]✻[/bold {ACCENT}] "
             f"[bold]RelayCLI[/bold] [dim]v{__version__}[/dim] "
             "[dim]agent workspace[/dim]"
     )
@@ -513,7 +516,7 @@ def render_welcome(
         title_align="left",
         subtitle="[dim]type / for commands[/dim]",
         subtitle_align="right",
-        border_style=CLAUDE_ACCENT,
+        border_style=ACCENT,
         expand=False,
     ))
     render_model_warning(console, settings)
@@ -577,7 +580,7 @@ def render_help(console: Console) -> None:
         table,
         title="[bold]Command palette[/bold]",
         title_align="left",
-        border_style=CLAUDE_ACCENT,
+        border_style=ACCENT,
         expand=False,
     ))
 
