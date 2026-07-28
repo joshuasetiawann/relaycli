@@ -80,6 +80,11 @@ def main(
         False, "--offline",
         help="Refuse every cloud provider; only local (ollama_chat/ollama) models are used.",
     ),
+    experimental_parallel: bool = typer.Option(
+        False, "--experimental-parallel",
+        help="Decompose the request into a task graph and run roster agents "
+             "concurrently instead of the sequential relay/single-agent pipeline.",
+    ),
 ) -> None:
     """Launch the REPL, or run a one-shot request with -p."""
     from relaycli.core.logging import configure_logging
@@ -99,6 +104,8 @@ def main(
         settings.relay_enabled = relay
     if offline:
         settings.offline = True
+    if experimental_parallel:
+        settings.experimental_parallel = True
 
     if prompt is not None:
         _run_once(settings, prompt, assume_yes=yes)
@@ -197,6 +204,33 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
             "[bold yellow]⚠ full-auto:[/bold yellow] edits and commands run without asking."
         )
     console.print()
+
+    if settings.experimental_parallel:
+        import asyncio
+
+        from relaycli.agent.graph import GraphError
+        from relaycli.agent.orchestrator import run_parallel
+        from relaycli.ui.render import render_parallel_summary
+
+        console.print(
+            f"[dim]parallel[/dim] [cyan]on[/cyan]  "
+            f"[dim]max_concurrent_agents={settings.max_concurrent_agents}[/dim]"
+        )
+        console.print()
+        try:
+            parallel_result = asyncio.run(run_parallel(
+                settings, request, console=console, project=project, permissions=permissions,
+            ))
+        except GraphError as exc:
+            console.print(f"[red]orchestrator could not produce a task plan:[/red] {escape(str(exc))}")
+            raise typer.Exit(code=1)
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Interrupted.[/yellow]")
+            raise typer.Exit(code=130)
+        render_parallel_summary(console, parallel_result)
+        if parallel_result.stopped_early or not parallel_result.graph.all_ok():
+            raise typer.Exit(code=1)
+        return
 
     if settings.relay_enabled:
         from relaycli.relay import Relay

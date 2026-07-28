@@ -26,6 +26,7 @@ if TYPE_CHECKING:  # avoid an import cycle (agent -> tools -> render -> agent)
     from relaycli.core.llm import ToolCall
     from relaycli.relay import RelayResult
     from relaycli.agent.router import Role
+    from relaycli.agent.scheduler import SchedulerResult
     from relaycli.tools.base import ToolResult
 
 
@@ -617,5 +618,34 @@ def render_relay_summary(console: Console, result: "RelayResult") -> None:
         f"[{style}]■ {result.stopped_reason}[/{style}]  "
         f"[dim]{result.cycles + 1} cycle(s){verdict_note} · "
         f"{result.usage.total_tokens} tokens · ${result.usage.cost_usd:.6f} · "
+        f"{result.elapsed:.1f}s[/dim]"
+    )
+
+
+_TASK_STATUS_STYLE = {
+    "done": "green", "failed": "red", "cancelled": "yellow", "blocked": "yellow",
+}
+
+
+def render_parallel_summary(console: Console, result: "SchedulerResult") -> None:
+    """Print the end-of-run summary for --experimental-parallel: one line
+    per task (status, role, tokens) in graph order, then session totals.
+    Deliberately plain (no lanes/live view — that's Stage 4's terminal UI);
+    this only needs to make a --experimental-parallel run reviewable and
+    benchmarkable today."""
+    for task_id, task in result.graph.tasks.items():
+        style = _TASK_STATUS_STYLE.get(task.status, "white")
+        outcome = result.outcomes.get(task_id)
+        detail = f"{outcome.usage.total_tokens} tokens · ${outcome.usage.cost_usd:.6f}" if outcome else "did not run"
+        console.print(f"[{style}]{task.status:<9}[/{style}] [dim]{task_id} ({task.role_id}) · {detail}[/dim]")
+        if outcome is not None and not outcome.ok and outcome.error:
+            console.print(f"  [red]{escape(outcome.error[:200])}[/red]")
+
+    style = "yellow" if result.stopped_early else ("green" if result.graph.all_ok() else "red")
+    status = "stopped early" if result.stopped_early else ("done" if result.graph.all_ok() else "done with failures")
+    console.print(
+        f"[{style}]■ {status}[/{style}]  "
+        f"[dim]{len(result.outcomes)}/{len(result.graph.tasks)} task(s) ran · "
+        f"{result.budget.spent_tokens_total} tokens · ${result.budget.spent_usd_total:.6f} · "
         f"{result.elapsed:.1f}s[/dim]"
     )
