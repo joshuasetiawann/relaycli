@@ -17,6 +17,10 @@ const GLYPH = { explorer: "◎", planner: "≣", coder: "⟨⟩", tester: "✓",
 const ACCENTS = ["#5FA8DC", "#6FB77F", "#D6A05C", "#8E93CC", "#D4695C"];
 let since = 0, mode = "auto-edit", busy = false, state = null;
 const activity = {}, status = {}, steps = {};
+// One entry per task-graph node (--experimental-parallel), keyed by task_id —
+// separate from status{}/activity{} above, which are keyed by role name and
+// shaped for the OLD linear relay/single-agent rail.
+const taskLanes = {};
 	let runStart = 0, elapsedTimer = null;
 	let activityTimer = null;
 	let modelFilter = "";
@@ -386,6 +390,7 @@ async function runClientSlash(text) {
       $("thread").innerHTML = ""; since = 0; $("goal").innerHTML = '<span style="color:var(--t4)">no run yet</span>';
       for (const k in status) { delete status[k]; delete activity[k]; }
       for (const k in steps) delete steps[k];
+      for (const k in taskLanes) delete taskLanes[k];
       addLog("guide", "conversation cleared", "ok");
       renderCards(); renderFlow(); updateProgress();
     }
@@ -686,6 +691,20 @@ function finishToolStatus(ev) {
 }
 
 function renderCards() {
+  if (Object.keys(taskLanes).length) {
+    const tasks = Object.values(taskLanes);
+    $("agentCount").textContent = tasks.length;
+    $("cards").innerHTML = tasks.map(t => {
+      const cls = t.status === "running" ? "active" : t.status === "done" ? "done" : "";
+      const pill = t.status === "running" ? "Working" : t.status === "done" ? "Done"
+        : t.status === "failed" ? "Failed" : t.status === "blocked" ? "Blocked" : "Idle";
+      return `<div class="card ${cls}"><div class="row"><span class="name">${esc(t.role_id)}</span>` +
+        `<span class="pill"><i></i>${pill}</span></div>` +
+        `<div class="desc">${esc(DESC[t.role_id] || "specialist")}</div>` +
+        `<div class="act">${esc(t.goal)}</div></div>`;
+    }).join("");
+    return;
+  }
   const roles = participants();
   $("agentCount").textContent = roles.length;
   $("cards").innerHTML = roles.map(r => {
@@ -700,12 +719,65 @@ function renderCards() {
   }).join("");
 }
 
+// Task lanes: the --experimental-parallel view. One row per task-graph node,
+// concurrent rather than linear, so this does not reuse the rail's single
+// ring/segment metaphor below — a task can be "waiting on a dependency"
+// while a sibling is already running, which the rail has no way to show.
+function statusGlyph(st) {
+  return { pending: "○", ready: "◇", running: "◆", blocked: "⊘",
+    done: "✓", failed: "✗", cancelled: "╌" }[st] || "○";
+}
+function statusClass(st) {
+  return { running: "active", done: "done", failed: "err", blocked: "wait" }[st] || "";
+}
+function taskDepth(id, seen) {
+  const t = taskLanes[id];
+  if (!t || !t.depends_on.length || seen.has(id)) return 0;
+  seen.add(id);
+  return 1 + Math.max(0, ...t.depends_on.map(d => taskDepth(d, seen)));
+}
+function renderTaskLanes() {
+  const stage = $("stage"); if (!stage) return;
+  stage.classList.add("tasks");
+  stage.style.transform = `scale(${zoom})`;
+  const ids = Object.keys(taskLanes);
+  if (!ids.length) {
+    stage.innerHTML = `<div class="hint">parallel orchestrator — <b>send a request</b> to watch tasks run</div>`;
+    return;
+  }
+  const sorted = ids.slice().sort((a, b) => taskDepth(a, new Set()) - taskDepth(b, new Set()) || a.localeCompare(b));
+  stage.innerHTML = sorted.map(id => {
+    const t = taskLanes[id];
+    const cls = statusClass(t.status);
+    const elapsed = t.started ? fmtDuration((t.ended || Date.now()) - t.started) : "";
+    const deps = t.depends_on.length
+      ? `<span class="tdeps">waits: ${t.depends_on.map(esc).join(", ")}</span>` : "";
+    const stat = (t.tokens || t.cost_usd)
+      ? `<span class="tstat">${t.tokens} tok · $${t.cost_usd.toFixed(4)}</span>` : "";
+    return `<div class="tlane ${cls}">` +
+      `<span class="tglyph">${statusGlyph(t.status)}</span>` +
+      `<div class="tbody"><div class="thead"><span class="tid">${esc(id)}</span>` +
+      `<span class="trole">${esc(t.role_id)}</span></div>` +
+      `<div class="tgoal">${esc(t.goal)}</div>${deps}</div>` +
+      `<div class="tside">${stat}${elapsed ? `<span class="ttime">${esc(elapsed)}</span>` : ""}</div>` +
+      `</div>`;
+  }).join("");
+}
+
 // The orchestration rail: one station per participant on a vertical rail.
 // The segment INTO the active station flows; segments past finished stations
 // set green; task-split specialists sit on an indented branch lane. Scales to
 // any number of participants — never cramped, never chaotic.
 function renderFlow() {
   const stage = $("stage"); if (!stage) return;
+  // Task lanes take over once there's data to show, or pre-emptively once
+  // parallel is the configured pipeline (true by default) — the empty-state
+  // hint should describe what the NEXT send will actually run, not always
+  // default to the old rail's single-agent framing.
+  if (Object.keys(taskLanes).length || (state && state.experimental_parallel)) {
+    renderTaskLanes(); return;
+  }
+  stage.classList.remove("tasks");
   const relay = state && state.relay;
   const roles = participants();
   const rows = [];
@@ -744,6 +816,16 @@ function renderFlow() {
   }).join("");
 }
 function updateProgress() {
+  if (Object.keys(taskLanes).length) {
+    const tasks = Object.values(taskLanes);
+    const done = tasks.filter(t => t.status === "done").length;
+    const anyActive = tasks.some(t => t.status === "running");
+    const pct = busy ? Math.min(95, Math.round((done + (anyActive ? 0.5 : 0)) / tasks.length * 100))
+      : Math.round(done / tasks.length * 100);
+    $("progBar").style.width = pct + "%";
+    $("progPct").textContent = pct + "%";
+    return;
+  }
   const roles = participants();
   const done = roles.filter(r => (status[r.name] || "idle") === "done").length;
   const anyActive = roles.some(r => status[r.name] === "active");
@@ -844,6 +926,7 @@ function handle(ev) {
     });
     for (const k in status) { status[k] = "idle"; activity[k] = "waiting"; }
     for (const k in steps) delete steps[k];
+    for (const k in taskLanes) delete taskLanes[k];
     runStart = Date.now();
     $("goal").textContent = ev.text;
   } else if (ev.kind === "role") {
@@ -915,6 +998,23 @@ function handle(ev) {
       meta: compactStatusText(ev.text, 72), started: null, ended: null, active: false, ok: false,
     });
     addMsg("err", "error", ev.text); addLog("error", ev.text, "bad");
+  } else if (ev.kind === "task_status") {
+    const prev = taskLanes[ev.task_id];
+    const startedNow = ev.status === "running" && (!prev || prev.status !== "running");
+    const terminal = ev.status === "done" || ev.status === "failed" || ev.status === "cancelled";
+    taskLanes[ev.task_id] = {
+      role_id: ev.role_id, goal: ev.goal, status: ev.status, depends_on: ev.depends_on || [],
+      tokens: ev.tokens || 0, cost_usd: ev.cost_usd || 0,
+      started: startedNow ? Date.now() : ((prev && prev.started) || null),
+      ended: terminal ? Date.now() : null,
+    };
+    pushActivity({
+      agent: ev.role_id, kind: ev.status === "failed" ? "bad" : ev.status === "done" ? "done" : "agent",
+      text: `${ev.task_id} → ${ev.status}`, meta: compactStatusText(ev.goal, 72),
+      started: null, ended: null, active: ev.status === "running", ok: ev.status !== "failed",
+    });
+    addLog(ev.role_id, `${ev.task_id} (${ev.role_id}) → ${ev.status}`,
+      ev.status === "failed" ? "bad" : ev.status === "done" ? "ok" : "");
   }
   renderCards(); renderFlow(); updateProgress();
 }
@@ -961,6 +1061,7 @@ async function boot() {
   if (!activityTimer) {
     activityTimer = setInterval(() => {
       if (activityFeed.some(item => item.active)) renderActivity();
+      if (Object.values(taskLanes).some(t => t.status === "running")) renderTaskLanes();
     }, 1000);
   }
 }
@@ -989,6 +1090,7 @@ $("modes").addEventListener("click", async (e) => {
     $("goal").innerHTML = '<span style="color:var(--t4)">no run yet</span>';
     for (const k in status) { delete status[k]; delete activity[k]; }
     for (const k in steps) delete steps[k];
+    for (const k in taskLanes) delete taskLanes[k];
     $("stElapsed").textContent = "—"; $("stTokens").textContent = "—";
     renderCards(); renderFlow(); updateProgress(); }
 };

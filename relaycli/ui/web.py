@@ -209,6 +209,8 @@ class WebSession:
             "models": self._model_choices(),
             "mode": str(s.permission_mode),
             "relay": s.relay_enabled,
+            "experimental_parallel": s.experimental_parallel,
+            "max_concurrent_agents": s.max_concurrent_agents,
             "explorer": s.relay_explorer,
             "tester": s.relay_tester,
             "local_scaffolds": s.local_scaffolds,
@@ -310,6 +312,7 @@ class WebSession:
         allowed = {
             "relay": "relay_enabled", "explorer": "relay_explorer",
             "tester": "relay_tester", "tasks": "relay_split_tasks",
+            "parallel": "experimental_parallel",
         }
         field = allowed.get(name)
         if field is None:
@@ -674,7 +677,11 @@ class WebSession:
             skills_block = skills_prompt_block([skills[n] for n in names])
         ident = threading.current_thread().ident
         try:
-            if self.settings.relay_enabled:
+            if self.settings.experimental_parallel:
+                # Same precedence as cli.py's one-shot dispatch: parallel is
+                # checked before relay_enabled, so it wins if both are on.
+                self._run_parallel(text, console=console, permissions=permissions)
+            elif self.settings.relay_enabled:
                 relay = Relay(self.settings, console=console, project=self.project,
                               permissions=permissions, should_stop=self._stop.is_set,
                               skills_block=skills_block,
@@ -709,6 +716,75 @@ class WebSession:
             if ident is not None:
                 with self._lock:
                     self._muted_threads.discard(ident)
+
+    def _run_parallel(self, text: str, *, console: Console, permissions) -> None:
+        """--experimental-parallel on the web: no permission-mode gate here,
+        unlike ui/live.py's terminal live frame — that gate exists only
+        because a rich.Live redraw thread and a synchronous terminal prompt
+        can't safely share one terminal, and a web run already declines
+        every prompt unconditionally (the `permissions` passed in), so the
+        hazard doesn't exist. Mirrors cli.py's own asyncio.run(run_parallel(
+        ...)) call site; on_tick/on_scheduler_ready bridge Scheduler state to
+        session events the same way ui/live.py's progress-lines fallback
+        bridges it to printed lines — one "task_status" event per actual
+        status change, not a continuous stream."""
+        import asyncio
+
+        from relaycli.agent.graph import GraphError
+        from relaycli.agent.orchestrator import run_parallel
+
+        last_status: dict[str, str] = {}
+        holder: dict = {}
+
+        def emit_task(task) -> None:
+            scheduler = holder.get("scheduler")
+            outcome = scheduler.outcomes.get(task.id) if scheduler else None
+            self.add(
+                "task_status", task_id=task.id, role_id=task.role_id, goal=task.goal,
+                status=task.status, depends_on=list(task.depends_on),
+                tokens=outcome.usage.total_tokens if outcome else 0,
+                cost_usd=outcome.usage.cost_usd if outcome else 0.0,
+            )
+            last_status[task.id] = task.status
+
+        def on_scheduler_ready(scheduler) -> None:
+            holder["scheduler"] = scheduler
+            # Emit the full graph shape immediately, before any task has
+            # transitioned, so the UI can draw every lane (including ones
+            # still pending on a dependency) rather than only lanes that
+            # have changed state at least once.
+            for task in scheduler.graph.tasks.values():
+                emit_task(task)
+
+        def on_tick() -> None:
+            scheduler = holder.get("scheduler")
+            if scheduler is None:
+                return
+            for task in scheduler.graph.tasks.values():
+                if last_status.get(task.id) != task.status:
+                    emit_task(task)
+
+        start = time.time()
+        try:
+            result = asyncio.run(run_parallel(
+                self.settings, text, console=console, project=self.project,
+                permissions=permissions, llm=self._llm,
+                on_tick=on_tick, on_scheduler_ready=on_scheduler_ready,
+            ))
+        except GraphError as exc:
+            self.add("error", text=f"orchestrator could not produce a task plan: {exc}")
+            self.add("summary", stopped="error", verdict=None, cycles=0, tasks=[],
+                      tokens=0, cost=0.0, elapsed=round(time.time() - start, 1), text=str(exc))
+            return
+        stopped = "done" if (not result.stopped_early and result.graph.all_ok()) else (
+            "stopped" if result.stopped_early else "error")
+        self.add(
+            "summary", stopped=stopped, verdict=None, cycles=0,
+            tasks=list(result.graph.tasks.keys()),
+            tokens=result.budget.spent_tokens_total, cost=result.budget.spent_usd_total,
+            elapsed=round(result.elapsed, 1),
+            text="" if stopped == "done" else "one or more tasks failed or the run stopped early",
+        )
 
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})

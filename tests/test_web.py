@@ -65,6 +65,12 @@ class RecordingLLM(FakeLLM):
 def _settings(**kw) -> Settings:
     kw.setdefault("model", "fake/model")
     kw.setdefault("permission_mode", PermissionMode.full_auto)
+    # Every existing test here predates --experimental-parallel's Stage 7
+    # default-flip and is written for the plain-agent/relay paths; without
+    # this override they'd all silently start hitting WebSession._run_parallel
+    # instead (Settings' own class default is True). Tests that actually
+    # want the parallel path pass experimental_parallel=True explicitly.
+    kw.setdefault("experimental_parallel", False)
     return Settings(_env_file=None, **kw)
 
 
@@ -113,6 +119,62 @@ def test_send_records_model_progress_logs():
     logs = [e["text"] for e in session.events_since(0) if e["kind"] == "log"]
     assert any("→ model step 1" in text for text in logs)
     assert any("← model answer" in text for text in logs)
+
+
+def test_state_reports_experimental_parallel_and_flag_toggles_it():
+    session = WebSession(_settings(experimental_parallel=True))
+    assert session.state()["experimental_parallel"] is True
+    assert session.set_flag("parallel", False) is True
+    assert session.settings.experimental_parallel is False
+    assert session.state()["experimental_parallel"] is False
+
+
+def test_send_runs_parallel_orchestrator_and_records_task_events():
+    session = WebSession(_settings(experimental_parallel=True), llm=FakeLLM([
+        _resp('{"tasks": [{"id": "t1", "role": "coder", "goal": "write the thing"}]}'),
+        _resp("Done -- wrote the thing."),
+    ]))
+    assert session.send("build something") is True
+    session._thread.join(timeout=30)
+    events = session.events_since(0)
+    kinds = [e["kind"] for e in events]
+    assert "task_status" in kinds
+    task_events = [e for e in events if e["kind"] == "task_status"]
+    assert all(e["task_id"] == "t1" and e["role_id"] == "coder" for e in task_events)
+    # the initial (post-graph-build, pre-run) emission plus the terminal one
+    assert any(e["status"] == "done" for e in task_events)
+    summary = [e for e in events if e["kind"] == "summary"][0]
+    assert summary["stopped"] == "done"
+    assert summary["tasks"] == ["t1"]
+
+
+def test_send_parallel_reports_graph_error_cleanly():
+    session = WebSession(_settings(experimental_parallel=True), llm=FakeLLM([
+        _resp("Sorry, I can't decompose that into tasks."),
+    ]))
+    assert session.send("build the impossible feature") is True
+    session._thread.join(timeout=30)
+    events = session.events_since(0)
+    kinds = [e["kind"] for e in events]
+    assert "error" in kinds
+    assert "task_status" not in kinds
+    summary = [e for e in events if e["kind"] == "summary"][0]
+    assert summary["stopped"] == "error"
+
+
+def test_send_prefers_parallel_over_relay_when_both_enabled():
+    session = WebSession(
+        _settings(experimental_parallel=True, relay_enabled=True),
+        llm=FakeLLM([
+            _resp('{"tasks": [{"id": "t1", "role": "coder", "goal": "x"}]}'),
+            _resp("done"),
+        ]),
+    )
+    assert session.send("build the feature") is True
+    session._thread.join(timeout=30)
+    kinds = [e["kind"] for e in session.events_since(0)]
+    assert "task_status" in kinds
+    assert "role" not in kinds  # relay's role-start event never fires
 
 
 def test_send_greeting_returns_local_guide_without_thread():
