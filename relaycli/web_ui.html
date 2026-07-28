@@ -24,13 +24,29 @@
     --mono: 'JetBrains Mono', ui-monospace, monospace;
     --sans: 'Geist', -apple-system, system-ui, sans-serif;
   }
+  /* Light theme — DESIGN_TOKENS.md §1 only documents the 9-token state
+     table plus one base hex (#EFF2F4) for light, not a full second set of
+     the extra surface tokens dark has (page-bg/heading/text-secondary/
+     rule-dim/...), so more of this block is this implementation's own
+     derivation than the dark block above: --panel and --bg both collapse
+     to the single documented base (no source distinction to preserve);
+     --raise goes to white and --card/--well/--border2/--t1/--t4/--t5 are
+     interpolated to mirror the *structure* of the dark mapping (each
+     step's relative contrast/prominence) with lightness inverted, not
+     copied from any source hex.  */
+  :root[data-theme="light"] {
+    --accent: #1C6C9C; --bg: #EFF2F4; --panel: #EFF2F4; --raise: #FFFFFF;
+    --card: #F7F9FA; --well: #E4E9EC; --border: #C2CDD4; --border2: #D8E0E4;
+    --t1: #0F171D; --t2: #1B262E; --t3: #5F7180; --t4: #93A0AA; --t5: #B8C4CB;
+    --green: #2C7A4E; --amber: #8A6312; --red: #A93B2C;
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; background: var(--bg); font-family: var(--sans);
     -webkit-font-smoothing: antialiased; color: var(--t1); }
   ::-webkit-scrollbar { width: 9px; height: 9px; }
-  ::-webkit-scrollbar-thumb { background: #26272E; border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
   ::-webkit-scrollbar-track { background: transparent; }
-  input::placeholder { color: #5E5F66; }
+  input::placeholder { color: var(--t4); }
   button { font-family: inherit; }
   @keyframes live { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .35; transform: scale(.8);} }
   @keyframes blink { 0%,48% { opacity: 1;} 52%,100% { opacity: 0;} }
@@ -184,7 +200,7 @@
   .setrow .l { flex: 1; min-width: 0; }
   .setrow .l .t { font-size: 12.5px; color: var(--t1); }
   .setrow .l .s { font-size: 10.5px; color: var(--t4); margin-top: 2px; }
-  .tog { width: 34px; height: 20px; border-radius: 999px; background: #24252B; position: relative;
+  .tog { width: 34px; height: 20px; border-radius: 999px; background: var(--border); position: relative;
     cursor: pointer; flex: 0 0 auto; transition: background .15s; }
   .tog.on { background: var(--accent); }
   .tog span { position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
@@ -644,6 +660,7 @@
           <div class="h">Appearance</div>
           <div class="setrow"><div class="l"><div class="t">Accent</div><div class="s">The signal color</div></div>
             <div class="swatches" id="swatches"></div></div>
+          <div class="setrow"><div class="l"><div class="t">Theme</div><div class="s">Light or dark surface</div></div><div class="tog" id="themeTog"><span></span></div></div>
           <div class="setrow"><div class="l"><div class="t">Reduce motion</div><div class="s">Pause pulses and shimmer</div></div><div class="tog" id="reduceTog"><span></span></div></div>
         </div>
         <div class="foot"><span class="v" id="ver2"></span></div>
@@ -735,6 +752,12 @@
 </div>
 
 <script>
+// Applied first, synchronously, before any render*() call reads it
+// (renderSettings() does, to set the theme toggle's initial position) —
+// unlike the accent restore at the end of this script, nothing here can
+// safely wait until the script finishes running.
+document.documentElement.dataset.theme = localStorage.theme ||
+  (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
 const $ = (id) => document.getElementById(id);
 const DESC = {
   explorer: "scouts the codebase", planner: "decomposes the goal",
@@ -994,6 +1017,14 @@ function renderSettings() {
     s.onclick = () => { document.documentElement.style.setProperty("--accent", s.dataset.c);
       localStorage.accent = s.dataset.c; for (const x of sw.children) x.classList.toggle("on", x === s); };
   }
+  const tt = $("themeTog");
+  tt.classList.toggle("on", document.documentElement.dataset.theme === "light");
+  tt.onclick = () => {
+    const light = document.documentElement.dataset.theme !== "light";
+    document.documentElement.dataset.theme = light ? "light" : "dark";
+    localStorage.theme = light ? "light" : "dark";
+    tt.classList.toggle("on", light);
+  };
   const rt = $("reduceTog");
   rt.classList.toggle("on", localStorage.reduce === "1");
   document.body.classList.toggle("reduce", localStorage.reduce === "1");

@@ -4,7 +4,7 @@ palette (docs/design/DESIGN_TOKENS.md) that replaces the old web-blue
 
 from __future__ import annotations
 
-from relaycli.ui.theme import DARK
+from relaycli.ui.theme import DARK, LIGHT
 from relaycli.ui.web import UI_PATH
 
 _OLD_BRAND_HEX = ("#2D5BFF", "#3FB950", "#E3A008", "#F0554E")
@@ -48,3 +48,34 @@ def test_old_semantic_literals_do_not_leak_outside_the_untouched_activity_palett
     for old_hex in _OLD_BRAND_HEX:
         assert old_hex not in root_block, f"{old_hex} still in :root"
         assert old_hex not in accents_line, f"{old_hex} still in ACCENTS"
+
+
+# --- light theme -------------------------------------------------------------
+def test_light_theme_block_uses_the_shared_light_palette():
+    html = _html()
+    light_block = html.split(':root[data-theme="light"] {')[1].split("}")[0]
+    assert f"--accent: {LIGHT.accent};" in light_block
+    assert f"--green: {LIGHT.success};" in light_block
+    assert f"--amber: {LIGHT.warning};" in light_block
+    assert f"--red: {LIGHT.danger};" in light_block
+
+
+def test_theme_toggle_control_exists_and_is_wired():
+    html = _html()
+    assert 'id="themeTog"' in html
+    assert "localStorage.theme" in html
+
+
+def test_theme_init_runs_before_any_render_call_reads_it():
+    """Regression: renderSettings() (called eagerly at load, not lazily on
+    first open) reads document.documentElement.dataset.theme to set the
+    toggle's initial position. Putting the theme-init line at the end of
+    the script (matching where the pre-existing accent-restore line
+    sits) meant renderSettings() ran with dataset.theme still unset. The
+    init must appear before the *call* to renderSettings(), not just
+    before its definition — a naive "theme init exists" check wouldn't
+    catch this ordering bug."""
+    html = _html()
+    init_pos = html.index("document.documentElement.dataset.theme =")
+    render_call_pos = html.index("renderSettings();")
+    assert init_pos < render_call_pos
