@@ -300,6 +300,26 @@ it changes state instead.
 This path is newer than relay/task-split and has had less real-world
 mileage; if something looks wrong, `--relay` is the well-worn fallback.
 
+### Benchmarking
+
+`scripts/benchmark_parallel.py` runs one real request through both pipelines
+back to back — same prompt, same model, a fresh temp project for each side —
+and prints a wall-clock/tokens/cost table:
+
+```bash
+python scripts/benchmark_parallel.py openrouter/your/model:here
+```
+
+No numbers are published here. Three attempts to run it during Stage 7's own
+development each failed for environment reasons, not a code defect: two
+free-tier OpenRouter models (`qwen/qwen3-coder:free`, `openai/gpt-oss-120b:free`)
+came back "unavailable on the free tier," a third (`cohere/north-mini-code:free`)
+hung with no response or error, and neither Ollama (unreachable in that
+sandbox) nor that machine's configured `claude-3-5-sonnet-latest` fallback (no
+Anthropic key present) offered a way around it. Run the script yourself
+against a model you know answers in your environment — the table it prints
+is the real deliverable, not a number copied from here.
+
 ## Skills
 
 Skills are markdown instructions that shape how the agent works. Built-in
