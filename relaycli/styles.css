@@ -437,6 +437,56 @@
     color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--well)); }
   .tact:disabled { opacity: .45; cursor: default; }
 
+  /* ── canvas view switch: lanes | changes ── */
+  .viewtabs { position: absolute; left: 20px; top: 16px; z-index: 6; display: flex; padding: 3px;
+    gap: 2px; background: var(--card); border: 1px solid var(--border); border-radius: 9px; }
+  .viewtabs button { display: inline-flex; align-items: center; gap: 6px; border: 0; cursor: pointer;
+    background: transparent; color: var(--t3); font-family: var(--mono); font-size: 10.5px;
+    padding: 4px 10px; border-radius: 6px; transition: background .15s, color .15s; }
+  .viewtabs button:hover { color: var(--t1); }
+  .viewtabs button.on { background: var(--raise); color: var(--t1); box-shadow: 0 0 0 1px var(--border); }
+  .vcount { font-size: 9px; color: var(--t4); }
+  .viewtabs button.on .vcount { color: var(--accent); }
+
+  /* ── changes view: one card per file, hunks on demand ──
+     Reads as a document, not a dashboard: the path is the headline, the
+     +/- tally sits right of it, and the code keeps a real gutter so a
+     line's sign survives being copied out of the page. */
+  .dfile { border: 1px solid var(--border); border-radius: 12px; background: var(--raise);
+    margin-bottom: 10px; overflow: hidden; animation: risein .16s ease-out; }
+  .dhead { display: flex; align-items: center; gap: 10px; padding: 10px 14px; cursor: pointer;
+    background: linear-gradient(180deg, color-mix(in srgb, var(--raise) 94%, #fff), var(--raise));
+    border-bottom: 1px solid transparent; transition: border-color .2s; }
+  .dfile.open .dhead { border-bottom-color: var(--border2); }
+  .dhead:hover { background: var(--card); }
+  .dchev { color: var(--t4); font-family: var(--mono); font-size: 10px; transition: transform .2s; }
+  .dfile.open .dchev { transform: rotate(90deg); }
+  .dpath { font-family: var(--mono); font-size: 12px; color: var(--t1); min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dtag { font-family: var(--mono); font-size: 9px; color: var(--t4); padding: 1px 6px;
+    border: 1px solid var(--border2); border-radius: 999px; white-space: nowrap; }
+  .dtag.kind { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--border2)); }
+  .dstat { margin-left: auto; display: flex; gap: 8px; font-family: var(--mono); font-size: 10px; white-space: nowrap; }
+  .dadd { color: var(--green); }
+  .drem { color: var(--red); }
+  .dbody { display: none; }
+  .dfile.open .dbody { display: block; }
+  .dhunk { border-top: 1px solid var(--border2); }
+  .dhunk:first-child { border-top: 0; }
+  .dhh { padding: 5px 14px; background: var(--well); font-family: var(--mono); font-size: 9.5px;
+    color: var(--t4); }
+  .dline { display: grid; grid-template-columns: 20px minmax(0, 1fr); font-family: var(--mono);
+    font-size: 11.5px; line-height: 1.55; }
+  .dsign { text-align: center; color: var(--t5); user-select: none; }
+  .dtext { white-space: pre-wrap; word-break: break-word; color: var(--t2); padding-right: 12px; }
+  .dline.add { background: color-mix(in srgb, var(--green) 10%, transparent); }
+  .dline.add .dsign, .dline.add .dtext { color: var(--green); }
+  .dline.rem { background: color-mix(in srgb, var(--red) 10%, transparent); }
+  .dline.rem .dsign, .dline.rem .dtext { color: var(--red); }
+  .dempty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 20px;
+    color: var(--t4); font-size: 12px; text-align: center; }
+  .dempty b { font-family: var(--mono); font-size: 11px; color: var(--t3); font-weight: 500; }
+
   .zoom { position: absolute; right: 20px; bottom: 18px; display: flex; align-items: center; gap: 2px;
     background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 3px; z-index: 5; }
   .zoom button { width: 24px; height: 22px; border: 0; background: transparent; color: var(--t3);

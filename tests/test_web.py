@@ -1297,3 +1297,111 @@ def test_task_route_is_behind_the_same_origin_guard_as_every_other_post():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- diff review surface ----------------------------------------------------
+def _file_diff(path="src/app.py", added=2, removed=1, hunks=1, **kw):
+    from relaycli.tools.base import DiffHunk, FileDiff
+
+    return FileDiff(
+        path=path, added=added, removed=removed,
+        hunks=[DiffHunk(old_start=1, old_lines=3, new_start=1, new_lines=4,
+                        added=added, removed=removed,
+                        text="-old line\n+new line\n context")] * hunks,
+        **kw,
+    )
+
+
+def test_record_diff_stores_and_announces_a_file_diff():
+    session = WebSession(_settings(experimental_parallel=True))
+    session.record_diff("t1", "backend", _file_diff())
+
+    stored = session.diffs()
+    assert len(stored) == 1
+    assert stored[0]["path"] == "src/app.py"
+    assert stored[0]["task_id"] == "t1" and stored[0]["role_id"] == "backend"
+    assert stored[0]["hunks"][0]["header"] == "@@ -1,3 +1,4 @@"
+    assert "+new line" in stored[0]["hunks"][0]["text"]
+
+    events = [e for e in session.events_since(0) if e["kind"] == "diff"]
+    assert len(events) == 1 and events[0]["path"] == "src/app.py"
+
+
+def test_record_diff_ignores_a_write_that_changed_nothing():
+    """write_file returns diff=[] for a no-op write, and a FileDiff with no
+    hunks carries nothing to review — listing it would pad the surface with
+    rows that show an empty body."""
+    session = WebSession(_settings(experimental_parallel=True))
+    session.record_diff("t1", "backend", _file_diff(hunks=0, added=0, removed=0))
+    assert session.diffs() == []
+    assert [e for e in session.events_since(0) if e["kind"] == "diff"] == []
+
+
+def test_record_diff_keeps_a_deletion_even_though_it_has_no_hunks():
+    session = WebSession(_settings(experimental_parallel=True))
+    session.record_diff("t1", "backend",
+                        _file_diff(hunks=0, added=0, removed=9, is_deleted=True))
+    assert len(session.diffs()) == 1
+    assert session.diffs()[0]["is_deleted"] is True
+
+
+def test_task_reporter_captures_diffs_from_a_tool_result():
+    """TaskReporter is what connects tools' existing structured diffs to
+    anything that displays them; before it, ToolResult.diff had no reader."""
+    from relaycli.tools.base import ToolResult
+    from relaycli.ui.web import TaskReporter
+
+    session = WebSession(_settings(experimental_parallel=True))
+    reporter = TaskReporter(session, "t1", "backend")
+
+    class _Call:
+        id = "c1"
+        name = "edit_file"
+
+    reporter.tool_end(_Call(), ToolResult(ok=True, output="", summary="edit src/app.py",
+                                          diff=[_file_diff()]))
+    assert [d["path"] for d in session.diffs()] == ["src/app.py"]
+    kinds = [e["kind"] for e in session.events_since(0)]
+    assert "tool" in kinds and "diff" in kinds, "the tool event must still be emitted"
+
+
+def test_diffs_are_cleared_between_runs():
+    """A review list describes the run you are looking at."""
+    session = WebSession(_settings(experimental_parallel=True), llm=FakeLLM([
+        _resp('{"tasks": [{"id": "t1", "role": "coder", "goal": "x"}]}'),
+        _resp("done"),
+    ]))
+    session.record_diff("old", "backend", _file_diff(path="stale.py"))
+    assert len(session.diffs()) == 1
+
+    assert session.send("build the feature") is True
+    session._thread.join(timeout=30)
+    assert [d["path"] for d in session.diffs()] == [], "a new run must start with an empty list"
+
+
+def test_reset_clears_diffs():
+    session = WebSession(_settings(experimental_parallel=True))
+    session.record_diff("t1", "backend", _file_diff())
+    assert session.reset() is True
+    assert session.diffs() == []
+
+
+def test_diffs_route_serves_the_collected_diffs():
+    session = WebSession(_settings(experimental_parallel=True))
+    session.record_diff("t1", "backend", _file_diff())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        body = json.loads(urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/api/diffs", timeout=5).read())
+        assert [d["path"] for d in body["diffs"]] == ["src/app.py"]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_changes_view_ships_in_the_ui():
+    html, js = UI_PATH.read_text(), APP_JS_PATH.read_text()
+    assert 'id="viewTabs"' in html and 'data-v="diffs"' in html
+    assert "renderDiffs" in js and 'ev.kind === "diff"' in js

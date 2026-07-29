@@ -10,6 +10,7 @@ local design) and a tiny JSON API the page polls:
 * ``GET  /api/state``        → model, mode, relay, roles, skills, cwd, version
 * ``POST /api/send``         → run one request on a worker thread (409 if busy)
 * ``POST /api/task``         → drop/retry one task of a running parallel graph
+* ``GET  /api/diffs``        → structured file diffs this run produced
 * ``GET  /api/events?since`` → incremental event log (user/role/text/tool/…)
 
 SECURITY: binds 127.0.0.1 ONLY. The page can edit files and run commands
@@ -134,6 +135,27 @@ class WebReporter:
         self.assistant_end()
 
 
+class TaskReporter(WebReporter):
+    """A WebReporter for one scheduled task, in a parallel run.
+
+    Two things it adds over the base class. Every event is tagged with the
+    task id, so the UI can attribute activity to a lane rather than to a
+    role that several lanes may share. And structured diffs are captured:
+    edit_file/write_file/apply_patch already return ToolResult.diff as
+    FileDiff objects, but nothing downstream ever looked at them, so the
+    console could say "wrote src/app.py" and not what changed.
+    """
+
+    def __init__(self, session: "WebSession", task_id: str, role_id: str) -> None:
+        super().__init__(session, role_id)
+        self._task_id = task_id
+
+    def tool_end(self, call, result) -> None:
+        super().tool_end(call, result)
+        for file_diff in (getattr(result, "diff", None) or []):
+            self._session.record_diff(self._task_id, self._agent, file_diff)
+
+
 class WebObserver:
     """RelayObserver protocol → session events, one WebReporter per role."""
 
@@ -168,6 +190,8 @@ class WebSession:
         # accept requests for a graph nobody is executing any more, and the
         # UI would show the drop/retry controls doing nothing.
         self._scheduler = None
+        # Structured diffs this run produced, for the review surface.
+        self._diffs: list[dict] = []
 
     # -- events ------------------------------------------------------------
     def add(self, kind: str, **data) -> None:
@@ -451,6 +475,37 @@ class WebSession:
         """Ask the in-flight run to halt after its current step (idempotent)."""
         self._stop.set()
 
+    # -- diffs ---------------------------------------------------------------
+    def record_diff(self, task_id: str, role_id: str, file_diff) -> None:
+        """Store one file's structured diff and announce it as an event.
+
+        Hunk text is kept whole rather than pre-rendered: the browser needs
+        the raw +/- lines to colour a gutter, and re-parsing rendered output
+        to get them back would be the exact re-parsing FileDiff exists to
+        avoid. A no-op diff (a write that changed nothing) is dropped — it
+        would otherwise pad the review list with entries that show nothing.
+        """
+        hunks = [
+            {"header": f"@@ -{h.old_start},{h.old_lines} +{h.new_start},{h.new_lines} @@",
+             "added": h.added, "removed": h.removed, "text": h.text}
+            for h in (getattr(file_diff, "hunks", None) or [])
+        ]
+        if not hunks and not getattr(file_diff, "is_deleted", False):
+            return
+        entry = {
+            "task_id": task_id, "role_id": role_id, "path": file_diff.path,
+            "added": file_diff.added, "removed": file_diff.removed,
+            "is_new": file_diff.is_new, "is_deleted": file_diff.is_deleted,
+            "hunks": hunks,
+        }
+        with self._lock:
+            self._diffs.append(entry)
+        self.add("diff", **entry)
+
+    def diffs(self) -> list[dict]:
+        with self._lock:
+            return list(self._diffs)
+
     def control_task(self, task_id: str, action: str) -> tuple[bool, str]:
         """Drop or retry one task of the running parallel graph — the web
         counterpart of the live view's `x` and `R` keys.
@@ -490,6 +545,7 @@ class WebSession:
                 if self._thread and self._thread.ident is not None:
                     self._muted_threads.add(self._thread.ident)
             self._events.clear()
+            self._diffs.clear()
         return True
 
     # -- running -----------------------------------------------------------
@@ -766,6 +822,8 @@ class WebSession:
 
         last_status: dict[str, str] = {}
         holder: dict = {}
+        with self._lock:
+            self._diffs.clear()   # a review list is per run, not cumulative
 
         def emit_task(task) -> None:
             scheduler = holder.get("scheduler")
@@ -802,6 +860,7 @@ class WebSession:
                 self.settings, text, console=console, project=self.project,
                 permissions=permissions, llm=self._llm,
                 on_tick=on_tick, on_scheduler_ready=on_scheduler_ready,
+                reporter_factory=lambda task_id, role_id: TaskReporter(self, task_id, role_id),
                 # Same hook the relay and single-agent branches pass. Without
                 # it POST /api/stop sets an event nothing reads, so the UI's
                 # Stop button silently does nothing on the default pipeline.
@@ -884,6 +943,8 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
                 self._serve_file(APP_JS_PATH, "text/javascript; charset=utf-8")
             elif url.path == "/api/state":
                 self._json(session.state())
+            elif url.path == "/api/diffs":
+                self._json({"diffs": session.diffs()})
             elif url.path == "/api/events":
                 since = int((parse_qs(url.query).get("since") or ["0"])[0])
                 self._json({"events": session.events_since(since),

@@ -21,6 +21,11 @@ const activity = {}, status = {}, steps = {};
 // separate from status{}/activity{} above, which are keyed by role name and
 // shaped for the OLD linear relay/single-agent rail.
 const taskLanes = {};
+// Structured file diffs from the current run, newest last. Rendered by
+// the "changes" canvas tab; kept separate from taskLanes because a file
+// can be touched by more than one task.
+const diffs = [];
+let canvasView = "lanes";
 	let runStart = 0, elapsedTimer = null;
 	let activityTimer = null;
 	let modelFilter = "";
@@ -391,6 +396,7 @@ async function runClientSlash(text) {
       for (const k in status) { delete status[k]; delete activity[k]; }
       for (const k in steps) delete steps[k];
       for (const k in taskLanes) delete taskLanes[k];
+      diffs.length = 0; updateDiffCount();
       addLog("guide", "conversation cleared", "ok");
       renderCards(); renderFlow(); updateProgress();
     }
@@ -719,6 +725,69 @@ function renderCards() {
   }).join("");
 }
 
+/* ---- changes view: the diff review surface ----
+   Fed by "diff" events, which carry the structured FileDiff the edit /
+   write / patch tools already produce. Read-only on purpose: accepting or
+   rejecting a hunk would mean holding edits back before they are applied,
+   which is a permission-model change, not a UI one — see DESIGN_TOKENS §7. */
+function renderDiffs() {
+  const stage = $("stage"); if (!stage) return;
+  stage.classList.add("tasks");
+  stage.style.transform = `scale(${zoom})`;
+  if (!diffs.length) {
+    stage.innerHTML = `<div class="dempty"><b>no file changes yet</b>` +
+      `<span>edits made by the agents show up here, grouped by file</span></div>`;
+    return;
+  }
+  stage.innerHTML = diffs.map((d, i) => {
+    // Which task made the change is never dropped: a new/deleted marker is
+    // an extra badge beside it, not a replacement for it. Zero counts are
+    // omitted — "−0" on a new file is noise pretending to be information.
+    const kind = d.is_new ? "new" : d.is_deleted ? "deleted" : "";
+    const tags = (kind ? `<span class="dtag kind">${kind}</span>` : "") +
+      `<span class="dtag">${esc(d.task_id)}</span>`;
+    const hunks = d.hunks.map(h => {
+      const lines = String(h.text || "").split("\n").map(line => {
+        if (!line) return "";
+        const sign = line[0];
+        const cls = sign === "+" ? "add" : sign === "-" ? "rem" : "";
+        // The sign lives in its own column so selecting the code column
+        // yields text you can actually paste back into a file.
+        return `<div class="dline ${cls}"><span class="dsign">${esc(cls ? sign : " ")}</span>` +
+          `<span class="dtext">${esc(line.slice(cls ? 1 : 0))}</span></div>`;
+      }).join("");
+      return `<div class="dhunk"><div class="dhh">${esc(h.header)}</div>${lines}</div>`;
+    }).join("");
+    return `<div class="dfile${i === 0 ? " open" : ""}" data-i="${i}">` +
+      `<div class="dhead"><span class="dchev">▸</span>` +
+      `<span class="dpath" title="${esc(d.path)}">${esc(d.path)}</span>` +
+      tags +
+      `<span class="dstat">` +
+      (d.added ? `<span class="dadd">+${d.added}</span>` : "") +
+      (d.removed ? `<span class="drem">−${d.removed}</span>` : "") +
+      `</span></div>` +
+      `<div class="dbody">${hunks}</div></div>`;
+  }).join("");
+  for (const head of stage.querySelectorAll(".dhead")) {
+    head.onclick = () => head.parentElement.classList.toggle("open");
+  }
+}
+
+function setCanvasView(view) {
+  canvasView = view;
+  for (const b of $("viewTabs").children) {
+    const on = b.dataset.v === view;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-selected", String(on));
+  }
+  renderFlow();
+}
+
+function updateDiffCount() {
+  const el = $("diffCount"); if (!el) return;
+  el.textContent = diffs.length ? String(diffs.length) : "";
+}
+
 // Task lanes: the --experimental-parallel view. One row per task-graph node,
 // concurrent rather than linear, so this does not reuse the rail's single
 // ring/segment metaphor below — a task can be "waiting on a dependency"
@@ -799,6 +868,7 @@ function renderTaskLanes() {
 // any number of participants — never cramped, never chaotic.
 function renderFlow() {
   const stage = $("stage"); if (!stage) return;
+  if (canvasView === "diffs") { renderDiffs(); return; }
   // Task lanes take over once there's data to show, or pre-emptively once
   // parallel is the configured pipeline (true by default) — the empty-state
   // hint should describe what the NEXT send will actually run, not always
@@ -963,6 +1033,7 @@ function handle(ev) {
     for (const k in status) { status[k] = "idle"; activity[k] = "waiting"; }
     for (const k in steps) delete steps[k];
     for (const k in taskLanes) delete taskLanes[k];
+    diffs.length = 0; updateDiffCount();
     runStart = Date.now();
     $("goal").textContent = ev.text;
   } else if (ev.kind === "role") {
@@ -1035,6 +1106,15 @@ function handle(ev) {
       meta: compactStatusText(ev.text, 72), started: null, ended: null, active: false, ok: false,
     });
     addMsg("err", "error", ev.text); addLog("error", ev.text, "bad");
+  } else if (ev.kind === "diff") {
+    diffs.push({
+      task_id: ev.task_id, role_id: ev.role_id, path: ev.path,
+      added: ev.added || 0, removed: ev.removed || 0,
+      is_new: !!ev.is_new, is_deleted: !!ev.is_deleted, hunks: ev.hunks || [],
+    });
+    updateDiffCount();
+    const sign = ev.is_new ? "new" : ev.is_deleted ? "deleted" : "edit";
+    addLog(ev.role_id || "diff", `${sign} ${ev.path} (+${ev.added}/−${ev.removed})`, "ok");
   } else if (ev.kind === "task_status") {
     const prev = taskLanes[ev.task_id];
     const startedNow = ev.status === "running" && (!prev || prev.status !== "running");
@@ -1128,6 +1208,7 @@ $("modes").addEventListener("click", async (e) => {
     for (const k in status) { delete status[k]; delete activity[k]; }
     for (const k in steps) delete steps[k];
     for (const k in taskLanes) delete taskLanes[k];
+    diffs.length = 0; updateDiffCount();
     $("stElapsed").textContent = "—"; $("stTokens").textContent = "—";
     $("stCost").textContent = "—";
     renderCards(); renderFlow(); updateProgress(); }
@@ -1166,6 +1247,9 @@ $("termCopy").onclick = async () => {
 	})();
 function setZoom(z) { zoom = Math.max(0.5, Math.min(1.3, z)); $("zVal").textContent = Math.round(zoom * 100) + "%";
   const s = $("stage"); if (s) s.style.transform = `scale(${zoom})`; }
+$("viewTabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (b) setCanvasView(b.dataset.v);
+});
 $("zIn").onclick = () => setZoom(zoom + 0.1);
 $("zOut").onclick = () => setZoom(zoom - 0.1);
 

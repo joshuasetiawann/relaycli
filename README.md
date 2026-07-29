@@ -327,6 +327,19 @@ The desktop UI has the same two controls as buttons on each task lane,
 each shown only when it applies: **drop** while a task is still live,
 **retry** once it has failed or been dropped.
 
+### Reviewing what changed
+
+The desktop console's canvas has two views: **lanes** (the task graph as
+it runs) and **changes** (every file the agents touched). Each entry
+shows the path, which task made the edit, the `+`/`−` tally, and the
+hunks themselves with a real sign gutter — so selecting the code column
+gives you text you can paste straight back into a file.
+
+Changes are read-only. Accepting or rejecting individual hunks would
+mean holding edits back until you approve them, which is a change to the
+permission model rather than to the UI — `suggest` and `auto-edit` are
+where that decision lives today.
+
 This path is newer than relay/task-split and has had less real-world
 mileage; if something looks wrong, `--relay` is the well-worn fallback.
 

@@ -158,6 +158,10 @@
     </div>
 
     <div class="canvas" id="canvas">
+      <div class="viewtabs" id="viewTabs" role="tablist" aria-label="Canvas view">
+        <button data-v="lanes" class="on" role="tab" aria-selected="true">lanes</button>
+        <button data-v="diffs" role="tab" aria-selected="false">changes<span class="vcount" id="diffCount"></span></button>
+      </div>
       <div class="canvas-scroll"><div class="stage" id="stage"></div></div>
       <div class="legend">
         <span><i style="background:var(--accent)"></i>active</span>
