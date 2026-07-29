@@ -110,16 +110,29 @@ class TaskAgentFactory:
         return agent, ctx
 
 
-def make_run_task(agent_factory):
+def make_run_task(agent_factory, reporter_factory=None):
     """A Scheduler-compatible run_task callable, closing over agent_factory
     (production TaskAgentFactory, or a fake for tests) — kept as its own
     function so it's unit-testable independent of Scheduler.run()'s own
-    concurrency machinery."""
+    concurrency machinery.
+
+    `reporter_factory(task_id, role_id) -> Reporter` gives each task's agent
+    somewhere to report model steps, tool calls and their diffs. Without one
+    a parallel run is silent past its task-status transitions: nothing else
+    ever sees which files an agent touched, which is also what a diff review
+    surface needs. Closed in a finally, since a Reporter typically buffers
+    the assistant's last block until told the run is over.
+    """
 
     async def run_task(task) -> TaskOutcome:
         def _run_sync() -> TaskOutcome:
             agent, ctx = agent_factory(task.role_id, task.id)
-            result = agent.run(task.goal)
+            reporter = reporter_factory(task.id, task.role_id) if reporter_factory else None
+            try:
+                result = agent.run(task.goal, reporter=reporter)
+            finally:
+                if reporter is not None and hasattr(reporter, "close"):
+                    reporter.close()
             return TaskOutcome(
                 task_id=task.id,
                 ok=(result.stopped_reason == "done"),
@@ -144,6 +157,7 @@ async def run_parallel(
     on_tick: Callable[[], None] | None = None,
     on_scheduler_ready: Callable[[Scheduler], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
+    reporter_factory: Callable[[str, str], object] | None = None,
 ) -> SchedulerResult:
     """Decompose `request` via the Orchestrator role, then run the
     resulting graph concurrently. The single real entry point
@@ -166,6 +180,12 @@ async def run_parallel(
     `should_stop` is polled by the Scheduler between rounds (see its own
     docstring for the cadence) and halts the run early when it returns
     true — how the live view's `esc` binding stops every agent.
+
+    `reporter_factory(task_id, role_id)` gives each task's agent a Reporter,
+    which is the only way anything downstream learns what a task actually
+    did — model steps, tool calls, and the structured diffs those tools
+    return. Omit it and a parallel run reports task statuses and nothing
+    else.
     """
     from relaycli.appconfig import load_app_config
     from relaycli.core.roster import specialist_runtime
@@ -192,7 +212,8 @@ async def run_parallel(
         llm=llm, leases=leases, budget=budget,
     )
     scheduler = Scheduler(
-        graph, make_run_task(factory), max_concurrent_agents=settings.max_concurrent_agents,
+        graph, make_run_task(factory, reporter_factory),
+        max_concurrent_agents=settings.max_concurrent_agents,
         leases=leases, budget=budget, on_tick=on_tick, should_stop=should_stop,
     )
     if on_scheduler_ready is not None:

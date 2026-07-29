@@ -133,12 +133,19 @@ class _FakeCtx:
 
 
 class _FakeTaskAgent:
+    """Mirrors agent/loop.py's real `Agent.run(request, *, reporter=None)`.
+    The reporter keyword is not decoration: make_run_task always passes it,
+    and a fake that omitted it hid that fact until the real signature was
+    exercised."""
+
     def __init__(self, result: AgentResult):
         self._result = result
         self.goals: list[str] = []
+        self.reporters: list[object] = []
 
-    def run(self, goal: str) -> AgentResult:
+    def run(self, goal: str, *, reporter=None) -> AgentResult:
         self.goals.append(goal)
+        self.reporters.append(reporter)
         return self._result
 
 
@@ -201,3 +208,60 @@ def test_make_run_task_refs_are_sorted_for_determinism():
     run_task = make_run_task(lambda r, t: (_FakeTaskAgent(result), fake_ctx))
     outcome = asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
     assert outcome.refs == ("a.py", "m.py", "z.py")
+
+
+# --- reporter_factory: how anything learns what a task actually did ---------
+def test_make_run_task_gives_each_task_agent_a_reporter():
+    """Without this a parallel run is silent past its status transitions —
+    no model steps, no tool calls, and no structured diffs, which is what a
+    review surface needs."""
+    agent = _FakeTaskAgent(AgentResult(
+        final_text="ok", iterations=1, tool_calls=0,
+        usage=Usage(total_tokens=5), stopped_reason="done"))
+    made = []
+
+    def factory(role_id, task_id):
+        return agent, _FakeCtx(set())
+
+    def reporter_factory(task_id, role_id):
+        made.append((task_id, role_id))
+        return object()
+
+    run_task = make_run_task(factory, reporter_factory)
+    asyncio.run(run_task(Task(id="t1", role_id="backend", goal="do it")))
+
+    assert made == [("t1", "backend")], "reporter must be built per task, with its id and role"
+    assert agent.reporters and agent.reporters[0] is not None
+
+
+def test_make_run_task_closes_the_reporter_even_when_the_agent_raises():
+    """A Reporter buffers the assistant's last block until close(); leaking
+    one loses that text, and a raising agent is exactly when you want it."""
+    closed = []
+
+    class _Reporter:
+        def close(self):
+            closed.append(True)
+
+    class _Boom:
+        def run(self, goal, *, reporter=None):
+            raise RuntimeError("agent exploded")
+
+    run_task = make_run_task(
+        lambda role_id, task_id: (_Boom(), _FakeCtx(set())),
+        lambda task_id, role_id: _Reporter(),
+    )
+    with pytest.raises(RuntimeError, match="exploded"):
+        asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
+    assert closed == [True]
+
+
+def test_make_run_task_without_a_reporter_factory_still_works():
+    """The terminal path passes none; a task agent must not require one."""
+    agent = _FakeTaskAgent(AgentResult(
+        final_text="ok", iterations=1, tool_calls=0,
+        usage=Usage(total_tokens=5), stopped_reason="done"))
+    run_task = make_run_task(lambda role_id, task_id: (agent, _FakeCtx(set())))
+    outcome = asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
+    assert outcome.ok is True
+    assert agent.reporters == [None]

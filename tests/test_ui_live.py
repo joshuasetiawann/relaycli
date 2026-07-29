@@ -347,3 +347,86 @@ def test_cursor_order_matches_the_rendered_lane_order():
     lanes = lane_views_for(sched, selected=1)
     highlighted = next(l.task_id for l in lanes if l.focused)
     assert dispatch_lane_action(sched, "drop_task", 1) == highlighted
+
+
+# --- LaneActivity: filling the lane list's long-empty tool/target column ----
+class _Call:
+    def __init__(self, name, arguments=None):
+        self.name = name
+        self.arguments = arguments or {}
+        self.id = "c1"
+
+
+def test_lane_activity_tracks_the_open_tool_and_clears_it_on_completion():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    assert activity.current("t1") == ("", "")
+
+    reporter.tool_start(_Call("edit_file", {"path": "src/app.py"}))
+    assert activity.current("t1") == ("edit_file", "src/app.py")
+
+    reporter.tool_end(_Call("edit_file"), None)
+    assert activity.current("t1") == ("", ""), "a finished call must not linger in the column"
+
+
+def test_lane_activity_keeps_tasks_apart():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    activity.reporter_for("t1", "backend").tool_start(_Call("edit_file", {"path": "a.py"}))
+    activity.reporter_for("t2", "tester").tool_start(_Call("run_command", {"command": "pytest"}))
+    assert activity.current("t1") == ("edit_file", "a.py")
+    assert activity.current("t2") == ("run_command", "pytest")
+
+
+def test_lane_activity_target_falls_back_across_argument_names():
+    """Tools name their subject differently; the column should show
+    something useful without this knowing every tool."""
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    for args, expected in [
+        ({"path": "p.py"}, "p.py"),
+        ({"file_path": "f.py"}, "f.py"),
+        ({"pattern": "TODO"}, "TODO"),
+        ({"command": "pytest -q"}, "pytest -q"),
+        ({"unrecognised": "x"}, ""),
+        ({}, ""),
+    ]:
+        reporter.tool_start(_Call("some_tool", args))
+        assert activity.current("t1")[1] == expected
+
+
+def test_lane_views_carry_the_current_tool_into_the_row():
+    from relaycli.ui.live import LaneActivity
+
+    sched = _settled_scheduler("a", "b")
+    activity = LaneActivity()
+    activity.reporter_for("a", "coder").tool_start(_Call("write_file", {"path": "out.py"}))
+
+    lanes = lane_views_for(sched, activity=activity)
+    by_id = {l.task_id: l for l in lanes}
+    assert (by_id["a"].tool, by_id["a"].target) == ("write_file", "out.py")
+    assert (by_id["b"].tool, by_id["b"].target) == ("", "")
+
+
+def test_lane_views_without_activity_leave_the_column_empty():
+    """Every existing caller passes no activity and must be unaffected."""
+    assert all(l.tool == "" and l.target == "" for l in lane_views_for(_settled_scheduler("a")))
+
+
+def test_frame_renders_the_tool_target_column():
+    from relaycli.ui.live import LaneActivity
+
+    sched = _settled_scheduler("a")
+    activity = LaneActivity()
+    activity.reporter_for("a", "coder").tool_start(_Call("edit_file", {"path": "deep/nested/mod.py"}))
+
+    lines = render_frame_lines(sched, _console(), "dark", None, activity)
+    body = "\n".join(line.plain for line in lines)
+    assert "edit_file" in body
+    # §4 truncation: directories are dropped before the column is clipped
+    assert "mod.py" in body

@@ -84,6 +84,65 @@ def live_view_supported(console: Console, settings: "Settings") -> bool:
     return narrow_terminal_refusal(console) is None
 
 
+class LaneActivity:
+    """What each task is doing right now, for the lane list's tool/target
+    column.
+
+    That column has existed since the lane renderer was written (§4 gives
+    it a fixed width and its own truncation rule) but nothing ever filled
+    it: parallel task agents were created without a Reporter, so no caller
+    learned which tool a task had open. This is the smallest thing that
+    closes that — a per-task "current tool" that clears when the call ends.
+
+    Written from task threads and read from the render thread, so it takes
+    a lock; the values are plain strings, replaced whole, never mutated.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._current: dict[str, tuple[str, str]] = {}
+
+    def reporter_for(self, task_id: str, role_id: str):
+        from relaycli.agent.reporter import Reporter
+
+        activity = self
+
+        class _LaneReporter(Reporter):
+            def tool_start(self, call) -> None:
+                activity._set(task_id, call.name, _target_of(call))
+
+            def tool_end(self, call, result) -> None:
+                activity._clear(task_id)
+
+        return _LaneReporter()
+
+    def _set(self, task_id: str, tool: str, target: str) -> None:
+        with self._lock:
+            self._current[task_id] = (tool, target)
+
+    def _clear(self, task_id: str) -> None:
+        with self._lock:
+            self._current.pop(task_id, None)
+
+    def current(self, task_id: str) -> tuple[str, str]:
+        with self._lock:
+            return self._current.get(task_id, ("", ""))
+
+
+def _target_of(call) -> str:
+    """The path-ish argument worth showing beside a tool name. Tools name
+    it differently (path/file/pattern/command), so take the first that is
+    present rather than teaching this about every tool."""
+    args = getattr(call, "arguments", None)
+    if not isinstance(args, dict):
+        return ""
+    for key in ("path", "file", "file_path", "pattern", "query", "command"):
+        value = args.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 def _elapsed_for(scheduler: "Scheduler", task_id: str, status: str) -> float:
     started = scheduler.task_started_at.get(task_id)
     if started is None:
@@ -96,7 +155,8 @@ def _elapsed_for(scheduler: "Scheduler", task_id: str, status: str) -> float:
     return 0.0
 
 
-def lane_views_for(scheduler: "Scheduler", selected: int | None = None) -> list[LaneView]:
+def lane_views_for(scheduler: "Scheduler", selected: int | None = None,
+                   activity: "LaneActivity | None" = None) -> list[LaneView]:
     """This instant's LaneView list, built straight from live Scheduler
     state. Called fresh every frame/tick, never cached — per-task
     tokens/cost only exist once a task's TaskOutcome lands in
@@ -109,12 +169,14 @@ def lane_views_for(scheduler: "Scheduler", selected: int | None = None) -> list[
     views = []
     for index, (task_id, task) in enumerate(scheduler.graph.tasks.items()):
         outcome = scheduler.outcomes.get(task_id)
+        tool, target = activity.current(task_id) if activity else ("", "")
         views.append(LaneView(
             task_id=task_id, role_id=task.role_id, status=task.status, goal=task.goal,
             tokens=outcome.usage.total_tokens if outcome else 0,
             cost_usd=outcome.usage.cost_usd if outcome else 0.0,
             elapsed_s=_elapsed_for(scheduler, task_id, task.status),
             focused=(selected == index),
+            tool=tool, target=target,
         ))
     return views
 
@@ -151,6 +213,7 @@ def render_help_overlay(mode: theme.ColorMode) -> list[Text]:
 def render_frame_lines(
     scheduler: "Scheduler", console: Console, mode: theme.ColorMode,
     state: "keymap.ViewState | None" = None,
+    activity: "LaneActivity | None" = None,
 ) -> list[Text]:
     """Status bar + bounded lane list as a flat list of rows — shared by
     LiveFrame (rendered inside a rich.Live pinned region) and anything
@@ -169,7 +232,7 @@ def render_frame_lines(
         return lines + render_help_overlay(mode)
     if state.lane_list_collapsed:
         return lines
-    lanes = lane_views_for(scheduler, selected=state.selected)
+    lanes = lane_views_for(scheduler, selected=state.selected, activity=activity)
     for lane in group_for_display(lanes, max_rows=LANE_LIST_MAX_ROWS):
         if isinstance(lane, GroupSummary):
             lines.append(render_group_row(lane, columns, mode))
@@ -213,14 +276,16 @@ class LiveFrame:
     reference to one instant's state would pin the cursor in place."""
 
     def __init__(self, scheduler: "Scheduler", mode: theme.ColorMode,
-                 state_getter: "Callable[[], keymap.ViewState] | None" = None) -> None:
+                 state_getter: "Callable[[], keymap.ViewState] | None" = None,
+                 activity: "LaneActivity | None" = None) -> None:
         self.scheduler = scheduler
         self.mode = mode
         self.state_getter = state_getter
+        self.activity = activity
 
     def __rich_console__(self, console: Console, options: "ConsoleOptions") -> "RenderResult":
         state = self.state_getter() if self.state_getter is not None else None
-        yield from render_frame_lines(self.scheduler, console, self.mode, state)
+        yield from render_frame_lines(self.scheduler, console, self.mode, state, self.activity)
 
 
 async def _run_with_live_frame(
@@ -238,6 +303,7 @@ async def _run_with_live_frame(
     # transition (e.g. focused=True with the old selected index).
     state_lock = threading.Lock()
     state_box = {"state": keymap.ViewState()}
+    activity = LaneActivity()
 
     def get_state() -> keymap.ViewState:
         with state_lock:
@@ -263,7 +329,7 @@ async def _run_with_live_frame(
 
     def on_scheduler_ready(scheduler: "Scheduler") -> None:
         holder["scheduler"] = scheduler
-        live.update(LiveFrame(scheduler, mode, get_state))
+        live.update(LiveFrame(scheduler, mode, get_state, activity))
 
     def on_tick() -> None:
         # Live's own refresh_per_second timer repaints the current
@@ -280,7 +346,7 @@ async def _run_with_live_frame(
             return await run_parallel(
                 settings, request, console=console, project=project, permissions=permissions,
                 on_scheduler_ready=on_scheduler_ready, on_tick=on_tick,
-                should_stop=should_stop,
+                should_stop=should_stop, reporter_factory=activity.reporter_for,
             )
     finally:
         stop_keys()
