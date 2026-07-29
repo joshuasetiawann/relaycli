@@ -9,6 +9,7 @@ local design) and a tiny JSON API the page polls:
 * ``GET  /app.js``           → app.js
 * ``GET  /api/state``        → model, mode, relay, roles, skills, cwd, version
 * ``POST /api/send``         → run one request on a worker thread (409 if busy)
+* ``POST /api/task``         → drop/retry one task of a running parallel graph
 * ``GET  /api/events?since`` → incremental event log (user/role/text/tool/…)
 
 SECURITY: binds 127.0.0.1 ONLY. The page can edit files and run commands
@@ -162,6 +163,11 @@ class WebSession:
         self._stop = threading.Event()
         self._manual_model_selected = False
         self._manual_slow_warning_shown_for: str | None = None
+        # Set while a parallel run is in flight so /api/task can address one
+        # lane. Cleared when the run ends: a stale Scheduler would happily
+        # accept requests for a graph nobody is executing any more, and the
+        # UI would show the drop/retry controls doing nothing.
+        self._scheduler = None
 
     # -- events ------------------------------------------------------------
     def add(self, kind: str, **data) -> None:
@@ -444,6 +450,31 @@ class WebSession:
     def stop(self) -> None:
         """Ask the in-flight run to halt after its current step (idempotent)."""
         self._stop.set()
+
+    def control_task(self, task_id: str, action: str) -> tuple[bool, str]:
+        """Drop or retry one task of the running parallel graph — the web
+        counterpart of the live view's `x` and `R` keys.
+
+        Requests are only queued here; the Scheduler applies them on its own
+        loop thread (see Scheduler.request_cancel), so this is safe to call
+        from an HTTP handler thread. Returns (ok, message) rather than
+        raising, since every failure mode is a normal thing a browser can
+        ask for: no run in flight, an unknown task id, a stale tab.
+        """
+        scheduler = self._scheduler
+        if scheduler is None:
+            return False, "no parallel run is in flight"
+        task_id = (task_id or "").strip()
+        if task_id not in scheduler.graph.tasks:
+            return False, f"unknown task: {task_id or '(empty)'}"
+        if action == "drop":
+            scheduler.request_cancel(task_id)
+        elif action == "retry":
+            scheduler.request_retry(task_id)
+        else:
+            return False, f"unknown action: {action}"
+        self.add("note", text=f"{action} requested for task {task_id}")
+        return True, task_id
 
     def reset(self, *, force: bool = False) -> bool:
         """Clear the event log for a new chat.
@@ -749,6 +780,7 @@ class WebSession:
 
         def on_scheduler_ready(scheduler) -> None:
             holder["scheduler"] = scheduler
+            self._scheduler = scheduler   # so /api/task can address a lane
             # Emit the full graph shape immediately, before any task has
             # transitioned, so the UI can draw every lane (including ones
             # still pending on a dependency) rather than only lanes that
@@ -780,6 +812,10 @@ class WebSession:
             self.add("summary", stopped="error", verdict=None, cycles=0, tasks=[],
                       tokens=0, cost=0.0, elapsed=round(time.time() - start, 1), text=str(exc))
             return
+        finally:
+            # Whatever happened — success, GraphError, or the caller's own
+            # except clause — no scheduler is running any more.
+            self._scheduler = None
         stopped = "done" if (not result.stopped_early and result.graph.all_ok()) else (
             "stopped" if result.stopped_early else "error")
         self.add(
@@ -906,6 +942,15 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
                 self._json(
                     {"ok": ok, "model": message} if ok else {"error": message},
                     status=200 if ok else 409,
+                )
+            elif path == "/api/task":
+                # Inside do_POST on purpose: it inherits the Host and Origin
+                # checks above, same as every other state-changing route.
+                ok, message = session.control_task(
+                    data.get("task_id") or "", data.get("action") or "")
+                self._json(
+                    {"ok": ok, "task_id": message} if ok else {"error": message},
+                    status=200 if ok else 400,
                 )
             elif path == "/api/send":
                 text = (data.get("text") or "").strip()

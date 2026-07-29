@@ -323,6 +323,10 @@ way. `R` puts a failed task back in the queue and un-blocks everything
 that was waiting on it; it applies while the run is still going, so retry
 a lane while its siblings are still working.
 
+The desktop UI has the same two controls as buttons on each task lane,
+each shown only when it applies: **drop** while a task is still live,
+**retry** once it has failed or been dropped.
+
 This path is newer than relay/task-split and has had less real-world
 mileage; if something looks wrong, `--relay` is the well-worn fallback.
 

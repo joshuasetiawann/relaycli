@@ -758,14 +758,39 @@ function renderTaskLanes() {
       ? `<span class="tdeps">waits: ${t.depends_on.map(esc).join(", ")}</span>` : "";
     const stat = (t.tokens || t.cost_usd)
       ? `<span class="tstat">${t.tokens} tok · $${t.cost_usd.toFixed(4)}</span>` : "";
+    // Only offer an action that can actually do something right now: drop
+    // while the task is still live, retry only once it has settled badly.
+    // The terminal's x/R keys are always pressable and simply ignored when
+    // they don't apply; a visible button that does nothing is worse.
+    const canDrop = busy && ["pending", "ready", "running", "blocked"].includes(t.status);
+    const canRetry = busy && ["failed", "cancelled"].includes(t.status);
+    const acts = (canDrop || canRetry)
+      ? `<div class="tacts">` +
+        (canDrop ? `<button class="tact" data-act="drop" data-id="${esc(id)}"
+           title="Drop this task and free its file lease">drop</button>` : "") +
+        (canRetry ? `<button class="tact" data-act="retry" data-id="${esc(id)}"
+           title="Queue this task again and unblock what was waiting on it">retry</button>` : "") +
+        `</div>` : "";
     return `<div class="tlane ${cls}">` +
       `<span class="tglyph">${statusGlyph(t.status)}</span>` +
       `<div class="tbody"><div class="thead"><span class="tid">${esc(id)}</span>` +
       `<span class="trole">${esc(t.role_id)}</span></div>` +
       `<div class="tgoal">${esc(t.goal)}</div>${deps}</div>` +
-      `<div class="tside">${stat}${elapsed ? `<span class="ttime">${esc(elapsed)}</span>` : ""}</div>` +
+      `<div class="tside">${stat}${elapsed ? `<span class="ttime">${esc(elapsed)}</span>` : ""}${acts}</div>` +
       `</div>`;
   }).join("");
+  for (const b of stage.querySelectorAll(".tact")) b.onclick = async () => {
+    b.disabled = true;
+    const r = await api("/api/task", { task_id: b.dataset.id, action: b.dataset.act });
+    let body = {};
+    try { body = await r.json(); } catch (e) {}
+    if (r.ok) {
+      addLog("task", `${b.dataset.act} requested for ${b.dataset.id}`, "warn");
+    } else {
+      addLog("task", body.error || `${b.dataset.act} failed`, "bad");
+      b.disabled = false;
+    }
+  };
 }
 
 // The orchestration rail: one station per participant on a vertical rail.

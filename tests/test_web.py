@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 
@@ -1180,3 +1181,119 @@ def test_run_panel_ships_a_live_cost_tile_wired_to_task_lanes():
     # summed from the task lanes, not just copied out of the summary event
     assert 'reduce((n, t) => n + (t.cost_usd || 0), 0)' in js
     assert 'reduce((n, t) => n + (t.tokens || 0), 0)' in js
+
+
+# --- per-lane drop/retry (web counterpart of the live view's x / R) ---------
+def _parallel_session_with_scheduler():
+    """A session holding a real Scheduler, without running a real graph:
+    control_task only needs graph.tasks and the request_* methods."""
+    from relaycli.agent.graph import Task, TaskGraph
+    from relaycli.agent.scheduler import Scheduler
+
+    async def run_task(task):
+        raise AssertionError("should not run in this test")
+
+    graph = TaskGraph.from_tasks([
+        Task(id="t1", role_id="coder", goal="a"),
+        Task(id="t2", role_id="tester", goal="b"),
+    ])
+    session = WebSession(_settings(experimental_parallel=True))
+    session._scheduler = Scheduler(graph, run_task)
+    return session
+
+
+def test_control_task_queues_a_drop_and_a_retry():
+    session = _parallel_session_with_scheduler()
+
+    ok, message = session.control_task("t1", "drop")
+    assert ok and message == "t1"
+    assert session._scheduler._cancel_requests == {"t1"}
+
+    ok, message = session.control_task("t2", "retry")
+    assert ok and message == "t2"
+    assert session._scheduler._retry_requests == {"t2"}
+
+
+def test_control_task_refuses_when_no_parallel_run_is_in_flight():
+    """A browser tab left open after a run must not be able to address a
+    scheduler that has finished."""
+    session = WebSession(_settings(experimental_parallel=True))
+    ok, message = session.control_task("t1", "drop")
+    assert ok is False
+    assert "no parallel run" in message
+
+
+def test_control_task_rejects_unknown_task_and_action():
+    session = _parallel_session_with_scheduler()
+
+    ok, message = session.control_task("nope", "drop")
+    assert ok is False and "unknown task" in message
+
+    ok, message = session.control_task("t1", "explode")
+    assert ok is False and "unknown action" in message
+    assert session._scheduler._cancel_requests == set()
+
+
+def test_scheduler_reference_is_cleared_when_the_parallel_run_ends():
+    """Regression guard: a stale Scheduler would accept requests for a
+    graph nobody is executing, and the UI's controls would silently do
+    nothing."""
+    session = WebSession(_settings(experimental_parallel=True), llm=FakeLLM([
+        _resp('{"tasks": [{"id": "t1", "role": "coder", "goal": "x"}]}'),
+        _resp("done"),
+    ]))
+    assert session.send("build the feature") is True
+    session._thread.join(timeout=30)
+    assert session._scheduler is None
+
+
+def test_task_route_round_trips_over_http():
+    session = _parallel_session_with_scheduler()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        req = urllib.request.Request(
+            base + "/api/task", method="POST",
+            data=json.dumps({"task_id": "t1", "action": "drop"}).encode(),
+            headers={"Content-Type": "application/json"})
+        assert json.loads(urllib.request.urlopen(req, timeout=5).read()) == {
+            "ok": True, "task_id": "t1"}
+        assert session._scheduler._cancel_requests == {"t1"}
+
+        bad = urllib.request.Request(
+            base + "/api/task", method="POST",
+            data=json.dumps({"task_id": "ghost", "action": "drop"}).encode(),
+            headers={"Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(bad, timeout=5)
+            raise AssertionError("an unknown task id should be a 400")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 400
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_task_route_is_behind_the_same_origin_guard_as_every_other_post():
+    """New state-changing routes must inherit the DNS-rebinding / CSRF
+    checks, not re-implement (or forget) them."""
+    session = _parallel_session_with_scheduler()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/task", method="POST",
+            data=json.dumps({"task_id": "t1", "action": "drop"}).encode(),
+            headers={"Content-Type": "application/json", "Origin": "http://evil.example"})
+        try:
+            urllib.request.urlopen(req, timeout=5)
+            raise AssertionError("cross-origin POST should be rejected")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+        assert session._scheduler._cancel_requests == set()
+    finally:
+        server.shutdown()
+        server.server_close()
