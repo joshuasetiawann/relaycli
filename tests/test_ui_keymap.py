@@ -158,3 +158,38 @@ def test_help_lists_every_documented_binding():
     for fragment in ("tab", "1-9", "enter", "esc", "^k", "?"):
         assert fragment in described
     assert all(desc.strip() for _, desc in keymap.KEY_HELP)
+
+
+# --- lane actions: x (drop) / R (retry) --------------------------------
+def test_lane_action_keys_parse():
+    assert parse_key("x") == KeyAction("drop_task")
+    assert parse_key("R") == KeyAction("retry_task")
+
+
+def test_lowercase_r_is_not_retry():
+    """§7 gives `R` to retry and lowercase `r` to retarget-a-lease, which
+    isn't built. Binding `r` to retry would make a typo do something the
+    user didn't ask for."""
+    assert parse_key("r") == KeyAction("none")
+
+
+def test_lane_actions_leave_the_view_state_alone():
+    """They address the Scheduler, not the view; the resulting status
+    change arrives through the normal graph read on the next frame."""
+    state = ViewState(selected=2, focused=True)
+    for key in ("x", "R"):
+        assert handle_key(state, key, 5) == state
+
+
+def test_lane_actions_are_declared_for_the_dispatcher():
+    """ui/live.py routes exactly these to the Scheduler; if a new lane
+    action is added to the map without listing it here it would silently
+    do nothing."""
+    assert keymap.LANE_ACTIONS == {"drop_task", "retry_task"}
+    for action in keymap.LANE_ACTIONS:
+        assert action in keymap.Action.__args__
+
+
+def test_help_covers_the_lane_actions_too():
+    described = " ".join(keys for keys, _ in keymap.KEY_HELP)
+    assert "x" in described and "R" in described

@@ -292,3 +292,58 @@ def test_grouping_never_folds_away_the_focused_lane():
     displayed = group_for_display(lanes, max_rows=LANE_LIST_MAX_ROWS)
     expanded = [l.task_id for l in displayed if not isinstance(l, GroupSummary)]
     assert "g" in expanded
+
+
+# --- lane actions dispatched to a real Scheduler (Stage 4: task steering) ---
+def test_dispatch_drop_cancels_the_task_under_the_cursor():
+    from relaycli.ui.live import dispatch_lane_action
+
+    sched = _settled_scheduler("a", "b", "c")   # graph order == cursor order
+    assert dispatch_lane_action(sched, "drop_task", 1) == "b"
+    assert sched._cancel_requests == {"b"}
+
+
+def test_dispatch_retry_targets_the_task_under_the_cursor():
+    from relaycli.ui.live import dispatch_lane_action
+
+    sched = _settled_scheduler("a", "b", "c")
+    assert dispatch_lane_action(sched, "retry_task", 2) == "c"
+    assert sched._retry_requests == {"c"}
+
+
+def test_dispatch_is_a_no_op_before_the_graph_exists():
+    """Keys can be pressed between the run starting and the orchestrator
+    returning a graph; there is no scheduler to address yet."""
+    from relaycli.ui.live import dispatch_lane_action
+
+    assert dispatch_lane_action(None, "drop_task", 0) is None
+
+
+def test_dispatch_ignores_a_cursor_past_the_end_of_the_graph():
+    from relaycli.ui.live import dispatch_lane_action
+
+    sched = _settled_scheduler("a")
+    assert dispatch_lane_action(sched, "drop_task", 7) is None
+    assert sched._cancel_requests == set()
+
+
+def test_dispatch_ignores_non_lane_actions():
+    """Navigation keys must not reach the Scheduler at all."""
+    from relaycli.ui.live import dispatch_lane_action
+
+    sched = _settled_scheduler("a", "b")
+    for action in ("next_lane", "focus", "back", "toggle_help", "none"):
+        assert dispatch_lane_action(sched, action, 0) is None
+    assert sched._cancel_requests == set() and sched._retry_requests == set()
+
+
+def test_cursor_order_matches_the_rendered_lane_order():
+    """dispatch indexes graph order; lane_views_for renders graph order.
+    If these ever diverge, `x` would drop a lane other than the highlighted
+    one — silent and destructive."""
+    from relaycli.ui.live import dispatch_lane_action
+
+    sched = _settled_scheduler("zebra", "alpha", "middle")
+    lanes = lane_views_for(sched, selected=1)
+    highlighted = next(l.task_id for l in lanes if l.focused)
+    assert dispatch_lane_action(sched, "drop_task", 1) == highlighted

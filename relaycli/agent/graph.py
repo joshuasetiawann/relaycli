@@ -124,6 +124,31 @@ class TaskGraph:
     def mark_cancelled(self, task_id: str) -> None:
         self.tasks[task_id].status = "cancelled"
 
+    def reset_for_retry(self, task_id: str) -> bool:
+        """Put a settled task back in the queue, undoing the collateral
+        damage of its own failure. Returns False if the task isn't in a
+        state that can be retried (still running, or already done).
+
+        mark_failed() blocks the whole descendant subtree, so a retry that
+        only reset the one task would leave its dependents stuck at
+        "blocked" forever and the graph would finish with work silently
+        skipped. Every descendant blocked by this failure is therefore
+        released too — back to "pending", since their own dependencies are
+        by definition not done yet.
+        """
+        task = self.tasks[task_id]
+        if task.status not in ("failed", "cancelled"):
+            return False
+        task.status = "ready" if self._deps_satisfied(task) else "pending"
+        for dep_id in self.descendants(task_id):
+            dependent = self.tasks[dep_id]
+            if dependent.status == "blocked":
+                dependent.status = "pending"
+        return True
+
+    def _deps_satisfied(self, task: Task) -> bool:
+        return all(self.tasks[d].status == "done" for d in task.depends_on)
+
 
 def _check_acyclic(tasks: dict[str, Task]) -> None:
     """Kahn's algorithm: if a topological order can't consume every task,

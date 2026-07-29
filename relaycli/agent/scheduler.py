@@ -16,6 +16,7 @@ finished, the budget is exhausted, or should_stop() returns true.
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
@@ -28,6 +29,10 @@ from relaycli.core.llm import Usage
 from relaycli.core.logging import get_logger
 
 _log = get_logger(__name__)
+
+# Statuses a control request must not overwrite (a task that already
+# finished can't be "cancelled" after the fact).
+_FINISHED_STATES = frozenset({"done", "failed", "cancelled"})
 
 
 @dataclass
@@ -87,6 +92,88 @@ class Scheduler:
         self.outcomes: dict[str, TaskOutcome] = {}
         self.task_started_at: dict[str, float] = {}
         self.task_ended_at: dict[str, float] = {}
+        # Single-task control (ui/live.py's `x` and `R` keys). Requests are
+        # queued rather than applied where they're made: the caller is a key
+        # reader on another thread, and cancelling an asyncio.Task or moving
+        # a graph node from under a running loop is only safe on the loop's
+        # own thread. run() drains these once per iteration.
+        self._control_lock = threading.Lock()
+        self._cancel_requests: set[str] = set()
+        self._retry_requests: set[str] = set()
+
+    # -- single-task control (thread-safe; applied by run()) ----------------
+    def request_cancel(self, task_id: str) -> None:
+        """Ask for one task to be dropped. Safe from any thread, safe to
+        call for an unknown or already-finished task (it's ignored)."""
+        with self._control_lock:
+            self._cancel_requests.add(task_id)
+
+    def request_retry(self, task_id: str) -> None:
+        """Ask for one failed/cancelled task to be queued again. Safe from
+        any thread; ignored if the task isn't in a retryable state.
+
+        Only effective while the run is still live. Once every task has
+        reached a terminal state the loop exits and returns its result, so
+        a retry requested after that has nothing left to process — in
+        practice you retry a failed lane while its siblings are still
+        working, which is exactly when the key is reachable anyway. (Found
+        by an end-to-end pty test whose first version pressed the key one
+        task too late.)"""
+        with self._control_lock:
+            self._retry_requests.add(task_id)
+
+    async def _drain_control_requests(self, running: dict[str, asyncio.Task]) -> None:
+        """Apply queued cancel/retry requests. Async because a cancelled
+        future still has to be awaited — dropping it without reaping it
+        leaves asyncio complaining that a task was destroyed while pending.
+
+        Cancelling only detaches the task from the scheduler: the work runs
+        in a thread (asyncio.to_thread, since Agent.run is synchronous) and
+        a Python thread cannot be killed, so the agent finishes its current
+        model call before it actually goes away. Its result is discarded and
+        its lease is freed immediately, which is what unblocks the graph.
+        The pre-existing stopped_early path has the same property."""
+        with self._control_lock:
+            cancels = self._cancel_requests
+            retries = self._retry_requests
+            self._cancel_requests = set()
+            self._retry_requests = set()
+
+        cancelled_futures = []
+        for task_id in cancels:
+            if task_id not in self.graph.tasks:
+                continue
+            future = running.pop(task_id, None)
+            if future is not None:
+                future.cancel()
+                cancelled_futures.append(future)
+                self.task_ended_at[task_id] = time.perf_counter()
+            # Release the lease whether or not it was running: a task
+            # cancelled between acquire and launch would otherwise hold a
+            # path claim nothing will ever release, stalling the graph.
+            self.leases.release(task_id)
+            if self.graph.tasks[task_id].status not in _FINISHED_STATES:
+                self.graph.mark_cancelled(task_id)
+                _log.info("task '%s' cancelled on request", task_id)
+
+        if cancelled_futures:
+            await asyncio.gather(*cancelled_futures, return_exceptions=True)
+
+        for task_id in retries:
+            if task_id in self.graph.tasks and self.graph.reset_for_retry(task_id):
+                self.outcomes.pop(task_id, None)
+                self.task_started_at.pop(task_id, None)
+                self.task_ended_at.pop(task_id, None)
+                _log.info("task '%s' queued for retry", task_id)
+
+    def _has_pending_retries(self) -> bool:
+        """Whether a retry is queued but not yet applied. run()'s loop
+        condition consults this: a retry un-finishes the graph, so a request
+        queued by the last iteration's on_tick would otherwise be dropped
+        when the while check saw every task in a terminal state and exited.
+        Cancels need no such guard — they can only finish a graph sooner."""
+        with self._control_lock:
+            return bool(self._retry_requests)
 
     def _tick(self) -> None:
         """Fired once per loop iteration (see run(), via try/finally, so
@@ -106,7 +193,7 @@ class Scheduler:
         running: dict[str, asyncio.Task] = {}
         stopped_early = False
 
-        while not self.graph.is_finished():
+        while not self.graph.is_finished() or self._has_pending_retries():
             # try/finally, not a tick() call at every break/continue site:
             # on_tick must fire once per iteration on *every* path through
             # this body (early stall, budget breach, plain timeout, a
@@ -115,6 +202,11 @@ class Scheduler:
                 if self._should_stop is not None and self._should_stop():
                     stopped_early = True
                     break
+
+                # Before launching: a cancel may free a lease that lets
+                # something else start this same round, and a retry may add
+                # a newly-ready task.
+                await self._drain_control_requests(running)
 
                 launched_this_round = self._launch_ready(running)
 

@@ -5,10 +5,15 @@ Action and an Action into the next ViewState. It never touches a
 terminal, a thread or a Scheduler, so every transition here is testable
 without a TTY. ui/live.py owns the termios/reader-thread half.
 
-Only the navigation subset of §7 is implemented (see KEY_HELP): the rest
-of the map — steer, preempt/retarget, retry/drop, the diff queue and its
-consent keys — needs Scheduler-level task steering that doesn't exist
-yet, and would be a promise the UI can't keep.
+Implemented (see KEY_HELP): the navigation subset, plus the two lane
+actions the Scheduler can actually honour — `x` drop and `R` retry, which
+map to Scheduler.request_cancel / request_retry.
+
+Still unimplemented, because the Scheduler has no way to do them: `s`
+steer (no channel into a running Agent — Agent.run is synchronous, in a
+thread), `p`/`r` preempt/retarget a lease, `l` jump to the lease holder,
+and the `d` diff queue with its consent keys. Binding those now would be
+a promise the UI can't keep.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from typing import Literal
 
 Action = Literal[
     "none", "next_lane", "prev_lane", "jump_lane", "focus", "back",
-    "toggle_help", "toggle_lane_list",
+    "toggle_help", "toggle_lane_list", "drop_task", "retry_task",
 ]
 
 # Raw byte sequences, already disambiguated by the reader (a bare ESC is
@@ -37,8 +42,15 @@ KEY_HELP: tuple[tuple[str, str], ...] = (
     ("enter", "focus the selected lane"),
     ("esc", "back out one level (at top level: stop every agent)"),
     ("^k", "collapse / expand the lane list"),
+    ("x", "drop the selected task (frees its file lease)"),
+    ("R", "retry the selected task once it has failed"),
     ("?", "toggle this overlay"),
 )
+
+# Actions that address the selected lane rather than the view. ui/live.py
+# turns these into Scheduler.request_cancel / request_retry; keymap itself
+# stays pure and never touches a Scheduler.
+LANE_ACTIONS: frozenset[str] = frozenset({"drop_task", "retry_task"})
 
 
 @dataclass(frozen=True)
@@ -76,6 +88,10 @@ def parse_key(key: str) -> KeyAction:
         return KeyAction("toggle_help")
     if key == KEY_CTRL_K:
         return KeyAction("toggle_lane_list")
+    if key == "x":
+        return KeyAction("drop_task")
+    if key == "R":   # capital only, per §7 — lowercase r is retarget, unbuilt
+        return KeyAction("retry_task")
     if len(key) == 1 and key.isdigit() and key != "0":
         return KeyAction("jump_lane", lane_number=int(key))
     return KeyAction("none")
@@ -98,6 +114,12 @@ def apply_action(state: ViewState, key_action: KeyAction, lane_count: int) -> Vi
         return state  # out of range: ignore, don't clamp to a lane the user didn't press
     if action == "focus" and lane_count:
         return replace(state, focused=True)
+    if action in LANE_ACTIONS:
+        # Pure: the state is unchanged. The caller reads the action itself
+        # and asks the Scheduler; the resulting status change comes back
+        # through the normal graph read on the next frame, so nothing here
+        # has to predict or mirror it.
+        return state
     if action == "toggle_help":
         return replace(state, show_help=not state.show_help)
     if action == "toggle_lane_list":

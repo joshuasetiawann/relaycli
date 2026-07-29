@@ -462,3 +462,118 @@ def test_on_tick_fires_after_should_stop_cancellation_cleanup():
     calls, graph = asyncio.run(main())
     assert calls
     assert all(t.status == "cancelled" for t in graph.tasks.values())
+
+
+# --- single-task control: the `x` (drop) and `R` (retry) keys ---------------
+def test_request_cancel_drops_one_task_and_leaves_the_rest_running():
+    """`x` on a lane must remove exactly that task, not stop the run."""
+    started: list[str] = []
+
+    async def run_task(task):
+        started.append(task.id)
+        if task.id == "slow":
+            await asyncio.sleep(5)
+        return TaskOutcome(task_id=task.id, ok=True, summary="ok")
+
+    graph = TaskGraph.from_tasks([
+        Task(id="slow", role_id="coder", goal="a"),
+        Task(id="quick", role_id="coder", goal="b"),
+    ])
+    sched = Scheduler(graph, run_task, max_concurrent_agents=2)
+
+    def cancel_once():
+        if graph.tasks["slow"].status == "running":
+            sched.request_cancel("slow")
+
+    sched._on_tick = cancel_once
+    result = asyncio.run(sched.run())
+
+    assert graph.tasks["slow"].status == "cancelled"
+    assert graph.tasks["quick"].status == "done"
+    assert result.stopped_early is False, "dropping one task is not stopping the run"
+
+
+def test_request_cancel_frees_the_lease_so_a_blocked_task_can_run():
+    """The point of dropping a stuck task: whatever it was holding must be
+    released, or the graph deadlocks on a path claim nobody will free."""
+    async def run_task(task):
+        if task.id == "hog":
+            await asyncio.sleep(5)
+        return TaskOutcome(task_id=task.id, ok=True, summary="ok")
+
+    graph = TaskGraph.from_tasks([
+        Task(id="hog", role_id="coder", goal="a", path_claims=("src/app.py",)),
+        Task(id="waiter", role_id="coder", goal="b", path_claims=("src/app.py",)),
+    ])
+    sched = Scheduler(graph, run_task, max_concurrent_agents=2)
+
+    def cancel_the_hog():
+        if graph.tasks["hog"].status == "running":
+            sched.request_cancel("hog")
+
+    sched._on_tick = cancel_the_hog
+    asyncio.run(sched.run())
+
+    assert graph.tasks["hog"].status == "cancelled"
+    assert graph.tasks["waiter"].status == "done", "lease was never released"
+    assert sched.leases.conflicts_with_running(("src/app.py",)) is None
+
+
+def test_request_retry_reruns_a_failed_task_and_unblocks_its_subtree():
+    """mark_failed() blocks the whole descendant subtree. A retry that only
+    reset the one task would leave dependents stuck at 'blocked' forever
+    and the graph would finish with work silently skipped."""
+    attempts: dict[str, int] = {}
+
+    async def run_task(task):
+        attempts[task.id] = attempts.get(task.id, 0) + 1
+        ok = not (task.id == "flaky" and attempts[task.id] == 1)
+        return TaskOutcome(task_id=task.id, ok=ok, summary="ok" if ok else "boom")
+
+    graph = TaskGraph.from_tasks([
+        Task(id="flaky", role_id="coder", goal="a"),
+        Task(id="dependent", role_id="coder", goal="b", depends_on=("flaky",)),
+    ])
+    sched = Scheduler(graph, run_task)
+
+    def retry_once():
+        if graph.tasks["flaky"].status == "failed":
+            sched.request_retry("flaky")
+
+    sched._on_tick = retry_once
+    asyncio.run(sched.run())
+
+    assert attempts["flaky"] == 2, "the failed task should have been retried"
+    assert graph.tasks["flaky"].status == "done"
+    assert graph.tasks["dependent"].status == "done", "subtree stayed blocked after retry"
+
+
+def test_control_requests_for_unknown_or_finished_tasks_are_ignored():
+    """The key map addresses lanes by id; a stale id (or a lane that just
+    finished) must not raise or corrupt state mid-run."""
+    async def run_task(task):
+        return TaskOutcome(task_id=task.id, ok=True, summary="ok")
+
+    graph = TaskGraph.from_tasks([Task(id="only", role_id="coder", goal="a")])
+    sched = Scheduler(graph, run_task)
+    sched.request_cancel("does-not-exist")
+    sched.request_retry("does-not-exist")
+    result = asyncio.run(sched.run())
+
+    assert graph.tasks["only"].status == "done"
+    assert result.stopped_early is False
+
+    sched.request_cancel("only")          # already done
+    asyncio.run(sched._drain_control_requests({}))
+    assert graph.tasks["only"].status == "done", "a finished task must not be re-marked"
+
+
+def test_retry_is_refused_for_a_task_that_did_not_fail():
+    graph = TaskGraph.from_tasks([Task(id="t1", role_id="coder", goal="a")])
+    assert graph.reset_for_retry("t1") is False      # still 'ready'
+    graph.mark_running("t1")
+    assert graph.reset_for_retry("t1") is False      # running
+    graph.mark_done("t1")
+    assert graph.reset_for_retry("t1") is False      # done
+    graph.mark_failed("t1")
+    assert graph.reset_for_retry("t1") is True       # failed -> retryable

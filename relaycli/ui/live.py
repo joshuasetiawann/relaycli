@@ -178,6 +178,29 @@ def render_frame_lines(
     return lines
 
 
+def dispatch_lane_action(scheduler: "Scheduler | None", action: str, selected: int) -> str | None:
+    """Turn a lane action plus the cursor position into a Scheduler
+    request. Returns the task id acted on, or None when there's nothing to
+    act on (no scheduler yet, cursor past the end, or not a lane action).
+
+    A module-level function rather than a closure so it can be tested
+    against a real Scheduler: the cursor indexes graph order, which is the
+    same order lane_views_for builds, so what the user sees selected is
+    what gets addressed.
+    """
+    if scheduler is None or action not in keymap.LANE_ACTIONS:
+        return None
+    task_ids = list(scheduler.graph.tasks)
+    if not (0 <= selected < len(task_ids)):
+        return None
+    task_id = task_ids[selected]
+    if action == "drop_task":
+        scheduler.request_cancel(task_id)
+    elif action == "retry_task":
+        scheduler.request_retry(task_id)
+    return task_id
+
+
 class LiveFrame:
     """Rich __rich_console__ renderable: Live's own background-refresh
     thread calls this on every frame, so it must read live.scheduler
@@ -225,8 +248,15 @@ async def _run_with_live_frame(
         return len(scheduler.graph.tasks) if scheduler is not None else 0
 
     def on_key(key: str) -> None:
+        action = keymap.parse_key(key)
         with state_lock:
-            state_box["state"] = keymap.handle_key(state_box["state"], key, lane_count())
+            current = state_box["state"]
+            state_box["state"] = keymap.apply_action(current, action, lane_count())
+        # Lane actions address the Scheduler, not the view. Requests are
+        # queued there and applied on its own loop thread, so calling this
+        # from the key reader thread is safe; the resulting status change
+        # shows up through the normal graph read on the next frame.
+        dispatch_lane_action(holder.get("scheduler"), action.action, current.selected)
 
     def should_stop() -> bool:
         return get_state().stop_requested

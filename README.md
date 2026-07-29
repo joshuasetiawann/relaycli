@@ -306,12 +306,22 @@ While that live view is up, the lane list is navigable:
 | `enter` | focus the selected lane |
 | `esc` | back out one level — at the top level, stop every agent |
 | `^k` | collapse / expand the lane list |
+| `x` | drop the selected task, freeing its file lease |
+| `R` | retry the selected task once it has failed |
 | `?` | toggle the key overlay |
 
 `esc` peels one layer at a time (overlay, then focus, then stop), so it
 can never end a run while something you were reading is still on screen.
 Keys are read only from a real terminal; piped or redirected output is
 unaffected.
+
+`x` detaches a task and releases whatever files it had claimed, which is
+how you unstick a graph waiting on one wedged agent. The work itself runs
+in a thread and cannot be killed outright, so that agent finishes its
+current model call before it goes away — its result is discarded either
+way. `R` puts a failed task back in the queue and un-blocks everything
+that was waiting on it; it applies while the run is still going, so retry
+a lane while its siblings are still working.
 
 This path is newer than relay/task-split and has had less real-world
 mileage; if something looks wrong, `--relay` is the well-worn fallback.
