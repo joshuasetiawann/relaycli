@@ -130,3 +130,45 @@ def test_sixteen_color_fallback_preserves_hue_order_for_core_states():
     assert list(theme.SIXTEEN_COLOR_FALLBACK) == [
         "accent", "running", "waiting", "success", "danger", "warning", "muted",
     ]
+
+
+# --- import-cycle regression -------------------------------------------
+@pytest.mark.parametrize("first_import", [
+    "from relaycli.ui.theme import DARK",
+    "from relaycli.ui import lanes",
+    "from relaycli.ui import live",
+    "from relaycli.config import menu",
+])
+def test_no_import_cycle_whatever_is_imported_first(first_import):
+    """Regression: ui.theme imported agent.graph for a type that is only
+    ever used in an annotation. With `from __future__ import annotations`
+    that annotation is never evaluated, but the import was still real, and
+    it closed a cycle:
+
+        ui.theme -> agent.graph -> agent -> agent.loop -> skills
+                 -> config -> config.menu -> ui.theme
+
+    so `from relaycli.ui.theme import DARK` raised ImportError whenever it
+    was the first relaycli import in a process. Must run in a subprocess:
+    by the time this test executes, pytest has already imported everything,
+    which is exactly what hides the bug.
+    """
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", first_import + "; print('OK')"],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert result.returncode == 0, f"import cycle: {result.stderr[-400:]}"
+    assert "OK" in result.stdout
+
+
+def test_task_state_tables_are_intact_at_runtime():
+    """The TYPE_CHECKING guard must not have cost us the real data."""
+    from relaycli.ui.theme import TASK_STATE_COLOR, TASK_STATE_GLYPHS, TASK_STATE_WORD
+
+    for status in ("pending", "ready", "running", "blocked", "done", "failed", "cancelled"):
+        assert status in TASK_STATE_GLYPHS
+        assert status in TASK_STATE_COLOR
+        assert status in TASK_STATE_WORD

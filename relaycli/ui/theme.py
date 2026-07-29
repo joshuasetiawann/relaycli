@@ -16,9 +16,16 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from relaycli.agent.graph import TaskStatus
+if TYPE_CHECKING:
+    # Type-only: every use below is an annotation, and this module has
+    # `from __future__ import annotations`, so none of them is evaluated at
+    # runtime. Importing it for real created a genuine import cycle —
+    # ui.theme -> agent.graph -> agent -> agent.loop -> skills -> config ->
+    # config.menu -> ui.theme — which made `from relaycli.ui.theme import ...`
+    # fail outright whenever it was the first relaycli import in a process.
+    from relaycli.agent.graph import TaskStatus
 
 ColorMode = Literal["dark", "light", "no_color"]
 
