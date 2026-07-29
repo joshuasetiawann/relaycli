@@ -297,6 +297,22 @@ permission prompt can't safely share the screen with a display that's
 redrawing itself. Any other permission mode prints one line per task as
 it changes state instead.
 
+While that live view is up, the lane list is navigable:
+
+| Key | Action |
+| --- | --- |
+| `tab` / `shift-tab` | next / previous lane |
+| `1`–`9` | jump to a lane |
+| `enter` | focus the selected lane |
+| `esc` | back out one level — at the top level, stop every agent |
+| `^k` | collapse / expand the lane list |
+| `?` | toggle the key overlay |
+
+`esc` peels one layer at a time (overlay, then focus, then stop), so it
+can never end a run while something you were reading is still on screen.
+Keys are read only from a real terminal; piped or redirected output is
+unaffected.
+
 This path is newer than relay/task-split and has had less real-world
 mileage; if something looks wrong, `--relay` is the well-worn fallback.
 

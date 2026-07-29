@@ -143,6 +143,7 @@ async def run_parallel(
     llm: LLM | None = None,
     on_tick: Callable[[], None] | None = None,
     on_scheduler_ready: Callable[[Scheduler], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> SchedulerResult:
     """Decompose `request` via the Orchestrator role, then run the
     resulting graph concurrently. The single real entry point
@@ -161,6 +162,10 @@ async def run_parallel(
     the Scheduler is constructed but before `.run()` starts — the only way
     a caller can get a direct reference to it at all, since run_parallel
     otherwise only returns once everything is finished.
+
+    `should_stop` is polled by the Scheduler between rounds (see its own
+    docstring for the cadence) and halts the run early when it returns
+    true — how the live view's `esc` binding stops every agent.
     """
     from relaycli.appconfig import load_app_config
     from relaycli.core.roster import specialist_runtime
@@ -188,7 +193,7 @@ async def run_parallel(
     )
     scheduler = Scheduler(
         graph, make_run_task(factory), max_concurrent_agents=settings.max_concurrent_agents,
-        leases=leases, budget=budget, on_tick=on_tick,
+        leases=leases, budget=budget, on_tick=on_tick, should_stop=should_stop,
     )
     if on_scheduler_ready is not None:
         on_scheduler_ready(scheduler)

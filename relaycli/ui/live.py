@@ -35,15 +35,16 @@ status-bar + lane-list slice of it, wired to real Scheduler state.
 from __future__ import annotations
 
 import os
+import threading
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from rich.console import Console
 from rich.live import Live
 from rich.text import Text
 
 from relaycli.core.config import PermissionMode
-from relaycli.ui import theme
+from relaycli.ui import keymap, keyreader, theme
 from relaycli.ui.lanes import GroupSummary, LaneView, group_for_display, render_group_row, render_lane_row
 from relaycli.ui.layout import LANE_LIST_MAX_ROWS, TooNarrowError, resolve_columns
 
@@ -95,20 +96,25 @@ def _elapsed_for(scheduler: "Scheduler", task_id: str, status: str) -> float:
     return 0.0
 
 
-def lane_views_for(scheduler: "Scheduler") -> list[LaneView]:
+def lane_views_for(scheduler: "Scheduler", selected: int | None = None) -> list[LaneView]:
     """This instant's LaneView list, built straight from live Scheduler
     state. Called fresh every frame/tick, never cached — per-task
     tokens/cost only exist once a task's TaskOutcome lands in
     scheduler.outcomes (Agent.run() has no incremental usage reporting),
-    so a still-running task shows 0 for both until it completes."""
+    so a still-running task shows 0 for both until it completes.
+
+    `selected` marks one lane focused (the key map's cursor). It indexes
+    this list, i.e. graph order, so grouping the display can never move
+    the cursor out from under the user."""
     views = []
-    for task_id, task in scheduler.graph.tasks.items():
+    for index, (task_id, task) in enumerate(scheduler.graph.tasks.items()):
         outcome = scheduler.outcomes.get(task_id)
         views.append(LaneView(
             task_id=task_id, role_id=task.role_id, status=task.status, goal=task.goal,
             tokens=outcome.usage.total_tokens if outcome else 0,
             cost_usd=outcome.usage.cost_usd if outcome else 0.0,
             elapsed_s=_elapsed_for(scheduler, task_id, task.status),
+            focused=(selected == index),
         ))
     return views
 
@@ -128,14 +134,42 @@ def render_status_bar(scheduler: "Scheduler", mode: theme.ColorMode) -> Text:
     return text
 
 
-def render_frame_lines(scheduler: "Scheduler", console: Console, mode: theme.ColorMode) -> list[Text]:
+def render_help_overlay(mode: theme.ColorMode) -> list[Text]:
+    """The `?` overlay. Built from keymap.KEY_HELP so it cannot drift from
+    the bindings themselves."""
+    palette = theme.palette_for(mode)
+    lines = [Text("keys", style=f"bold {palette.accent}" if palette else "bold")]
+    width = max(len(keys) for keys, _ in keymap.KEY_HELP)
+    for keys, description in keymap.KEY_HELP:
+        row = Text()
+        row.append(f"  {keys.ljust(width)}  ", style=palette.muted if palette else None)
+        row.append(description, style=palette.text if palette else None)
+        lines.append(row)
+    return lines
+
+
+def render_frame_lines(
+    scheduler: "Scheduler", console: Console, mode: theme.ColorMode,
+    state: "keymap.ViewState | None" = None,
+) -> list[Text]:
     """Status bar + bounded lane list as a flat list of rows — shared by
     LiveFrame (rendered inside a rich.Live pinned region) and anything
     else that wants the same content without the animation machinery
-    (e.g. a future --plain snapshot)."""
+    (e.g. a future --plain snapshot).
+
+    `state` carries the key map's view state (cursor, help overlay,
+    collapsed lane list); None renders exactly as it did before the key
+    map existed, which is what the non-interactive paths still want."""
+    state = state or keymap.ViewState()
     columns = resolve_columns(console.size.width)
     lines = [render_status_bar(scheduler, mode)]
-    lanes = lane_views_for(scheduler)
+    if state.show_help:
+        # The overlay replaces the lane list rather than pushing it off the
+        # bottom — §4's row budget has no room for both on a 24-row terminal.
+        return lines + render_help_overlay(mode)
+    if state.lane_list_collapsed:
+        return lines
+    lanes = lane_views_for(scheduler, selected=state.selected)
     for lane in group_for_display(lanes, max_rows=LANE_LIST_MAX_ROWS):
         if isinstance(lane, GroupSummary):
             lines.append(render_group_row(lane, columns, mode))
@@ -149,14 +183,21 @@ class LiveFrame:
     thread calls this on every frame, so it must read live.scheduler
     fresh each time rather than freezing data at construction — the
     idiomatic Rich pattern for "renders current state," used here instead
-    of this module driving its own redraw loop."""
+    of this module driving its own redraw loop.
 
-    def __init__(self, scheduler: "Scheduler", mode: theme.ColorMode) -> None:
+    `state_getter` is read the same way and for the same reason: the key
+    reader thread replaces the ViewState between frames, so holding a
+    reference to one instant's state would pin the cursor in place."""
+
+    def __init__(self, scheduler: "Scheduler", mode: theme.ColorMode,
+                 state_getter: "Callable[[], keymap.ViewState] | None" = None) -> None:
         self.scheduler = scheduler
         self.mode = mode
+        self.state_getter = state_getter
 
     def __rich_console__(self, console: Console, options: "ConsoleOptions") -> "RenderResult":
-        yield from render_frame_lines(self.scheduler, console, self.mode)
+        state = self.state_getter() if self.state_getter is not None else None
+        yield from render_frame_lines(self.scheduler, console, self.mode, state)
 
 
 async def _run_with_live_frame(
@@ -168,10 +209,31 @@ async def _run_with_live_frame(
 
     mode = theme.current_color_mode(load_app_config().preference("theme"))
     holder: dict[str, "Scheduler"] = {}
+    # Mutated by the key reader thread, read by Live's refresh thread. A
+    # frozen dataclass swapped under a lock, rather than a mutable object
+    # edited in place: a frame can then never observe a half-applied
+    # transition (e.g. focused=True with the old selected index).
+    state_lock = threading.Lock()
+    state_box = {"state": keymap.ViewState()}
+
+    def get_state() -> keymap.ViewState:
+        with state_lock:
+            return state_box["state"]
+
+    def lane_count() -> int:
+        scheduler = holder.get("scheduler")
+        return len(scheduler.graph.tasks) if scheduler is not None else 0
+
+    def on_key(key: str) -> None:
+        with state_lock:
+            state_box["state"] = keymap.handle_key(state_box["state"], key, lane_count())
+
+    def should_stop() -> bool:
+        return get_state().stop_requested
 
     def on_scheduler_ready(scheduler: "Scheduler") -> None:
         holder["scheduler"] = scheduler
-        live.update(LiveFrame(scheduler, mode))
+        live.update(LiveFrame(scheduler, mode, get_state))
 
     def on_tick() -> None:
         # Live's own refresh_per_second timer repaints the current
@@ -181,12 +243,17 @@ async def _run_with_live_frame(
         # have to special-case "the live-frame path passes None instead."
         pass
 
-    with Live(Text("relaycli parallel — starting…", style="dim"),
-              console=console, refresh_per_second=15, transient=False) as live:
-        return await run_parallel(
-            settings, request, console=console, project=project, permissions=permissions,
-            on_scheduler_ready=on_scheduler_ready, on_tick=on_tick,
-        )
+    stop_keys = keyreader.start(on_key)
+    try:
+        with Live(Text("relaycli parallel — starting…  (? for keys)", style="dim"),
+                  console=console, refresh_per_second=15, transient=False) as live:
+            return await run_parallel(
+                settings, request, console=console, project=project, permissions=permissions,
+                on_scheduler_ready=on_scheduler_ready, on_tick=on_tick,
+                should_stop=should_stop,
+            )
+    finally:
+        stop_keys()
 
 
 def _progress_line(task_id: str, role_id: str, status: str, mode: theme.ColorMode) -> Text:

@@ -209,3 +209,86 @@ def test_live_frame_cleans_up_and_propagates_graph_error(monkeypatch):
             )
 
     asyncio.run(main())
+
+
+# --- key-map view state (Stage 4 remainder: focus mode + key overlay) --------
+def _settled_scheduler(*ids: str) -> Scheduler:
+    async def run_task(task):
+        return TaskOutcome(task_id=task.id, ok=True, summary="done")
+
+    graph = _graph(*[Task(id=i, role_id="coder", goal=f"goal {i}") for i in ids])
+    sched = Scheduler(graph, run_task)
+    asyncio.run(sched.run())
+    return sched
+
+
+def test_lane_views_mark_the_selected_lane_focused():
+    sched = _settled_scheduler("a", "b", "c")
+    lanes = lane_views_for(sched, selected=1)
+    assert [lane.focused for lane in lanes] == [False, True, False]
+
+
+def test_lane_views_focus_nothing_when_no_selection_is_given():
+    """The progress-lines path and any other non-interactive caller must
+    render exactly as they did before the key map existed."""
+    assert not any(lane.focused for lane in lane_views_for(_settled_scheduler("a", "b")))
+
+
+def test_focused_lane_row_draws_the_focus_rail():
+    from relaycli.ui import theme
+    from relaycli.ui.layout import resolve_columns
+    from relaycli.ui.lanes import render_lane_row
+
+    lane = lane_views_for(_settled_scheduler("a", "b"), selected=0)[0]
+    row = render_lane_row(lane, resolve_columns(120), "dark")
+    assert row.plain.startswith(theme.MARKERS["focus_rail"].symbol)
+
+
+def test_help_overlay_replaces_the_lane_list():
+    """§4's row budget has no room for both on a 24-row terminal."""
+    from relaycli.ui import keymap
+
+    sched = _settled_scheduler("a", "b", "c")
+    lines = render_frame_lines(sched, _console(), "dark", keymap.ViewState(show_help=True))
+    body = "\n".join(line.plain for line in lines)
+    assert "tab" in body and "esc" in body
+    for task_id in ("a", "b", "c"):
+        assert f" {task_id} " not in body, "lane rows should be hidden behind the overlay"
+
+
+def test_collapsed_lane_list_leaves_only_the_status_bar():
+    from relaycli.ui import keymap
+
+    sched = _settled_scheduler("a", "b", "c")
+    lines = render_frame_lines(sched, _console(), "dark", keymap.ViewState(lane_list_collapsed=True))
+    assert len(lines) == 1
+    assert "3/3 done" in lines[0].plain
+
+
+def test_live_frame_reads_view_state_fresh_on_every_frame():
+    """The key reader replaces the ViewState between frames; a LiveFrame
+    that captured one instant's state would pin the cursor in place."""
+    from relaycli.ui import keymap
+
+    sched = _settled_scheduler("a", "b")
+    box = {"state": keymap.ViewState(selected=0)}
+    frame = LiveFrame(sched, "dark", lambda: box["state"])
+    console = _console()
+
+    first = "\n".join(t.plain for t in frame.__rich_console__(console, console.options))
+    box["state"] = keymap.ViewState(selected=1)
+    second = "\n".join(t.plain for t in frame.__rich_console__(console, console.options))
+    assert first != second, "the frame ignored the updated ViewState"
+
+
+def test_grouping_never_folds_away_the_focused_lane():
+    """Above the grouping threshold, settled lanes collapse into count
+    rows — but the cursor must never point at a row that isn't drawn."""
+    from relaycli.ui.lanes import GroupSummary, group_for_display
+    from relaycli.ui.layout import LANE_LIST_MAX_ROWS
+
+    sched = _settled_scheduler("a", "b", "c", "d", "e", "f", "g")
+    lanes = lane_views_for(sched, selected=6)   # every lane is 'done'
+    displayed = group_for_display(lanes, max_rows=LANE_LIST_MAX_ROWS)
+    expanded = [l.task_id for l in displayed if not isinstance(l, GroupSummary)]
+    assert "g" in expanded

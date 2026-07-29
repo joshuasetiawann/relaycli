@@ -201,8 +201,12 @@ def group_for_display(lanes: list[LaneView], *, max_rows: int) -> list[LaneView 
     if len(lanes) <= LANE_GROUPING_THRESHOLD:
         return list(lanes)
 
-    active = [l for l in lanes if l.status in ("pending", "ready", "running", "blocked")]
-    settled = [l for l in lanes if l.status in ("done", "failed", "cancelled")]
+    # A focused lane always stays expanded even once it settles — the
+    # cursor must never point at a row that grouping has folded away.
+    active = [l for l in lanes
+              if l.status in ("pending", "ready", "running", "blocked") or l.focused]
+    settled = [l for l in lanes
+               if l.status in ("done", "failed", "cancelled") and not l.focused]
 
     counts: dict[TaskStatus, int] = {}
     for lane in settled:
