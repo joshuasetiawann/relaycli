@@ -770,6 +770,10 @@ class WebSession:
                 self.settings, text, console=console, project=self.project,
                 permissions=permissions, llm=self._llm,
                 on_tick=on_tick, on_scheduler_ready=on_scheduler_ready,
+                # Same hook the relay and single-agent branches pass. Without
+                # it POST /api/stop sets an event nothing reads, so the UI's
+                # Stop button silently does nothing on the default pipeline.
+                should_stop=self._stop.is_set,
             ))
         except GraphError as exc:
             self.add("error", text=f"orchestrator could not produce a task plan: {exc}")

@@ -12,7 +12,7 @@ import pytest
 
 from relaycli.config import PermissionMode, Settings
 from relaycli.core.llm import LLMResponse, Usage
-from relaycli.ui.web import UI_PATH, WebSession, make_handler
+from relaycli.ui.web import APP_JS_PATH, UI_PATH, WebSession, make_handler
 
 
 @pytest.fixture(autouse=True)
@@ -1125,3 +1125,58 @@ def test_serve_prints_actual_bound_port_not_requested(monkeypatch, tmp_path, cap
     assert "text" in printed, "serve() never printed its startup line"
     assert ":0" not in printed["text"].split("→")[-1].split()[0]
     assert "http://127.0.0.1:" in printed["text"]
+
+
+def test_stop_button_can_halt_a_parallel_run():
+    """Regression: the web Stop button was dead for parallel runs.
+
+    _run_parallel never passed should_stop, unlike the relay and
+    single-agent branches right next to it, so POST /api/stop set an
+    event nothing ever read. It went unnoticed because run_parallel()
+    had no should_stop parameter when the web parallel path was written
+    — it only gained one later, for the terminal view's esc key — and
+    parallel has been the default pipeline since Stage 7, so this was
+    the *default* pipeline ignoring Stop.
+    """
+    import relaycli.agent.orchestrator as orchestrator
+    from relaycli.agent.blackboard import Blackboard
+    from relaycli.agent.budget import BudgetGovernor
+    from relaycli.agent.graph import Task, TaskGraph
+    from relaycli.agent.scheduler import SchedulerResult
+
+    captured = {}
+
+    async def fake_run_parallel(settings, request, **kwargs):
+        captured.update(kwargs)
+        graph = TaskGraph.from_tasks([Task(id="t1", role_id="coder", goal="x")])
+        graph.mark_done("t1")
+        return SchedulerResult(graph=graph, blackboard=Blackboard(), budget=BudgetGovernor())
+
+    original = orchestrator.run_parallel
+    orchestrator.run_parallel = fake_run_parallel
+    try:
+        session = WebSession(_settings(experimental_parallel=True))
+        assert session.send("build the feature") is True
+        session._thread.join(timeout=30)
+    finally:
+        orchestrator.run_parallel = original
+
+    should_stop = captured.get("should_stop")
+    assert callable(should_stop), "parallel runs must be given a should_stop hook"
+    assert should_stop() is False, "a fresh run must not start out already stopping"
+    session.stop()
+    assert should_stop() is True, "POST /api/stop must be visible to the scheduler"
+
+
+def test_run_panel_ships_a_live_cost_tile_wired_to_task_lanes():
+    """The terminal status bar shows tokens *and* spend while a parallel
+    run is in flight; the web panel only filled its tiles from the final
+    summary event, so both sat on "—" for the whole run. The cost tile
+    and the accumulation that feeds it must ship together."""
+    html = UI_PATH.read_text()
+    js = APP_JS_PATH.read_text()
+    assert 'id="stCost"' in html, "the run panel lost its cost tile"
+    assert 'stCost' in js, "nothing writes to the cost tile"
+    # summed from the task lanes, not just copied out of the summary event
+    assert 'reduce((n, t) => n + (t.cost_usd || 0), 0)' in js
+    assert 'reduce((n, t) => n + (t.tokens || 0), 0)' in js

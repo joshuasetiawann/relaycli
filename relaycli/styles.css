@@ -458,8 +458,13 @@
   .prog .bar { height: 5px; border-radius: 3px; background: var(--border); overflow: hidden; }
   .prog .bar i { display: block; height: 100%; width: 0; border-radius: 3px; background: var(--accent);
     box-shadow: 0 0 10px -1px color-mix(in srgb, var(--accent) 70%, transparent); transition: width .3s; }
-  .stats { margin-top: 12px; display: flex; gap: 8px; }
-  .stat { flex: 1; padding: 8px 10px; background: var(--card); border: 1px solid var(--border2); border-radius: 8px; }
+  /* Wraps to 2x2 rather than one row of four. Four tiles across this
+     sidebar left each ~45px of content, which clipped `cost` to "$0.00…"
+     — a truncated money figure reads as zero, which is worse than not
+     showing it. min-width:0 is still needed: a flex item defaults to
+     min-width:auto and won't shrink below its content width. */
+  .stats { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .stat { flex: 1 1 calc(50% - 4px); min-width: 0; padding: 8px 10px; background: var(--card); border: 1px solid var(--border2); border-radius: 8px; }
   .stat .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .4px; text-transform: uppercase; color: var(--t4); }
   .stat .v { font-family: var(--mono); font-size: 12.5px; color: var(--t1); margin-top: 4px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

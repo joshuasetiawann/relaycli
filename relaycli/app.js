@@ -828,6 +828,13 @@ function updateProgress() {
       : Math.round(done / tasks.length * 100);
     $("progBar").style.width = pct + "%";
     $("progPct").textContent = pct + "%";
+    // Running totals, matching what the terminal status bar shows during a
+    // parallel run. Without this the tiles sat on "—" for the whole run and
+    // only filled in from the summary event once everything had finished.
+    const tokens = tasks.reduce((n, t) => n + (t.tokens || 0), 0);
+    const cost = tasks.reduce((n, t) => n + (t.cost_usd || 0), 0);
+    $("stTokens").textContent = tokens ? String(tokens) : "—";
+    $("stCost").textContent = cost ? "$" + cost.toFixed(4) : "—";
     return;
   }
   const roles = participants();
@@ -996,6 +1003,7 @@ function handle(ev) {
     });
     if (ev.text) addMsg(ev.stopped === "done" ? "" : "err", "run", ev.text);
     $("stElapsed").textContent = ev.elapsed + "s"; $("stTokens").textContent = ev.tokens;
+    $("stCost").textContent = "$" + (ev.cost || 0).toFixed(4);
   } else if (ev.kind === "error") {
     pushActivity({
       agent: ev.agent || "error", kind: "bad", text: "Error",
@@ -1096,6 +1104,7 @@ $("modes").addEventListener("click", async (e) => {
     for (const k in steps) delete steps[k];
     for (const k in taskLanes) delete taskLanes[k];
     $("stElapsed").textContent = "—"; $("stTokens").textContent = "—";
+    $("stCost").textContent = "—";
     renderCards(); renderFlow(); updateProgress(); }
 };
 $("termToggle").onclick = () => $("term").classList.toggle("collapsed");
