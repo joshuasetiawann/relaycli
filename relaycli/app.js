@@ -26,6 +26,12 @@ const taskLanes = {};
 // can be touched by more than one task.
 const diffs = [];
 let canvasView = "lanes";
+// Which diff cards are expanded, keyed by a monotonic id rather than by
+// array index or path: a file can be edited twice in one run, and keying
+// by anything re-derived at render time loses the user's expansion the
+// moment the next diff arrives.
+const openDiffs = new Set();
+let diffSeq = 0;
 	let runStart = 0, elapsedTimer = null;
 	let activityTimer = null;
 	let modelFilter = "";
@@ -396,7 +402,7 @@ async function runClientSlash(text) {
       for (const k in status) { delete status[k]; delete activity[k]; }
       for (const k in steps) delete steps[k];
       for (const k in taskLanes) delete taskLanes[k];
-      diffs.length = 0; updateDiffCount();
+      diffs.length = 0; openDiffs.clear(); updateDiffCount();
       addLog("guide", "conversation cleared", "ok");
       renderCards(); renderFlow(); updateProgress();
     }
@@ -758,7 +764,7 @@ function renderDiffs() {
       }).join("");
       return `<div class="dhunk"><div class="dhh">${esc(h.header)}</div>${lines}</div>`;
     }).join("");
-    return `<div class="dfile${i === 0 ? " open" : ""}" data-i="${i}">` +
+    return `<div class="dfile${openDiffs.has(d.uid) ? " open" : ""}" data-uid="${d.uid}">` +
       `<div class="dhead"><span class="dchev">▸</span>` +
       `<span class="dpath" title="${esc(d.path)}">${esc(d.path)}</span>` +
       tags +
@@ -769,7 +775,11 @@ function renderDiffs() {
       `<div class="dbody">${hunks}</div></div>`;
   }).join("");
   for (const head of stage.querySelectorAll(".dhead")) {
-    head.onclick = () => head.parentElement.classList.toggle("open");
+    head.onclick = () => {
+      const card = head.parentElement;
+      const uid = Number(card.dataset.uid);
+      if (card.classList.toggle("open")) openDiffs.add(uid); else openDiffs.delete(uid);
+    };
   }
 }
 
@@ -1033,7 +1043,7 @@ function handle(ev) {
     for (const k in status) { status[k] = "idle"; activity[k] = "waiting"; }
     for (const k in steps) delete steps[k];
     for (const k in taskLanes) delete taskLanes[k];
-    diffs.length = 0; updateDiffCount();
+    diffs.length = 0; openDiffs.clear(); updateDiffCount();
     runStart = Date.now();
     $("goal").textContent = ev.text;
   } else if (ev.kind === "role") {
@@ -1107,11 +1117,13 @@ function handle(ev) {
     });
     addMsg("err", "error", ev.text); addLog("error", ev.text, "bad");
   } else if (ev.kind === "diff") {
+    const uid = ++diffSeq;
     diffs.push({
-      task_id: ev.task_id, role_id: ev.role_id, path: ev.path,
+      uid, task_id: ev.task_id, role_id: ev.role_id, path: ev.path,
       added: ev.added || 0, removed: ev.removed || 0,
       is_new: !!ev.is_new, is_deleted: !!ev.is_deleted, hunks: ev.hunks || [],
     });
+    if (openDiffs.size === 0) openDiffs.add(uid);   // first one lands open
     updateDiffCount();
     const sign = ev.is_new ? "new" : ev.is_deleted ? "deleted" : "edit";
     addLog(ev.role_id || "diff", `${sign} ${ev.path} (+${ev.added}/−${ev.removed})`, "ok");
@@ -1178,7 +1190,12 @@ async function boot() {
   if (!activityTimer) {
     activityTimer = setInterval(() => {
       if (activityFeed.some(item => item.active)) renderActivity();
-      if (Object.values(taskLanes).some(t => t.status === "running")) renderTaskLanes();
+      // Only when the lane view is actually on screen: this used to call
+      // renderTaskLanes() unconditionally, which overwrote the changes tab
+      // once a second for the whole run — exactly when you want to read it.
+      if (canvasView === "lanes" && Object.values(taskLanes).some(t => t.status === "running")) {
+        renderTaskLanes();
+      }
     }, 1000);
   }
 }
@@ -1208,7 +1225,7 @@ $("modes").addEventListener("click", async (e) => {
     for (const k in status) { delete status[k]; delete activity[k]; }
     for (const k in steps) delete steps[k];
     for (const k in taskLanes) delete taskLanes[k];
-    diffs.length = 0; updateDiffCount();
+    diffs.length = 0; openDiffs.clear(); updateDiffCount();
     $("stElapsed").textContent = "—"; $("stTokens").textContent = "—";
     $("stCost").textContent = "—";
     renderCards(); renderFlow(); updateProgress(); }

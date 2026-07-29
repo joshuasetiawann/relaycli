@@ -1405,3 +1405,23 @@ def test_changes_view_ships_in_the_ui():
     html, js = UI_PATH.read_text(), APP_JS_PATH.read_text()
     assert 'id="viewTabs"' in html and 'data-v="diffs"' in html
     assert "renderDiffs" in js and 'ev.kind === "diff"' in js
+
+
+def test_stored_diffs_cannot_be_mutated_through_what_callers_receive():
+    """Latent rather than firing today — nothing mutates a diff yet — but
+    diffs() used to hand out the session's own dicts and the emitted event
+    shared the stored entry's `hunks` list. Editing a diff in one place
+    would silently have rewritten it in the other, which is the kind of
+    corruption that is near-impossible to trace back."""
+    session = WebSession(_settings(experimental_parallel=True))
+    session.record_diff("t1", "backend", _file_diff())
+
+    handed_out = session.diffs()[0]
+    event = [e for e in session.events_since(0) if e["kind"] == "diff"][0]
+
+    handed_out["path"] = "TAMPERED"
+    handed_out["hunks"].append({"header": "INJECTED", "text": ""})
+
+    assert session.diffs()[0]["path"] == "src/app.py"
+    assert len(session.diffs()[0]["hunks"]) == 1
+    assert len(event["hunks"]) == 1, "the event log shared the stored hunk list"

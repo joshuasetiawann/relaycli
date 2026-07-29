@@ -114,6 +114,15 @@ class LaneActivity:
             def tool_end(self, call, result) -> None:
                 activity._clear(task_id)
 
+            def close(self) -> None:
+                # tool_end never fires if the agent dies inside a tool call,
+                # which would leave the lane advertising a command that is
+                # not running any more. make_run_task closes every reporter
+                # in a finally, so this is the one hook that fires on the
+                # crash path too. The base Reporter has no close(), and that
+                # hasattr guard is why this must be declared explicitly.
+                activity._clear(task_id)
+
         return _LaneReporter()
 
     def _set(self, task_id: str, tool: str, target: str) -> None:

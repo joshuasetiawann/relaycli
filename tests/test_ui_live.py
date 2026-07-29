@@ -430,3 +430,48 @@ def test_frame_renders_the_tool_target_column():
     assert "edit_file" in body
     # §4 truncation: directories are dropped before the column is clipped
     assert "mod.py" in body
+
+
+def test_lane_activity_clears_when_an_agent_dies_inside_a_tool_call():
+    """tool_end never fires if the agent raises mid-call, which left the
+    lane advertising a command that had stopped running. make_run_task
+    closes every reporter in a finally, so close() is the hook that covers
+    the crash path — and the base Reporter has no close(), so it has to be
+    declared explicitly or the hasattr guard skips it."""
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    reporter.tool_start(_Call("run_command", {"command": "pytest"}))
+    assert activity.current("t1") == ("run_command", "pytest")
+
+    assert hasattr(reporter, "close"), "make_run_task only calls close() if it exists"
+    reporter.close()
+    assert activity.current("t1") == ("", "")
+
+
+def test_make_run_task_clears_lane_activity_on_a_crashing_agent():
+    """End to end through the real make_run_task finally, not just the
+    reporter in isolation."""
+    from relaycli.agent.orchestrator import make_run_task
+    from relaycli.agent.graph import Task
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+
+    class _Boom:
+        def run(self, goal, *, reporter=None):
+            reporter.tool_start(_Call("edit_file", {"path": "a.py"}))
+            raise RuntimeError("agent exploded mid-tool")
+
+    class _Ctx:
+        read_files = set()
+
+    run_task = make_run_task(
+        lambda role_id, task_id: (_Boom(), _Ctx()),
+        activity.reporter_for,
+    )
+    with pytest.raises(RuntimeError, match="exploded"):
+        asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
+
+    assert activity.current("t1") == ("", ""), "a dead agent left its tool on the lane"

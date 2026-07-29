@@ -59,6 +59,12 @@ STYLES_PATH = Path(__file__).parent.parent / "styles.css"
 APP_JS_PATH = Path(__file__).parent.parent / "app.js"
 
 
+def _copy_diff(entry: dict) -> dict:
+    """One diff entry, detached from the stored one. Only `hunks` needs
+    deepening — every other value is an immutable scalar."""
+    return {**entry, "hunks": [dict(hunk) for hunk in entry["hunks"]]}
+
+
 class WebReporter:
     """Reporter protocol → session events (one per assistant block / tool)."""
 
@@ -500,11 +506,16 @@ class WebSession:
         }
         with self._lock:
             self._diffs.append(entry)
-        self.add("diff", **entry)
+        # A snapshot, not the entry itself: add() builds a new outer dict but
+        # would still share this one's `hunks` list, so anything editing a
+        # diff in one place would silently rewrite history in the other.
+        self.add("diff", **_copy_diff(entry))
 
     def diffs(self) -> list[dict]:
+        """A copy deep enough that a caller cannot reach back into the
+        session's own state — `list(...)` alone hands out the live dicts."""
         with self._lock:
-            return list(self._diffs)
+            return [_copy_diff(entry) for entry in self._diffs]
 
     def control_task(self, task_id: str, action: str) -> tuple[bool, str]:
         """Drop or retry one task of the running parallel graph — the web
