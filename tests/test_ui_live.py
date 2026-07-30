@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import time
 
 import pytest
@@ -23,6 +24,9 @@ from relaycli.agent.graph import Task, TaskGraph
 from relaycli.agent.scheduler import Scheduler, TaskOutcome
 from relaycli.core.config import PermissionMode, Settings
 from relaycli.core.llm import Usage
+from relaycli.core.llm import ToolCall
+from relaycli.ui.frame import render_status_bar
+from relaycli.ui.layout import resolve_columns
 from relaycli.ui.live import (
     LiveFrame,
     _progress_line,
@@ -30,8 +34,15 @@ from relaycli.ui.live import (
     live_view_supported,
     narrow_terminal_refusal,
     render_frame_lines,
-    render_status_bar,
+    status_bar_data,
 )
+
+
+def _bar(sched, mode="no_color", width=120, **kwargs):
+    """The status bar as the frame draws it — data assembled from the real
+    Scheduler, then rendered by the pure renderer."""
+    return render_status_bar(status_bar_data(sched, **kwargs), resolve_columns(width),
+                             mode, width)
 
 
 def _graph(*tasks: Task) -> TaskGraph:
@@ -132,10 +143,40 @@ def test_render_status_bar_shows_progress_and_spend():
     sched = Scheduler(graph, run_task, max_concurrent_agents=1)
     asyncio.run(sched.run())
 
-    bar = render_status_bar(sched, "no_color")
-    assert "2/2 done" in bar.plain
-    assert "20 tokens" in bar.plain
-    assert "$0.0200" in bar.plain
+    bar = _bar(sched).plain
+    assert "2a" in bar or "2 agent" in bar
+    assert "$0.02" in bar
+
+
+def test_status_bar_never_overflows_the_terminal():
+    """A bar one column too wide wraps, and the wrap pushes every row of
+    the frame down by one on each repaint."""
+    from pathlib import Path as _Path
+
+    from relaycli.ui.frame import StatusBarData
+
+    data = StatusBarData(cwd=_Path("/very/deeply/nested/project/directory/name/here"),
+                         branch="feature/an-extremely-long-branch-name-that-will-not-fit",
+                         dirty=17, permission_mode="auto-edit", agents=6,
+                         tokens=402_700, spent_usd=2.71, limit_usd=3.0)
+    for width in (80, 100, 120, 200):
+        bar = render_status_bar(data, resolve_columns(width), "dark", width)
+        assert bar.cell_len <= width, f"status bar overflowed at {width} columns"
+
+
+def test_status_bar_keeps_the_spend_when_it_has_to_drop_something():
+    """What gives way is the path and the mode — things you can recover by
+    looking elsewhere. The spend is not one of them."""
+    from pathlib import Path as _Path
+
+    from relaycli.ui.frame import StatusBarData
+
+    data = StatusBarData(cwd=_Path("/" + "x" * 300), branch="b" * 80, dirty=3,
+                         permission_mode="auto-edit", agents=4, tokens=1000,
+                         spent_usd=1.87, limit_usd=3.0)
+    bar = render_status_bar(data, resolve_columns(120), "dark", 120).plain
+    assert "$1.87" in bar
+    assert "4 agents" in bar
 
 
 @pytest.mark.parametrize("mode", ["dark", "light", "no_color"])
@@ -148,9 +189,66 @@ def test_render_frame_lines_one_row_per_lane_plus_status_bar(mode):
     asyncio.run(sched.run())
 
     lines = render_frame_lines(sched, _console(), mode)
-    assert len(lines) == 1 + 2  # status bar + 2 lanes
+    body = "\n".join(line.plain for line in lines)
     assert all(isinstance(line, Text) for line in lines)
     assert all("\n" not in line.plain for line in lines)
+    # Status bar, rule, one row per lane, rule, input caret, key strip.
+    assert len(lines) == 2 + 2 + 3
+    assert "❯" in body or ">" in body
+
+
+def test_frame_never_exceeds_the_terminal_height():
+    """Every row past the last line scrolls the frame, and a frame that
+    scrolls is not a pinned frame."""
+    async def run_task(task):
+        return TaskOutcome(task_id=task.id, ok=True, summary="done")
+
+    graph = _graph(*[Task(id=f"t{i}", role_id="coder", goal="x") for i in range(9)])
+    sched = Scheduler(graph, run_task)
+    asyncio.run(sched.run())
+
+    for height in (12, 24, 40):
+        console = Console(file=io.StringIO(), width=120, height=height, force_terminal=True)
+        lines = render_frame_lines(sched, console, "dark")
+        assert len(lines) <= height, f"frame was {len(lines)} rows in a {height}-row terminal"
+
+
+def test_every_frame_row_fits_the_terminal_width():
+    async def run_task(task):
+        return TaskOutcome(task_id=task.id, ok=True, summary="done")
+
+    graph = _graph(Task(id="a", role_id="coder", goal="x" * 200))
+    sched = Scheduler(graph, run_task)
+    asyncio.run(sched.run())
+
+    for width in (80, 120, 200):
+        console = Console(file=io.StringIO(), width=width, height=24, force_terminal=True)
+        for line in render_frame_lines(sched, console, "dark"):
+            assert line.cell_len <= width, f"{line.plain!r} overflowed {width} columns"
+
+
+def test_the_input_and_key_strip_stay_on_the_last_rows():
+    """Pinned means pinned: two transcript entries or two hundred, the
+    strip is still the bottom line."""
+    from relaycli.ui.live import LaneActivity
+
+    sched = _settled_scheduler("a")
+    activity = LaneActivity()
+    console = Console(file=io.StringIO(), width=120, height=24, force_terminal=True)
+
+    def bottom():
+        lines = render_frame_lines(sched, console, "dark", None, activity)
+        return len(lines), lines[-1].plain
+
+    quiet_len, quiet_last = bottom()
+    reporter = activity.reporter_for("a", "coder")
+    for i in range(60):
+        reporter.tool_start(ToolCall(id=str(i), name="read", arguments='{"path": "x.py"}'))
+    busy_len, busy_last = bottom()
+
+    assert quiet_len == busy_len
+    assert quiet_last == busy_last
+    assert "tab" in busy_last
 
 
 def test_live_frame_rich_console_protocol_yields_the_same_lines():
@@ -162,9 +260,9 @@ def test_live_frame_rich_console_protocol_yields_the_same_lines():
     asyncio.run(sched.run())
 
     console = _console()
-    frame = LiveFrame(sched, "dark")
-    rendered = list(frame.__rich_console__(console, console.options))
-    assert len(rendered) == 2  # status bar + 1 lane
+    live_frame = LiveFrame(sched, "dark")
+    rendered = list(live_frame.__rich_console__(console, console.options))
+    assert len(rendered) == len(render_frame_lines(sched, console, "dark"))
 
 
 # --- progress line formatting ------------------------------------------------
@@ -241,7 +339,9 @@ def test_focused_lane_row_draws_the_focus_rail():
 
     lane = lane_views_for(_settled_scheduler("a", "b"), selected=0)[0]
     row = render_lane_row(lane, resolve_columns(120), "dark")
-    assert row.plain.startswith(theme.MARKERS["focus_rail"].symbol)
+    # §4 gives the row a one-column left gutter; the rail is the first
+    # thing after it.
+    assert row.plain.lstrip(" ").startswith(theme.MARKERS["focus_rail"].symbol)
 
 
 def test_help_overlay_replaces_the_lane_list():
@@ -261,8 +361,10 @@ def test_collapsed_lane_list_leaves_only_the_status_bar():
 
     sched = _settled_scheduler("a", "b", "c")
     lines = render_frame_lines(sched, _console(), "dark", keymap.ViewState(lane_list_collapsed=True))
-    assert len(lines) == 1
-    assert "3/3 done" in lines[0].plain
+    body = "\n".join(line.plain for line in lines)
+    for task_id in ("a", "b", "c"):
+        assert f" {task_id} " not in body
+    assert "3 agents" in lines[0].plain
 
 
 def test_live_frame_reads_view_state_fresh_on_every_frame():
@@ -284,13 +386,13 @@ def test_live_frame_reads_view_state_fresh_on_every_frame():
 def test_grouping_never_folds_away_the_focused_lane():
     """Above the grouping threshold, settled lanes collapse into count
     rows — but the cursor must never point at a row that isn't drawn."""
-    from relaycli.ui.lanes import GroupSummary, group_for_display
+    from relaycli.ui.lanes import LaneView, group_for_display
     from relaycli.ui.layout import LANE_LIST_MAX_ROWS
 
     sched = _settled_scheduler("a", "b", "c", "d", "e", "f", "g")
     lanes = lane_views_for(sched, selected=6)   # every lane is 'done'
     displayed = group_for_display(lanes, max_rows=LANE_LIST_MAX_ROWS)
-    expanded = [l.task_id for l in displayed if not isinstance(l, GroupSummary)]
+    expanded = [l.task_id for l in displayed if isinstance(l, LaneView)]
     assert "g" in expanded
 
 
@@ -350,11 +452,26 @@ def test_cursor_order_matches_the_rendered_lane_order():
 
 
 # --- LaneActivity: filling the lane list's long-empty tool/target column ----
-class _Call:
-    def __init__(self, name, arguments=None):
-        self.name = name
-        self.arguments = arguments or {}
-        self.id = "c1"
+def _Call(name, arguments=None):
+    """A real ToolCall, not a stand-in.
+
+    The fake this replaces stored `arguments` as a dict. The real
+    ToolCall stores the model's raw JSON *string*, so the production
+    reader — which asked whether arguments was a mapping — got "" for
+    every call ever made and the target half of the tool column never
+    rendered. The fake agreed with the code and disagreed with reality,
+    which is the one thing a fake must never do.
+    """
+    return ToolCall(id="c1", name=name, arguments=json.dumps(arguments or {}))
+
+
+class _Result:
+    """Stands in for tools.base.ToolResult, which the reporter only ever
+    reads `ok` and `summary` off."""
+
+    def __init__(self, *, ok: bool, summary: str) -> None:
+        self.ok = ok
+        self.summary = summary
 
 
 def test_lane_activity_tracks_the_open_tool_and_clears_it_on_completion():
@@ -475,3 +592,293 @@ def test_make_run_task_clears_lane_activity_on_a_crashing_agent():
         asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
 
     assert activity.current("t1") == ("", ""), "a dead agent left its tool on the lane"
+
+
+# --- the transcript: what the agents actually said and ran ------------------
+def test_a_tool_call_and_its_result_land_on_one_line():
+    """The design writes `read src/lease/queue.ts · 240 lines`, not two
+    rows for one call."""
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    call = _Call("read", {"path": "src/lease/queue.ts"})
+    reporter.tool_start(call)
+    reporter.tool_end(call, _Result(ok=True, summary="240 lines"))
+
+    entries = activity.transcript.entries()
+    assert len(entries) == 1
+    assert entries[0].tool == "read"
+    assert entries[0].target == "src/lease/queue.ts"
+    assert entries[0].text == "240 lines"
+
+
+def test_a_long_result_earns_its_own_row():
+    from relaycli.ui.live import RESULT_INLINE_MAX, LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    call = _Call("bash", {"command": "pytest"})
+    reporter.tool_start(call)
+    reporter.tool_end(call, _Result(ok=False, summary="x" * (RESULT_INLINE_MAX + 1)))
+
+    kinds = [e.kind for e in activity.transcript.entries()]
+    assert kinds == ["tool", "result"]
+
+
+def test_a_tool_that_blew_up_is_still_recorded():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    call = _Call("edit", {"path": "a.py"})
+    reporter.tool_start(call)
+    reporter.tool_end(call, None)
+
+    entry = activity.transcript.entries()[0]
+    assert entry.text == "tool error"
+    assert entry.ok is False
+
+
+def test_assistant_prose_is_recorded_once_the_message_ends():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    for token in ("The existing queue ", "is LIFO."):
+        reporter.assistant_token(token)
+    assert activity.transcript.entries() == [], "a half-streamed message is not a line yet"
+
+    reporter.assistant_end()
+    assert activity.transcript.entries()[0].text == "The existing queue is LIFO."
+
+
+def test_a_discarded_message_never_reaches_the_transcript():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    reporter.assistant_token("half a thought")
+    reporter.assistant_discard()
+    reporter.assistant_end()
+    assert activity.transcript.entries() == []
+
+
+def test_the_transcript_can_be_read_per_agent_or_merged():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    activity.reporter_for("t1", "backend").tool_start(_Call("read", {"path": "a.py"}))
+    activity.reporter_for("t2", "tester").tool_start(_Call("bash", {"command": "pytest"}))
+
+    assert len(activity.transcript.entries()) == 2
+    assert [e.task_id for e in activity.transcript.entries("t2")] == ["t2"]
+
+
+def test_the_transcript_is_bounded():
+    """An hour-long run must not grow the log without limit."""
+    from relaycli.ui.live import TranscriptLog
+    from relaycli.ui.frame import TranscriptEntry
+
+    log = TranscriptLog(limit=10)
+    for i in range(100):
+        log.append(TranscriptEntry(stamp="00:00:00", kind="text", text=str(i)))
+    entries = log.entries()
+    assert len(entries) == 10
+    assert entries[-1].text == "99", "the newest lines are the ones kept"
+
+
+def test_entries_are_copies_the_renderer_cannot_have_rewritten_underneath_it():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    call = _Call("read", {"path": "a.py"})
+    reporter.tool_start(call)
+    snapshot = activity.transcript.entries()
+    reporter.tool_end(call, _Result(ok=True, summary="12 lines"))
+
+    assert snapshot[0].text == "", "the renderer's copy changed after the fact"
+    assert activity.transcript.entries()[0].text == "12 lines"
+
+
+# --- the model column, which was also always empty --------------------------
+def test_the_model_column_is_filled_from_what_the_agent_actually_ran():
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    activity.reporter_for("t1", "backend").model_start(1, "sonnet-4.5")
+    assert activity.model("t1") == ("sonnet-4.5", False)
+
+
+def test_escalation_is_observed_not_guessed():
+    """§2's ▲ claims the router moved this task up a tier. It is set only
+    because two different model names were actually seen."""
+    from relaycli.ui.live import LaneActivity
+
+    activity = LaneActivity()
+    reporter = activity.reporter_for("t1", "backend")
+    reporter.model_start(1, "llama3.1-8b")
+    assert activity.model("t1")[1] is False
+    reporter.model_start(2, "sonnet-4.5")
+    assert activity.model("t1") == ("sonnet-4.5", True)
+
+
+def test_an_unstarted_task_claims_no_model():
+    from relaycli.ui.live import LaneActivity
+
+    assert LaneActivity().model("never-ran") == ("", False)
+
+
+# --- the target half of the tool column, against the real ToolCall ----------
+def test_the_target_survives_a_real_tool_call():
+    """The regression this guards: ToolCall.arguments is the model's raw
+    JSON string, and reading it as a mapping returned "" for every call
+    ever made."""
+    from relaycli.ui.live import _target_of
+
+    assert _target_of(ToolCall(id="1", name="edit",
+                               arguments='{"path": "src/lease/queue.ts"}')) == "src/lease/queue.ts"
+
+
+def test_malformed_tool_arguments_do_not_take_the_frame_down():
+    from relaycli.ui.live import _target_of
+
+    assert _target_of(ToolCall(id="1", name="edit", arguments="{not json")) == ""
+    assert _target_of(ToolCall(id="1", name="edit", arguments="")) == ""
+    assert _target_of(ToolCall(id="1", name="edit", arguments="[1, 2]")) == ""
+
+
+# --- the row budget, which the lease sub-row can quietly blow -------------
+def _lease_contended_scheduler(*task_ids, holder="not-a-lane"):
+    """Every task claims the same path, and the lease is held by something
+    outside the lane list, so *every* lane is blocked on it — the worst
+    case for sub-rows. Holding it with one of the lanes instead would
+    leave one lane un-blocked and quietly weaken the row-budget test by
+    exactly the one row that makes it fail."""
+    graph = _graph(*[Task(id=t, role_id="backend", goal=f"goal {t}",
+                          path_claims=("src/shared.py",)) for t in task_ids])
+    sched = Scheduler(graph, None)
+    sched.leases.acquire(holder, ("src/shared.py",))
+    sched.task_started_at[holder] = time.perf_counter() - 10
+    return sched
+
+
+def test_lease_sub_rows_cannot_push_the_lane_list_past_its_ceiling():
+    """§4 caps the lane region at nine rows. Five lease-blocked lanes each
+    bring a `└─ held by` line, which is ten — the ceiling is a row count,
+    not a lane count."""
+    from relaycli.ui.layout import LANE_LIST_MAX_ROWS
+    from relaycli.ui.live import _lane_rows
+    from relaycli.ui.layout import resolve_columns as _cols
+
+    sched = _lease_contended_scheduler("a", "b", "c", "d", "e")
+    lanes = lane_views_for(sched)
+    # All five, not four: with only four sub-rows the list lands on exactly
+    # nine rows and passes whether or not anything enforces the ceiling.
+    assert all(lane.lease_holder for lane in lanes), "test needs every lane blocked"
+    rows = _lane_rows(lanes, _cols(120), "dark", 120)
+    assert len(rows) <= LANE_LIST_MAX_ROWS
+
+
+def test_the_lane_list_gives_way_before_the_transcript_floor():
+    """§4: "the lane list collapses to a strip first". Nine lanes plus the
+    chrome would leave nothing to read, so the lanes are what shrink."""
+    from relaycli.ui.layout import MIN_TRANSCRIPT_ROWS
+    from relaycli.ui.live import LaneActivity
+
+    sched = _lease_contended_scheduler(*[f"t{i}" for i in range(9)])
+    console = Console(file=io.StringIO(), width=120, height=16, force_terminal=True)
+    rows = render_frame_lines(sched, console, "dark", None, LaneActivity())
+    body = [r.plain for r in rows]
+    header = next(i for i, line in enumerate(body) if "transcript" in line)
+    trailing_rules = 3          # rule + caret + key strip
+    assert len(body) - header - 1 - trailing_rules >= MIN_TRANSCRIPT_ROWS
+
+
+@pytest.mark.parametrize("height", [3, 5, 8, 12, 16, 24, 40])
+@pytest.mark.parametrize("width", [80, 120])
+def test_the_frame_fits_whatever_terminal_it_is_given(height, width):
+    from relaycli.ui import keymap
+    from relaycli.ui.live import LaneActivity
+
+    sched = _lease_contended_scheduler("a", "b", "c", "d", "e", "f")
+    activity = LaneActivity()
+    console = Console(file=io.StringIO(), width=width, height=height, force_terminal=True)
+    for state in (keymap.ViewState(), keymap.ViewState(merged=True),
+                  keymap.ViewState(lane_list_collapsed=True)):
+        rows = render_frame_lines(sched, console, "dark", state, activity)
+        assert len(rows) <= height
+        assert all(row.cell_len <= width for row in rows)
+
+
+def test_the_key_strip_is_the_last_row_even_when_the_lanes_overflow():
+    from relaycli.ui.live import LaneActivity
+
+    sched = _lease_contended_scheduler(*[f"t{i}" for i in range(12)])
+    console = Console(file=io.StringIO(), width=120, height=14, force_terminal=True)
+    rows = render_frame_lines(sched, console, "dark", None, LaneActivity())
+    assert "?" in rows[-1].plain
+
+
+def test_a_terminal_too_short_for_the_chrome_keeps_the_bottom_not_the_middle():
+    """What you can scroll back to is the middle; the caret and the spend
+    are the two things that have to stay on screen."""
+    from relaycli.ui.live import LaneActivity
+
+    sched = _lease_contended_scheduler("a", "b", "c")
+    console = Console(file=io.StringIO(), width=120, height=4, force_terminal=True)
+    rows = render_frame_lines(sched, console, "dark", None, LaneActivity())
+    assert len(rows) <= 4
+    assert "relaycli" in rows[0].plain
+
+
+# --- the spinner reaches the lane it is supposed to animate ---------------
+def test_running_lanes_animate_and_settled_ones_do_not():
+    from relaycli.ui import theme
+    from relaycli.ui.layout import resolve_columns as _cols
+    from relaycli.ui.lanes import LaneView, render_lane_row
+
+    running = LaneView(task_id="a1", role_id="backend", status="running", goal="x")
+    done = LaneView(task_id="a2", role_id="backend", status="done", goal="x")
+    frame_char = theme.SPINNER_FRAMES[3]
+    assert frame_char in render_lane_row(running, _cols(120), "dark", None, frame_char).plain
+    assert frame_char not in render_lane_row(done, _cols(120), "dark", None, frame_char).plain
+
+
+def test_reduced_motion_keeps_the_static_glyph():
+    from relaycli.ui import theme
+    from relaycli.ui.layout import resolve_columns as _cols
+    from relaycli.ui.lanes import LaneView, render_lane_row
+
+    running = LaneView(task_id="a1", role_id="backend", status="running", goal="x")
+    row = render_lane_row(running, _cols(120), "dark", None, None).plain
+    assert theme.TASK_STATE_GLYPHS["running"].symbol in row
+
+
+def test_no_motion_stops_the_frame_animating(monkeypatch):
+    from relaycli.ui import theme
+    from relaycli.ui.live import LaneActivity
+
+    sched = _lease_contended_scheduler("a", "b")
+    console = Console(file=io.StringIO(), width=120, height=24, force_terminal=True)
+    monkeypatch.setenv("NO_MOTION", "1")
+    body = "\n".join(r.plain for r in render_frame_lines(sched, console, "dark",
+                                                         None, LaneActivity()))
+    assert not any(f in body for f in theme.SPINNER_FRAMES)
+
+
+def test_the_lane_region_stays_bounded_even_on_a_tall_terminal():
+    """§4/§8: bounded matters as much as pinned. A tall window has room
+    for eighteen lane rows; the design gives them nine and the rest to the
+    transcript, because an unbounded pinned region is just a second scroll
+    region."""
+    from relaycli.ui.layout import LANE_LIST_MAX_ROWS
+    from relaycli.ui.live import LaneActivity
+
+    sched = _lease_contended_scheduler(*[f"t{i}" for i in range(12)])
+    console = Console(file=io.StringIO(), width=120, height=40, force_terminal=True)
+    body = [r.plain for r in render_frame_lines(sched, console, "dark", None, LaneActivity())]
+    first_rule = next(i for i, line in enumerate(body) if set(line.strip()) == {"─"})
+    header = next(i for i, line in enumerate(body) if "transcript" in line)
+    assert header - first_rule - 1 <= LANE_LIST_MAX_ROWS

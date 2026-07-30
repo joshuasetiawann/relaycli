@@ -92,6 +92,14 @@ class LeaseManager:
         self._held[task_id] = lease
         return lease
 
+    def paths_held_by(self, task_id: str) -> tuple[str, ...]:
+        """The path globs `task_id`'s lease covers, or () if it holds none.
+        The UI needs this to name *which* path a waiting lane is contending
+        for — holder_of() answers the opposite question (which task owns a
+        concrete path) and cannot match a claim that is itself a glob."""
+        lease = self._held.get(task_id)
+        return lease.paths if lease is not None else ()
+
     def release(self, task_id: str) -> None:
         self._held.pop(task_id, None)
 

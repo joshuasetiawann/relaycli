@@ -61,18 +61,34 @@ word.
 | `rule` | `#C2CDD4` | `252` | dividers only |
 | `text` | `#1B262E` | `235` | body — 12.9:1 on base |
 
-### Extra surface tokens (dark theme; not in the state table above)
+### Extra surface tokens (not in the state table above)
 
-| Token | Hex | Where used |
-|---|---|---|
-| `page-bg` | `#080C0F` | outer page background, one step below `#0D1216` panel bg |
-| `heading` | `#E4EBF0` | bright headings / focused-lane primary text |
-| `text-secondary` | `#8CA0AE` | secondary body text, captions, tool targets |
-| `rule-dim` | `#1B252C` | section-divider rule, dimmer than `rule` |
-| `row-focused-bg` | `#131E26` | background of the focused agent-lane row |
-| `caret-idle` | `#3B4A55` | input caret / cursor block, dark |
-| `link` | `#5FA8DC` | link text (= accent) |
-| `link-hover` | `#8CC6EC` | link hover |
+| Token | Dark | Light | Where used |
+|---|---|---|---|
+| `page-bg` | `#080C0F` | — | outer page background, one step below the panel bg |
+| `heading` | `#E4EBF0` | `#0B141A` | bright headings / focused-lane primary text |
+| `text-secondary` | `#8CA0AE` | `#43555F` | secondary body text, captions, tool targets |
+| `rule-dim` | `#1B252C` | — | section-divider rule, dimmer than `rule` |
+| `row-focused-bg` | `#131E26` | `#DEE7EC` | background of the focused agent-lane row |
+| `caret-idle` | `#3B4A55` | `#9BAAB4` | input caret / cursor block |
+| `link` | `#5FA8DC` | — | link text (= accent) |
+| `link-hover` | `#8CC6EC` | — | link hover |
+
+**Correction (2026-07-30).** This table previously said these were
+dark-only, "no documented light equivalents". That was an extraction
+miss, not a fact about the design: the source's own *120 COLUMNS — LIGHT
+TERMINAL* screen uses all four of the tokens that appear inside a lane
+row, and the light theme cannot draw a focused row without them. The four
+with a `—` genuinely have no light instance anywhere in the source and are
+**not** invented here — `ui/theme.py`'s `style_for()` falls back to a core
+palette token for those, and refuses (raises) rather than guessing for a
+missing *background*, where a foreground stand-in would make the row it
+fills unreadable.
+
+In light, the focused lane's goal takes `heading` **plus bold**; in dark,
+`heading` alone. That asymmetry is the design's, and it is the right call:
+`#0B141A` against `#1B262E` is a much smaller step than `#E4EBF0` against
+`#C3CED6`, so light needs the extra weight to carry the same emphasis.
 
 ### 16-color fallback
 
@@ -179,6 +195,58 @@ table to drive implementation.**
 
 Cut order at 80 columns: elapsed → tokens → model. Cost is never cut — "it
 is the number you cannot recover by looking harder."
+
+**These widths are inclusive of their own trailing gap.** Each value is
+left- or right-justified inside a fixed span, and the space between
+columns is whatever the value did not use. Adding a separator *on top of*
+them — which the first implementation did, to stop right-justified numbers
+colliding — makes the row 121 characters wide on a 120-column terminal, so
+every row wraps. The right fix is the other one: clip each column's
+content at `width - 1` so the gap is always there. Widths sum to 115, plus
+the 2-column gutter = **117**, which is what a rendered row measures.
+
+The gutter is 1 column on each side ("no vertical frame line"), and the
+whole frame shares it — the status bar, every rule, the group headers and
+the lane rows all start at column 1, which is what keeps them aligned.
+
+### Value formats
+
+| Field | Format | Why |
+|---|---|---|
+| elapsed | `0m41s`, `1m12s`, `1h02m` | always spells the minutes, so the column is one shape and scans vertically |
+| elapsed, never started | `—` | `0s` would claim the task ran and took no time |
+| cost | `$0.42` — two decimals | what every screen in the source shows |
+| cost, sub-cent but non-zero | `<$0.01` | `$0.00` is reserved for actually free; rounding a real charge down to it would read as free |
+| tokens | `999`, `12.3k`, `1.2M` | fits 8 columns through any run |
+| id + role | `a1 ▣ bnd` | family glyph groups, three-letter code identifies |
+| model, escalated | `llama3.1-8b ▲` | the marker is protected from truncation; the name gives way |
+
+### Grouping above 5 agents
+
+The list sorts into **RUNNING / BLOCKED / NEEDS YOU / SETTLED**, each under
+its own header row (`RUNNING 3 ─────`), and SETTLED folds to one summary
+line per status (`✓ 1 done · a4 ◈ tst regression suite · 31.0k · $0.11`). A
+group of exactly one still names its task — the count alone hides the only
+question a folded row gets asked. The bands are exhaustive and mutually
+exclusive over `TaskStatus`, so no lane can land in two or fall out of the
+list. The lane region is never taller than nine rows at any agent count,
+and a lease sub-row counts against that ceiling like any other row.
+
+### Status bar
+
+`▌relaycli ~/src/relay-api  git:feat/lease-queue ±3  mode:auto-edit` on the
+left; `4 agents  128.4k tok  $1.87 / 3.00  ▮▮▮▯▯ 62%` right-aligned. At 80
+columns it compacts to `▌relay relay-api feat/lease-queue±3` … `4a  $1.87
+▮▮▮▯▯`. When both halves cannot fit, the left gives way — first the mode,
+then the path down to its basename — because the spend and the agent count
+are the two facts you cannot recover by looking elsewhere.
+
+The meter fills a segment only once that whole fifth is spent, so it can
+never overstate what is left; any non-zero spend lights the first segment.
+It turns amber at 60% and picks up `▲` at 90%. (One source screen draws
+24% as two segments rather than one — the mockups are hand-set and
+disagree with each other on the rounding. Never-overstate is the rule
+that is safe to be wrong in.)
 
 ### Vertical row budget — 24-row terminal, 120 cols
 
@@ -316,3 +384,49 @@ The web console's existing dark-only palette should be replaced with §1's
 dark table, and a new light theme (currently absent in web) added from §1's
 light table — this is explicitly called out as cheap "once tokens exist"
 in §7.2 point 4.
+
+## 11. What the terminal actually draws today
+
+The design is one long document; the terminal implements a specific part
+of it. This section says which, so a reader can tell a gap from an
+oversight.
+
+**Built and matching the source** (`ui/frame.py`, `ui/lanes.py`,
+`ui/live.py`, `ui/theme.py`):
+
+- the status bar, both the 120- and 80-column forms, dark / light /
+  `NO_COLOR`, with the budget meter;
+- the rules above and below the middle of the frame;
+- the pinned lane list — every column in §4, the state glyphs, the shared
+  90ms braille spinner, the focus rail and focused-row background, the
+  per-state detail column, the grouping bands and the folded SETTLED row;
+- the `└─ held by a1 for 41s` lease line;
+- the transcript, focused and merged (`m`), with the
+  `├─ a1 ▣ bnd transcript ───` header;
+- the input caret line and the key strip;
+- the `?` overlay, built from the key table so it cannot drift.
+
+**Not built, and why** — every one of these is blocked on a capability
+that does not exist yet, not on a renderer:
+
+| Screen / element | What it needs first |
+|---|---|
+| `s` steer | a channel into a running Agent; `Agent.run` is synchronous inside a thread, with no inbox |
+| `p` / `r` preempt & retarget, `l` jump to holder | `LeaseManager` has no reassignment and no queue |
+| lease queue position + ETA on the lease line | a lease *queue*; there is none, and §8 rules out inventing the numbers |
+| permission band (§08) | the live frame only runs in full-auto, which is the mode that does not prompt |
+| diff review queue, `y`/`n`/`Y`/`A`/`a` | a staged-edit permission model; edits are applied as they happen, so there is nothing held back to approve |
+| plan review screen (§07) | per-task cost estimation before the run |
+| `^g` / `^b` / `^r` panels | — |
+| `^c` stop one agent | same limit as `x`: a Python thread cannot be killed |
+
+The key strip and the `?` overlay deliberately advertise only the keys
+that work. A strip offering `d diffs` that does nothing is worse than a
+shorter strip.
+
+**One deliberate departure from the mockups.** The frame is drawn
+bottom-pinned, not on the alternate screen. The mockups show a bordered
+panel, which the alternate screen would match more closely — but it would
+also hide the one prompt full-auto still raises (`read_secret`), leaving
+the run waiting on input the user cannot see. The border is worth less
+than that.

@@ -3,12 +3,13 @@
 Two presentations, chosen once per run by `live_view_supported`:
 
 - A real TTY, motion allowed, wide enough, AND permission_mode is
-  full-auto: a rich.Live pinned frame (status bar + bounded lane list)
-  that redraws by pulling fresh state straight from the live Scheduler on
-  every frame (§6's frame-ceiling / motion rules) — LiveFrame implements
-  Rich's __rich_console__ protocol so Live's own background-refresh
-  thread regenerates it, rather than this module hand-rolling a redraw
-  loop.
+  full-auto: a rich.Live pinned frame — the design's whole screen, in
+  §04's row order: status bar, rule, bounded lane list, transcript,
+  rule, input caret, key strip. It redraws by pulling fresh state
+  straight from the live Scheduler on every frame (§6's frame-ceiling /
+  motion rules); LiveFrame implements Rich's __rich_console__ protocol
+  so Live's own background-refresh thread regenerates it, rather than
+  this module hand-rolling a redraw loop.
 - Everything else: one printed line per actual task-status change, driven
   by Scheduler.on_tick — no control codes, safe under any permission
   mode, safe piped to a file (§6: "piped output prints one line per
@@ -26,10 +27,19 @@ integration a general fix would need). Any other mode falls back to the
 progress-lines presentation, which never repaints anything and so never
 conflicts with a prompt.
 
-Neither presentation is the full pinned-frame vision from
-DESIGN_TOKENS.md §4 (no scrolling transcript region sharing the frame, no
-permission band, no focus mode, no diff review, no keymap) — this is the
-status-bar + lane-list slice of it, wired to real Scheduler state.
+The frame is deliberately NOT drawn on the alternate screen. Rendering
+it there would match the mockups' framed panel a little more closely,
+but it would also swallow that residual `read_secret` prompt completely
+— the run would sit waiting on input the user cannot see. Bottom-pinned
+costs the panel border and keeps the prompt visible, which is the right
+side of that trade.
+
+Still absent from the design, and named here so the gap is not mistaken
+for an oversight: the permission band (§08), the diff review queue, the
+plan-review screen, and focus mode's lease/graph strips. Each needs a
+Scheduler or Agent capability that does not exist yet — a staged-edit
+permission mode, a lease queue, an inbox into a running Agent — not a
+renderer.
 """
 
 from __future__ import annotations
@@ -37,6 +47,9 @@ from __future__ import annotations
 import os
 import threading
 import time
+from dataclasses import replace
+from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from rich.console import Console
@@ -44,9 +57,13 @@ from rich.live import Live
 from rich.text import Text
 
 from relaycli.core.config import PermissionMode
-from relaycli.ui import keymap, keyreader, theme
-from relaycli.ui.lanes import GroupSummary, LaneView, group_for_display, render_group_row, render_lane_row
-from relaycli.ui.layout import LANE_LIST_MAX_ROWS, TooNarrowError, resolve_columns
+from relaycli.ui import frame, keymap, keyreader, theme
+from relaycli.ui.lanes import (GroupHeader, GroupSummary, LaneView, group_for_display,
+                               id_role_label, render_group_header, render_group_row,
+                               render_lane_row, render_lease_row)
+from relaycli.ui.layout import (LANE_GROUPING_THRESHOLD, LANE_LIST_MAX_ROWS,
+                                MIN_TRANSCRIPT_ROWS, RULE_ROWS, TRANSCRIPT_HEADER_ROWS,
+                                TooNarrowError, resolve_columns, transcript_rows)
 
 if TYPE_CHECKING:
     from rich.console import ConsoleOptions, RenderResult
@@ -55,6 +72,11 @@ if TYPE_CHECKING:
     from relaycli.core.config import Settings
     from relaycli.core.context import ProjectContext
     from relaycli.core.permissions import PermissionManager
+
+# A tool result short enough to sit on the end of its own tool line
+# ("read src/lease/queue.ts · 240 lines") rather than claiming a row of
+# its own. Longer ones get their own line, like the design's test output.
+RESULT_INLINE_MAX = 44
 
 
 def _motion_enabled() -> bool:
@@ -84,15 +106,74 @@ def live_view_supported(console: Console, settings: "Settings") -> bool:
     return narrow_terminal_refusal(console) is None
 
 
-class LaneActivity:
-    """What each task is doing right now, for the lane list's tool/target
-    column.
+def _stamp() -> str:
+    """Wall-clock HH:MM:SS. The transcript is the record you scroll back
+    through after the fact, where an elapsed counter means nothing."""
+    return datetime.now().strftime("%H:%M:%S")
 
-    That column has existed since the lane renderer was written (§4 gives
-    it a fixed width and its own truncation rule) but nothing ever filled
-    it: parallel task agents were created without a Reporter, so no caller
-    learned which tool a task had open. This is the smallest thing that
-    closes that — a per-task "current tool" that clears when the call ends.
+
+class TranscriptLog:
+    """Bounded, append-only record of what every agent did, in real time.
+
+    Written from task threads, read from the render thread, so every
+    access takes the lock and `entries` hands out copies: a renderer must
+    never be able to observe an entry being rewritten underneath it, and
+    a frozen dataclass alone would not prevent handing out the same
+    object the log later replaces.
+    """
+
+    def __init__(self, limit: int = 400) -> None:
+        self._lock = threading.Lock()
+        self._entries: list[frame.TranscriptEntry] = []
+        self._limit = limit
+
+    def append(self, entry: frame.TranscriptEntry) -> None:
+        with self._lock:
+            self._append_locked(entry)
+
+    def _append_locked(self, entry: frame.TranscriptEntry) -> None:
+        self._entries.append(entry)
+        if len(self._entries) > self._limit:
+            del self._entries[: len(self._entries) - self._limit]
+
+    def attach_result(self, task_id: str, summary: str, ok: bool) -> None:
+        """Fold a tool's result onto that tool's own line when it is short
+        enough, the way the design writes `read src/lease/queue.ts · 240
+        lines`. A long result — a test run's output, say — earns its own
+        row instead, which is also what the design does."""
+        if not summary:
+            return
+        with self._lock:
+            for index in range(len(self._entries) - 1, -1, -1):
+                entry = self._entries[index]
+                if entry.task_id != task_id:
+                    continue
+                if entry.kind == "tool" and not entry.text and len(summary) <= RESULT_INLINE_MAX:
+                    self._entries[index] = replace(entry, text=summary, ok=ok)
+                    return
+                break
+            last = self._entries[-1] if self._entries else None
+            self._append_locked(frame.TranscriptEntry(
+                stamp=_stamp(), kind="result", ok=ok, text=summary,
+                task_id=task_id, role_id=last.role_id if last else ""))
+
+    def entries(self, task_id: str | None = None) -> list[frame.TranscriptEntry]:
+        with self._lock:
+            source = self._entries if task_id is None else [
+                e for e in self._entries if e.task_id == task_id]
+            return [replace(e) for e in source]
+
+
+class LaneActivity:
+    """What each task is doing right now — the tool it has open, the model
+    it is actually running on, and whether the router escalated it — plus
+    the shared transcript every lane writes into.
+
+    The tool/target column has existed since the lane renderer was written
+    (§4 gives it a fixed width and its own truncation rule) but nothing
+    ever filled it: parallel task agents were created without a Reporter,
+    so no caller learned which tool a task had open. The model column had
+    the same problem for the same reason.
 
     Written from task threads and read from the render thread, so it takes
     a lock; the values are plain strings, replaced whole, never mutated.
@@ -101,6 +182,8 @@ class LaneActivity:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._current: dict[str, tuple[str, str]] = {}
+        self._models: dict[str, tuple[str, str]] = {}  # task -> (first, latest)
+        self.transcript = TranscriptLog()
 
     def reporter_for(self, task_id: str, role_id: str):
         from relaycli.agent.reporter import Reporter
@@ -108,11 +191,38 @@ class LaneActivity:
         activity = self
 
         class _LaneReporter(Reporter):
+            def __init__(self) -> None:
+                self._buffer: list[str] = []
+
+            def model_start(self, n: int, model: str) -> None:
+                activity._note_model(task_id, model)
+
+            def assistant_token(self, text: str) -> None:
+                self._buffer.append(text)
+
+            def assistant_discard(self) -> None:
+                self._buffer.clear()
+
+            def assistant_end(self) -> None:
+                text = " ".join("".join(self._buffer).split())
+                self._buffer.clear()
+                if text:
+                    activity.transcript.append(frame.TranscriptEntry(
+                        stamp=_stamp(), kind="text", task_id=task_id,
+                        role_id=role_id, text=text))
+
             def tool_start(self, call) -> None:
-                activity._set(task_id, call.name, _target_of(call))
+                target = _target_of(call)
+                activity._set(task_id, call.name, target)
+                activity.transcript.append(frame.TranscriptEntry(
+                    stamp=_stamp(), kind="tool", task_id=task_id, role_id=role_id,
+                    tool=call.name, target=target))
 
             def tool_end(self, call, result) -> None:
                 activity._clear(task_id)
+                summary = (result.summary if result is not None else "tool error")
+                activity.transcript.attach_result(
+                    task_id, summary, bool(result is not None and result.ok))
 
             def close(self) -> None:
                 # tool_end never fires if the agent dies inside a tool call,
@@ -133,16 +243,43 @@ class LaneActivity:
         with self._lock:
             self._current.pop(task_id, None)
 
+    def _note_model(self, task_id: str, model: str) -> None:
+        with self._lock:
+            first, _ = self._models.get(task_id, (model, model))
+            self._models[task_id] = (first, model)
+
     def current(self, task_id: str) -> tuple[str, str]:
         with self._lock:
             return self._current.get(task_id, ("", ""))
 
+    def model(self, task_id: str) -> tuple[str, bool]:
+        """(model, escalated). Escalation is observed, never guessed: it
+        is true only because two different model names were actually seen
+        on this task, which is exactly what §2's ▲ claims."""
+        with self._lock:
+            first, latest = self._models.get(task_id, ("", ""))
+        return latest, bool(first and latest and first != latest)
+
 
 def _target_of(call) -> str:
-    """The path-ish argument worth showing beside a tool name. Tools name
-    it differently (path/file/pattern/command), so take the first that is
-    present rather than teaching this about every tool."""
-    args = getattr(call, "arguments", None)
+    """The path-ish argument worth showing beside a tool name.
+
+    ToolCall.arguments is the raw JSON *string* the model produced, not a
+    dict — reading it as a mapping silently yielded "" for every call ever
+    made, which is why this column rendered the tool name and never its
+    target. Tools name the argument differently (path/file/pattern/
+    command), so take the first that is present rather than teaching this
+    about every tool.
+    """
+    parse = getattr(call, "parsed_arguments", None)
+    args: object
+    if callable(parse):
+        try:
+            args = parse()
+        except (ValueError, TypeError):
+            return ""
+    else:
+        args = getattr(call, "arguments", None)
     if not isinstance(args, dict):
         return ""
     for key in ("path", "file", "file_path", "pattern", "query", "command"):
@@ -152,16 +289,61 @@ def _target_of(call) -> str:
     return ""
 
 
-def _elapsed_for(scheduler: "Scheduler", task_id: str, status: str) -> float:
+def _elapsed_for(scheduler: "Scheduler", task_id: str, status: str) -> float | None:
+    """Seconds this task has been running, or has run for. None means it
+    never started, which the lane renders as an em dash — `0s` there would
+    claim it ran instantly."""
     started = scheduler.task_started_at.get(task_id)
     if started is None:
-        return 0.0
+        return None
     ended = scheduler.task_ended_at.get(task_id)
     if ended is not None:
         return ended - started
     if status == "running":
         return time.perf_counter() - started
-    return 0.0
+    return None
+
+
+def _lease_conflict(scheduler: "Scheduler", task) -> tuple[str, str, float | None]:
+    """(holder, contended path, seconds held) for a task whose graph deps
+    are satisfied but whose path claims collide with a running task's
+    lease, else ("", "", None).
+
+    The scheduler leaves such a task in "ready" and simply skips it each
+    round, so without this the lane would read as an idle agent rather
+    than a blocked one — §8's "a user who can't see why an agent is idle
+    assumes the tool is broken".
+    """
+    from relaycli.agent.leases import claims_overlap
+
+    if task.status != "ready" or not task.path_claims:
+        return "", "", None
+    holder = scheduler.leases.conflicts_with_running(task.path_claims)
+    if holder is None:
+        return "", "", None
+    held_paths = scheduler.leases.paths_held_by(holder)
+    contended = next((claim for claim in task.path_claims
+                      if claims_overlap((claim,), held_paths)), task.path_claims[0])
+    started = scheduler.task_started_at.get(holder)
+    held_for = (time.perf_counter() - started) if started is not None else None
+    return holder, contended, held_for
+
+
+def _detail_for(task, outcome) -> str:
+    """The state-specific phrase for the lane's tool column. Every branch
+    reports something the Scheduler actually recorded — a dependency list,
+    an outcome summary, an error — so the column can never be describing a
+    state the run is not in."""
+    if task.status in ("pending", "blocked"):
+        return ", ".join(task.depends_on)
+    if outcome is None:
+        return ""
+    if task.status == "done":
+        return outcome.summary or ""
+    if task.status in ("failed", "cancelled"):
+        return (outcome.error or outcome.summary or "").splitlines()[0] if (
+            outcome.error or outcome.summary) else ""
+    return ""
 
 
 def lane_views_for(scheduler: "Scheduler", selected: int | None = None,
@@ -179,30 +361,39 @@ def lane_views_for(scheduler: "Scheduler", selected: int | None = None,
     for index, (task_id, task) in enumerate(scheduler.graph.tasks.items()):
         outcome = scheduler.outcomes.get(task_id)
         tool, target = activity.current(task_id) if activity else ("", "")
+        model, escalated = activity.model(task_id) if activity else ("", False)
+        holder, contended, held_for = _lease_conflict(scheduler, task)
         views.append(LaneView(
             task_id=task_id, role_id=task.role_id, status=task.status, goal=task.goal,
             tokens=outcome.usage.total_tokens if outcome else 0,
             cost_usd=outcome.usage.cost_usd if outcome else 0.0,
             elapsed_s=_elapsed_for(scheduler, task_id, task.status),
             focused=(selected == index),
-            tool=tool, target=target,
+            tool=tool, target=target, detail=_detail_for(task, outcome),
+            model=model, escalated=escalated,
+            lease_holder=holder, lease_path=contended, lease_held_s=held_for,
         ))
     return views
 
 
-def render_status_bar(scheduler: "Scheduler", mode: theme.ColorMode) -> Text:
-    palette = theme.palette_for(mode)
-    done = sum(1 for t in scheduler.graph.tasks.values() if t.status == "done")
-    total = len(scheduler.graph.tasks)
-    text = Text()
-    text.append("relaycli", style=f"bold {palette.accent}" if palette else "bold")
-    text.append(f"  parallel  {done}/{total} done  ",
-                style=palette.muted if palette else None)
-    text.append(f"{scheduler.budget.spent_tokens_total} tokens  ",
-                style=palette.muted if palette else None)
-    text.append(f"${scheduler.budget.spent_usd_total:.4f}",
-                style=palette.warning if palette else None)
-    return text
+def status_bar_data(scheduler: "Scheduler", settings: "Settings | None" = None,
+                    project: "ProjectContext | None" = None) -> frame.StatusBarData:
+    """Assemble the status bar's inputs from the run's real state. The git
+    read is cached (ui/gitinfo) because this is called on every frame."""
+    from relaycli.ui import gitinfo
+
+    root = project.root if project is not None else Path.cwd()
+    repo = gitinfo.status(root)
+    mode = ""
+    if settings is not None and getattr(settings, "permission_mode", None) is not None:
+        mode = getattr(settings.permission_mode, "value", str(settings.permission_mode))
+    return frame.StatusBarData(
+        cwd=root, branch=repo.branch, dirty=repo.dirty, permission_mode=mode,
+        agents=len(scheduler.graph.tasks),
+        tokens=scheduler.budget.spent_tokens_total,
+        spent_usd=scheduler.budget.spent_usd_total,
+        limit_usd=scheduler.budget.max_usd_total,
+    )
 
 
 def render_help_overlay(mode: theme.ColorMode) -> list[Text]:
@@ -219,34 +410,145 @@ def render_help_overlay(mode: theme.ColorMode) -> list[Text]:
     return lines
 
 
+def key_strip_hints(lanes: list[LaneView]) -> list[frame.KeyHint]:
+    """The bottom strip, built from the bindings that actually work.
+
+    The design's strip also offers `d diffs`, `y/n answer`, `^b budget`
+    and `^r roles`. Those are not here because nothing behind them exists
+    yet, and a key strip that advertises a key which does nothing is worse
+    than a shorter strip. The awaiting-you badge is kept, because that one
+    is real the moment a permission request opens."""
+    waiting = [lane.task_id for lane in lanes if lane.awaiting_you]
+    hints = [frame.KeyHint("tab", "lane"), frame.KeyHint("1-9", "jump"),
+             frame.KeyHint("enter", "focus"), frame.KeyHint("m", "merged"),
+             frame.KeyHint("^k", "collapse"), frame.KeyHint("x", "drop"),
+             frame.KeyHint("R", "retry")]
+    if waiting:
+        hints.append(frame.KeyHint("y/n", "answer", ", ".join(waiting[:2])))
+    hints.extend([frame.KeyHint("esc", "stop all"), frame.KeyHint("?", "keys")])
+    return hints
+
+
+def _lane_rows(lanes: list[LaneView], columns, mode: theme.ColorMode,
+               width: int, spinner: str | None = None,
+               budget: int = LANE_LIST_MAX_ROWS) -> list[Text]:
+    """The pinned lane list: bands and their headers above
+    LANE_GROUPING_THRESHOLD agents, a flat graph-ordered list below it.
+
+    The `└─ held by a1` sub-row is drawn only in the flat list. Grouped,
+    the row budget has no space for it — which is exactly what the
+    design's own six-agent screen does, folding the holder into the lane's
+    own tool column instead.
+
+    `budget` is counted in *rows*, not lanes. Those are not the same
+    number: five lease-blocked lanes each bring a sub-row, which is ten
+    rows out of a region §4 caps at nine. Counting lanes here let the list
+    grow past its own ceiling and eat the transcript.
+    """
+    grouped = len(lanes) > LANE_GROUPING_THRESHOLD
+    rows: list[Text] = []
+    for item in group_for_display(lanes, max_rows=budget):
+        if isinstance(item, GroupHeader):
+            rows.append(render_group_header(item, columns, mode, width))
+        elif isinstance(item, GroupSummary):
+            rows.append(render_group_row(item, columns, mode, width))
+        else:
+            rows.append(render_lane_row(item, columns, mode, width, spinner))
+            if item.lease_holder and not grouped:
+                rows.append(render_lease_row(item, columns, mode))
+    # One slice, at the end, is the whole ceiling. An in-loop break as
+    # well would read like a second guarantee while being unreachable
+    # given this one — and an unreachable guard is a guard no test can
+    # ever prove still works.
+    return rows[:budget]
+
+
 def render_frame_lines(
     scheduler: "Scheduler", console: Console, mode: theme.ColorMode,
     state: "keymap.ViewState | None" = None,
     activity: "LaneActivity | None" = None,
+    settings: "Settings | None" = None,
+    project: "ProjectContext | None" = None,
 ) -> list[Text]:
-    """Status bar + bounded lane list as a flat list of rows — shared by
-    LiveFrame (rendered inside a rich.Live pinned region) and anything
-    else that wants the same content without the animation machinery
-    (e.g. a future --plain snapshot).
+    """The whole frame, in §04's row order: status bar, rule, lane list,
+    transcript header, transcript, rule, input caret, key strip.
+
+    The transcript is the one region that flexes; every other row is
+    pinned, and the transcript is padded out with blank rows so the input
+    caret and key strip stay on the bottom line whether there are two
+    transcript entries or two hundred. That padding is what makes the
+    strip *pinned* rather than merely last.
 
     `state` carries the key map's view state (cursor, help overlay,
-    collapsed lane list); None renders exactly as it did before the key
-    map existed, which is what the non-interactive paths still want."""
+    collapsed lane list, merged transcript); None renders the default
+    view, which is what the non-interactive paths still want."""
     state = state or keymap.ViewState()
-    columns = resolve_columns(console.size.width)
-    lines = [render_status_bar(scheduler, mode)]
+    width = console.size.width
+    columns = resolve_columns(width)
+    # One row short of the terminal: a renderable exactly as tall as the
+    # screen makes Live scroll the whole frame up by a line on every
+    # repaint, since it still needs somewhere to put the cursor.
+    height = max(console.size.height - 1, 1)
+
+    lines = [frame.render_status_bar(status_bar_data(scheduler, settings, project),
+                                     columns, mode, width),
+             frame.render_rule(columns, mode, width)]
     if state.show_help:
         # The overlay replaces the lane list rather than pushing it off the
         # bottom — §4's row budget has no room for both on a 24-row terminal.
         return lines + render_help_overlay(mode)
-    if state.lane_list_collapsed:
-        return lines
+
     lanes = lane_views_for(scheduler, selected=state.selected, activity=activity)
-    for lane in group_for_display(lanes, max_rows=LANE_LIST_MAX_ROWS):
-        if isinstance(lane, GroupSummary):
-            lines.append(render_group_row(lane, columns, mode))
-        else:
-            lines.append(render_lane_row(lane, columns, mode))
+    bottom = [frame.render_rule(columns, mode, width),
+              frame.render_input_row(columns, mode, width,
+                                     placeholder="watching — esc stops every agent"),
+              frame.render_key_strip(key_strip_hints(lanes), columns, mode, width)]
+
+    # Lanes get whatever is left once the pinned chrome and §4's transcript
+    # floor are subtracted, capped at the nine rows §4 allows them: "the
+    # lane list collapses to a strip first". Sizing the list before drawing
+    # it, rather than trimming afterwards, is what keeps the caret and key
+    # strip on the bottom line of a short terminal instead of below it.
+    fixed = len(lines) + len(bottom)
+    lane_budget = min(LANE_LIST_MAX_ROWS,
+                      max(height - fixed - MIN_TRANSCRIPT_ROWS - TRANSCRIPT_HEADER_ROWS, 0))
+    if lane_budget == 0 and not state.lane_list_collapsed:
+        # Too short for both regions: the lanes are the pinned one, so they
+        # win and the transcript is what disappears.
+        lane_budget = max(height - fixed, 0)
+
+    # One clock for every lane, so the spinners tick together (§6). Reduced
+    # motion drops back to the static ◆ rather than freezing on whichever
+    # frame happened to be current.
+    spinner = theme.spinner_frame(time.monotonic()) if _motion_enabled() else None
+    lane_rows = [] if state.lane_list_collapsed else _lane_rows(
+        lanes, columns, mode, width, spinner, lane_budget)
+    lines.extend(lane_rows)
+
+    available = transcript_rows(
+        height, lane_rows=len(lane_rows), permission_band_open=False,
+        chrome_rows=RULE_ROWS + TRANSCRIPT_HEADER_ROWS)
+    if activity is not None and available > 0:
+        focused = lanes[state.selected] if 0 <= state.selected < len(lanes) else None
+        label = "all agents" if state.merged or focused is None else id_role_label(
+            focused.task_id, focused.role_id)
+        lines.append(frame.render_transcript_header(columns, mode, width,
+                                                    label=label, merged=state.merged))
+        entries = activity.transcript.entries(
+            None if (state.merged or focused is None) else focused.task_id)
+        body = frame.render_transcript(entries, columns, mode, width,
+                                       merged=state.merged, max_rows=available)
+        lines.extend(body)
+        lines.extend(Text("") for _ in range(available - len(body)))
+
+    lines.extend(bottom)
+    if len(lines) > height:
+        # Last resort, for a terminal too short even for the pinned rows
+        # alone. Keep the status bar and the bottom of the frame; what goes
+        # is the middle, which is the only part that can be scrolled back
+        # to. Silently overflowing instead would push the frame down a row
+        # on every repaint and turn the pinned view into a scrolling one.
+        lines = lines[:1] + lines[-(height - 1):] if height > 1 else lines[:1]
     return lines
 
 
@@ -286,15 +588,20 @@ class LiveFrame:
 
     def __init__(self, scheduler: "Scheduler", mode: theme.ColorMode,
                  state_getter: "Callable[[], keymap.ViewState] | None" = None,
-                 activity: "LaneActivity | None" = None) -> None:
+                 activity: "LaneActivity | None" = None,
+                 settings: "Settings | None" = None,
+                 project: "ProjectContext | None" = None) -> None:
         self.scheduler = scheduler
         self.mode = mode
         self.state_getter = state_getter
         self.activity = activity
+        self.settings = settings
+        self.project = project
 
     def __rich_console__(self, console: Console, options: "ConsoleOptions") -> "RenderResult":
         state = self.state_getter() if self.state_getter is not None else None
-        yield from render_frame_lines(self.scheduler, console, self.mode, state, self.activity)
+        yield from render_frame_lines(self.scheduler, console, self.mode, state,
+                                      self.activity, self.settings, self.project)
 
 
 async def _run_with_live_frame(
@@ -338,7 +645,7 @@ async def _run_with_live_frame(
 
     def on_scheduler_ready(scheduler: "Scheduler") -> None:
         holder["scheduler"] = scheduler
-        live.update(LiveFrame(scheduler, mode, get_state, activity))
+        live.update(LiveFrame(scheduler, mode, get_state, activity, settings, project))
 
     def on_tick() -> None:
         # Live's own refresh_per_second timer repaints the current

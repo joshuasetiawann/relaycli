@@ -18,6 +18,11 @@ LANE_LIST_MAX_ROWS = 9  # pinned; groups above LANE_GROUPING_THRESHOLD agents
 INPUT_KEY_STRIP_ROWS = 2
 PERMISSION_BAND_ROWS = 5  # 0 when idle, 5 when a permission/diff prompt is open
 MIN_TRANSCRIPT_ROWS = 6  # floor — the lane list collapses to a strip first
+# Chrome the mockups draw but §4's budget table folds into its regions: the
+# rule under the status bar, the rule above the input, and the transcript's
+# own "├─ a1 ▣ bnd transcript ───" header.
+RULE_ROWS = 2
+TRANSCRIPT_HEADER_ROWS = 1
 LANE_GROUPING_THRESHOLD = 5  # >5 agents: settled tasks collapse to count rows
 
 
@@ -81,10 +86,15 @@ def lane_list_rows(agent_count: int, *, available_rows: int) -> int:
     return min(wanted, ceiling)
 
 
-def transcript_rows(total_rows: int, *, lane_rows: int, permission_band_open: bool) -> int:
+def transcript_rows(total_rows: int, *, lane_rows: int, permission_band_open: bool,
+                    chrome_rows: int = 0) -> int:
     """Rows left for the scrolling transcript after every pinned region
     (§4's budget table). Never negative — a terminal too short even for the
-    floor is a refusal decision for the caller, not something to hide here."""
-    used = (STATUS_BAR_ROWS + lane_rows + INPUT_KEY_STRIP_ROWS
+    floor is a refusal decision for the caller, not something to hide here.
+
+    `chrome_rows` covers the rules and the transcript header, which §4's
+    table does not itemise but every mockup draws; it defaults to 0 so the
+    bare budget question can still be asked on its own."""
+    used = (STATUS_BAR_ROWS + lane_rows + INPUT_KEY_STRIP_ROWS + chrome_rows
             + (PERMISSION_BAND_ROWS if permission_band_open else 0))
     return max(total_rows - used, 0)

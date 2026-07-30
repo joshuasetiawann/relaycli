@@ -23,7 +23,7 @@ from typing import Literal
 
 Action = Literal[
     "none", "next_lane", "prev_lane", "jump_lane", "focus", "back",
-    "toggle_help", "toggle_lane_list", "drop_task", "retry_task",
+    "toggle_help", "toggle_lane_list", "toggle_merged", "drop_task", "retry_task",
 ]
 
 # Raw byte sequences, already disambiguated by the reader (a bare ESC is
@@ -42,6 +42,7 @@ KEY_HELP: tuple[tuple[str, str], ...] = (
     ("enter", "focus the selected lane"),
     ("esc", "back out one level (at top level: stop every agent)"),
     ("^k", "collapse / expand the lane list"),
+    ("m", "focused / merged transcript"),
     ("x", "drop the selected task (frees its file lease)"),
     ("R", "retry the selected task once it has failed"),
     ("?", "toggle this overlay"),
@@ -69,6 +70,9 @@ class ViewState:
     focused: bool = False
     show_help: bool = False
     lane_list_collapsed: bool = False
+    # Focused is the default at any agent count: merged spends a fixed
+    # 10-column prefix per line and stays readable to about three agents.
+    merged: bool = False
     stop_requested: bool = False
 
 
@@ -88,6 +92,8 @@ def parse_key(key: str) -> KeyAction:
         return KeyAction("toggle_help")
     if key == KEY_CTRL_K:
         return KeyAction("toggle_lane_list")
+    if key == "m":
+        return KeyAction("toggle_merged")
     if key == "x":
         return KeyAction("drop_task")
     if key == "R":   # capital only, per §7 — lowercase r is retarget, unbuilt
@@ -124,6 +130,8 @@ def apply_action(state: ViewState, key_action: KeyAction, lane_count: int) -> Vi
         return replace(state, show_help=not state.show_help)
     if action == "toggle_lane_list":
         return replace(state, lane_list_collapsed=not state.lane_list_collapsed)
+    if action == "toggle_merged":
+        return replace(state, merged=not state.merged)
     if action == "back":
         # §7: "back out one level (stop all agents at top level)". Peel the
         # transient layers first so esc can never stop a run while an
