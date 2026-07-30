@@ -172,3 +172,76 @@ def test_task_state_tables_are_intact_at_runtime():
         assert status in TASK_STATE_GLYPHS
         assert status in TASK_STATE_COLOR
         assert status in TASK_STATE_WORD
+
+
+# --- surface tokens ---------------------------------------------------------
+def test_light_has_the_surface_tokens_its_lane_rows_need():
+    """DESIGN_TOKENS.md used to record light as having no surface-token
+    equivalents. The source's own light mockup uses all four of these, and
+    without them the light theme cannot draw a focused row at all."""
+    for name in ("heading", "text_secondary", "row_focused_bg", "caret_idle"):
+        assert theme.LIGHT_SURFACE[name].startswith("#")
+
+
+def test_surface_tokens_are_distinct_from_the_body_text_they_sit_beside():
+    assert theme.LIGHT_SURFACE["heading"] != theme.LIGHT.text
+    assert theme.DARK_SURFACE["heading"] != theme.DARK.text
+
+
+def test_style_for_falls_back_to_the_palette_when_a_theme_lacks_a_surface_token():
+    # rule_dim has no light instance anywhere in the source, so it is not
+    # invented — the core `rule` token stands in.
+    assert theme.style_for("light", "rule_dim") == theme.LIGHT.rule
+    assert theme.style_for("dark", "rule_dim") == theme.DARK_SURFACE["rule_dim"]
+
+
+def test_style_for_resolves_plain_palette_tokens_too():
+    assert theme.style_for("dark", "warning") == theme.DARK.warning
+    assert theme.style_for("light", "warning") == theme.LIGHT.warning
+
+
+def test_no_color_resolves_every_token_to_nothing():
+    for name in ("accent", "heading", "row_focused_bg", "rule"):
+        assert theme.style_for("no_color", name) is None
+
+
+# --- the spinner ------------------------------------------------------------
+def test_the_spinner_walks_every_frame_in_order():
+    frames = [theme.spinner_frame(i * theme.SPINNER_INTERVAL_S)
+              for i in range(len(theme.SPINNER_FRAMES))]
+    assert tuple(frames) == theme.SPINNER_FRAMES
+
+
+def test_the_spinner_wraps_rather_than_running_off_the_end():
+    assert theme.spinner_frame(1e6) in theme.SPINNER_FRAMES
+    assert theme.spinner_frame(0.0) == theme.SPINNER_FRAMES[0]
+
+
+def test_every_lane_reads_the_same_clock():
+    """§6: "one shared clock for every lane — spinners tick in unison".
+    A per-lane counter would make four agents look like four unrelated
+    things happening."""
+    now = 12.345
+    assert len({theme.spinner_frame(now) for _ in range(5)}) == 1
+
+
+def test_the_spinner_frames_are_all_single_width():
+    import unicodedata
+    for frame in theme.SPINNER_FRAMES:
+        assert len(frame) == 1
+        assert unicodedata.east_asian_width(frame) not in ("W", "F")
+
+
+def test_an_unknown_token_name_raises_instead_of_guessing():
+    """A typo that resolved to a plausible hue would read as a deliberate
+    design choice to everyone looking at the output."""
+    with pytest.raises(KeyError):
+        theme.style_for("dark", "not-a-token")
+
+
+def test_a_missing_background_token_is_never_faked_from_a_foreground_one():
+    # Both themes define row_focused_bg, so this only guards the fallback
+    # table itself: painting a fill with body-text colour would make the
+    # row it fills unreadable.
+    assert "row_focused_bg" not in theme._SURFACE_FALLBACK
+    assert "page_bg" not in theme._SURFACE_FALLBACK

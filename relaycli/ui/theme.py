@@ -63,12 +63,70 @@ LIGHT = Palette(
 DARK_BASE = "#0D1216"
 LIGHT_BASE = "#EFF2F4"
 
-# Dark-only extra surface tokens (§1) — no documented light equivalents.
+# Extra surface tokens (§1) — the hues the state table doesn't cover.
 DARK_SURFACE: dict[str, str] = {
     "page_bg": "#080C0F", "heading": "#E4EBF0", "text_secondary": "#8CA0AE",
     "rule_dim": "#1B252C", "row_focused_bg": "#131E26", "caret_idle": "#3B4A55",
     "link": "#5FA8DC", "link_hover": "#8CC6EC",
 }
+
+# The light equivalents. DESIGN_TOKENS.md used to say light had none, which
+# was an extraction miss, not a fact about the design: the source's own
+# "120 COLUMNS — LIGHT TERMINAL" mockup uses all four of the tokens that
+# actually appear inside a lane row, and the terminal surface needs them to
+# render the light theme at parity with dark. `page_bg`/`rule_dim`/`link`/
+# `link_hover` genuinely have no light instance anywhere in the source, so
+# they are absent here rather than invented — surface() falls back to a core
+# palette token for those.
+LIGHT_SURFACE: dict[str, str] = {
+    "heading": "#0B141A", "text_secondary": "#43555F",
+    "row_focused_bg": "#DEE7EC", "caret_idle": "#9BAAB4",
+}
+
+
+def surface_for(mode: ColorMode) -> dict[str, str]:
+    """The extra (non-state-table) surface tokens for `mode`. Empty for
+    no_color, which carries no hex at all."""
+    if mode == "dark":
+        return DARK_SURFACE
+    if mode == "light":
+        return LIGHT_SURFACE
+    return {}
+
+
+# Where a surface token goes when a theme has no instance of it. Only
+# foreground tokens are listed: there is no sensible stand-in for a
+# missing *background* (`page_bg`, `row_focused_bg`), and quietly painting
+# one with a body-text hue would make the row it fills unreadable, so a
+# theme that lacks a background must say so instead.
+_SURFACE_FALLBACK: dict[str, str] = {
+    "heading": "text", "text_secondary": "muted", "rule_dim": "rule",
+    "caret_idle": "muted", "link": "accent", "link_hover": "accent",
+}
+
+
+def style_for(mode: ColorMode, name: str) -> str | None:
+    """Resolve one token name — surface tokens first, then the 9-token
+    state table — to a hex string, or None under no_color, which carries
+    no hex at all. The single place the dark/light/no_color branch is
+    spelled out, so no renderer has to repeat it.
+
+    An unknown name raises rather than resolving to something plausible:
+    a typo that silently returned the wrong hue would look like a design
+    decision to everyone reading the output.
+    """
+    palette = palette_for(mode)
+    if palette is None:
+        return None
+    surface = surface_for(mode)
+    if name in surface:
+        return surface[name]
+    if hasattr(palette, name):
+        return getattr(palette, name)
+    fallback = _SURFACE_FALLBACK.get(name)
+    if fallback is None:
+        raise KeyError(f"no '{name}' token in the {mode} theme, and no fallback for it")
+    return getattr(palette, fallback)
 
 
 def resolve_color_mode(preference: str | None, *, no_color_env: bool = False) -> ColorMode:
@@ -162,6 +220,18 @@ BUDGET_METER = {"filled": "▮", "empty": "▯"}
 # the static Glyph("◆", "*") from TASK_STATE_GLYPHS["running"] instead.
 SPINNER_FRAMES: tuple[str, ...] = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 SPINNER_INTERVAL_S = 0.09
+
+
+def spinner_frame(now: float) -> str:
+    """The frame every running lane shows at `now`.
+
+    Derived from the clock rather than from a per-lane counter, which is
+    what §6 means by "one shared clock for every lane": spinners tick in
+    unison. Independently advanced spinners read as several unrelated
+    things happening, when the point of the lane list is that they are one
+    run.
+    """
+    return SPINNER_FRAMES[int(now / SPINNER_INTERVAL_S) % len(SPINNER_FRAMES)]
 
 # 16-color fallback (§1) — hue order preserved across the downgrade so
 # muscle memory survives it. Rich auto-downgrades our truecolor hex tokens
