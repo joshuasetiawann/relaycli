@@ -211,3 +211,15 @@ def test_parse_task_graph_rejects_non_json_text():
 def test_parse_task_graph_rejects_empty_list():
     with pytest.raises(GraphError, match="empty"):
         parse_task_graph("[]")
+
+
+def test_parse_task_graph_canonicalises_a_miscased_role():
+    # Smaller local models title-case the role they were handed; the role is
+    # real, so the run should not die over the capital O.
+    g = parse_task_graph(
+        '[{"id": "t1", "role": "Orchestrator", "goal": "x"},'
+        ' {"id": "t2", "role": "Web Dev", "goal": "y"}]',
+        valid_role_ids=frozenset({"orchestrator", "web-dev"}),
+    )
+    assert g.tasks["t1"].role_id == "orchestrator"
+    assert g.tasks["t2"].role_id == "web-dev"

@@ -206,7 +206,15 @@ def parse_task_graph(text: str, *, valid_role_ids: frozenset[str] | None = None)
         if not role_id:
             raise GraphError(f"task '{task_id}' has no role")
         if valid_role_ids is not None and role_id not in valid_role_ids:
-            raise GraphError(f"task '{task_id}' has unknown role '{role_id}'")
+            # Smaller models echo the role back title-cased ("Orchestrator")
+            # or spaced ("web dev"). That names a role that exists, so
+            # canonicalise it rather than killing the run; anything that
+            # still doesn't resolve is a genuine hallucination.
+            key = role_id.strip().lower().replace(" ", "-").replace("_", "-")
+            match = next((r for r in valid_role_ids if r.lower() == key), None)
+            if match is None:
+                raise GraphError(f"task '{task_id}' has unknown role '{role_id}'")
+            role_id = match
         if not goal:
             raise GraphError(f"task '{task_id}' has no goal")
         depends_on = tuple(str(d) for d in (raw.get("depends_on") or []))
