@@ -107,14 +107,14 @@ def test_write_file_applied_in_full_auto(sample_project):
     ctx = make_context(sample_project, PermissionMode.full_auto)
     res = write_file(WriteFileArgs(path="new.txt", content="hello\n"), ctx)
     assert res.ok
-    assert (sample_project / "new.txt").read_text() == "hello\n"
+    assert (sample_project / "new.txt").read_text(encoding="utf-8") == "hello\n"
 
 
 def test_write_file_approved_in_suggest(sample_project):
     ctx = make_context(sample_project, PermissionMode.suggest, prompter=lambda _t: True)
     res = write_file(WriteFileArgs(path="sub/dir/new.txt", content="x\n"), ctx)
     assert res.ok
-    assert (sample_project / "sub" / "dir" / "new.txt").read_text() == "x\n"
+    assert (sample_project / "sub" / "dir" / "new.txt").read_text(encoding="utf-8") == "x\n"
 
 
 def test_write_file_blocks_escape(sample_project):
@@ -162,7 +162,7 @@ def test_edit_file_applies(sample_project):
         ctx,
     )
     assert res.ok
-    assert "return 'hello'" in (sample_project / "app.py").read_text()
+    assert "return 'hello'" in (sample_project / "app.py").read_text(encoding="utf-8")
 
 
 def test_edit_file_not_found(sample_project):
@@ -187,7 +187,7 @@ def test_edit_file_requires_prior_read_when_context_requests_it(sample_project):
     assert "Read-before-edit is required" in res.output
     assert "return 'hi'" in res.output
     assert "app.py" in ctx.read_files
-    assert "return 'hi'" in (sample_project / "app.py").read_text()
+    assert "return 'hi'" in (sample_project / "app.py").read_text(encoding="utf-8")
 
     res2 = edit_file(
         EditFileArgs(path="app.py", old_string="return 'hi'", new_string="return 'hello'"),
@@ -195,11 +195,11 @@ def test_edit_file_requires_prior_read_when_context_requests_it(sample_project):
     )
 
     assert res2.ok
-    assert "return 'hello'" in (sample_project / "app.py").read_text()
+    assert "return 'hello'" in (sample_project / "app.py").read_text(encoding="utf-8")
 
 
 def test_edit_file_ambiguous(sample_project):
-    (sample_project / "dup.py").write_text("x = 1\nx = 1\n")
+    (sample_project / "dup.py").write_text("x = 1\nx = 1\n", encoding="utf-8")
     ctx = make_context(sample_project, PermissionMode.full_auto)
     res = edit_file(EditFileArgs(path="dup.py", old_string="x = 1", new_string="x = 2"), ctx)
     assert not res.ok
@@ -207,13 +207,13 @@ def test_edit_file_ambiguous(sample_project):
 
 
 def test_edit_file_replace_all(sample_project):
-    (sample_project / "dup.py").write_text("x = 1\nx = 1\n")
+    (sample_project / "dup.py").write_text("x = 1\nx = 1\n", encoding="utf-8")
     ctx = make_context(sample_project, PermissionMode.full_auto)
     res = edit_file(
         EditFileArgs(path="dup.py", old_string="x = 1", new_string="x = 2", replace_all=True), ctx
     )
     assert res.ok
-    assert (sample_project / "dup.py").read_text() == "x = 2\nx = 2\n"
+    assert (sample_project / "dup.py").read_text(encoding="utf-8") == "x = 2\nx = 2\n"
 
 
 # --- run_command -------------------------------------------------------
@@ -645,7 +645,7 @@ def test_read_file_bypasses_cache_above_max_bytes(sample_project):
     """A file bigger than the requested cap must not be pulled fully into
     the cache — read_file's own memory-bounding must still apply."""
     big = sample_project / "big.txt"
-    big.write_text("x" * 500)
+    big.write_text("x" * 500, encoding="utf-8")
     ctx = make_context(sample_project)
     res = read_file(ReadFileArgs(path="big.txt", max_bytes=100), ctx)
     assert res.ok

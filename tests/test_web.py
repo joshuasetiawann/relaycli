@@ -263,8 +263,8 @@ def test_send_frontend_shop_scaffold_respects_quoted_folder_without_llm(tmp_path
     session._thread.join(timeout=30)
 
     assert llm.calls == []
-    html = (tmp_path / "toko baju" / "index.html").read_text()
-    app_js = (tmp_path / "toko baju" / "app.js").read_text()
+    html = (tmp_path / "toko baju" / "index.html").read_text(encoding="utf-8")
+    app_js = (tmp_path / "toko baju" / "app.js").read_text(encoding="utf-8")
     assert 'class="theme-dark"' in html
     assert "Baju harian" in html
     assert "Everyday Cotton Tee" in app_js
@@ -284,8 +284,8 @@ def test_send_mandarin_learning_platform_scaffold_without_llm(tmp_path):
     session._thread.join(timeout=30)
 
     assert llm.calls == []
-    html = (tmp_path / "belajar-mandarin" / "index.html").read_text()
-    app_js = (tmp_path / "belajar-mandarin" / "app.js").read_text()
+    html = (tmp_path / "belajar-mandarin" / "index.html").read_text(encoding="utf-8")
+    app_js = (tmp_path / "belajar-mandarin" / "app.js").read_text(encoding="utf-8")
     assert "MandarinLab" in html
     assert "Belajar Mandarin" in html
     assert "Nada dan Pinyin" in app_js
@@ -340,7 +340,7 @@ def test_unknown_text_tool_json_is_retried_not_rendered_as_action(tmp_path):
     session._thread.join(timeout=30)
 
     events = session.events_since(0)
-    assert (tmp_path / "web-app" / "index.html").read_text() == "<h1>OK</h1>"
+    assert (tmp_path / "web-app" / "index.html").read_text(encoding="utf-8") == "<h1>OK</h1>"
     summary = [e for e in events if e["kind"] == "summary"][-1]
     assert summary["stopped"] == "done"
     assert not any(e["kind"] == "text" and "build_web_app" in e["text"] for e in events)
@@ -372,7 +372,7 @@ def test_text_tool_json_executes_in_web_session(tmp_path):
     session._thread.join(timeout=30)
 
     events = session.events_since(0)
-    assert (tmp_path / "mandarin" / "index.html").read_text() == "<h1>你好</h1>"
+    assert (tmp_path / "mandarin" / "index.html").read_text(encoding="utf-8") == "<h1>你好</h1>"
     assert any(e["kind"] == "tool" and "mandarin/index.html" in e["summary"] for e in events)
     assert not any(e["kind"] == "text" and "write_file" in e["text"] for e in events)
     summary = [e for e in events if e["kind"] == "summary"][-1]
@@ -401,7 +401,7 @@ def test_web_retries_frontend_task_when_model_only_gives_tutorial(tmp_path):
     assert session.send('buatin website toko laptop di folder "toko laptop"') is True
     session._thread.join(timeout=30)
 
-    assert (tmp_path / "toko laptop" / "index.html").read_text() == "<h1>Toko Laptop</h1>"
+    assert (tmp_path / "toko laptop" / "index.html").read_text(encoding="utf-8") == "<h1>Toko Laptop</h1>"
     summary = [e for e in session.events_since(0) if e["kind"] == "summary"][-1]
     assert summary["stopped"] == "done"
 
@@ -429,7 +429,7 @@ def test_web_discards_fake_done_claim_before_recovery(tmp_path):
     session._thread.join(timeout=30)
 
     events = session.events_since(0)
-    assert (tmp_path / "marketplace-shopee" / "index.html").read_text() == (
+    assert (tmp_path / "marketplace-shopee" / "index.html").read_text(encoding="utf-8") == (
         "<h1>Marketplace</h1>"
     )
     assert not any(e["kind"] == "text" and claim in e["text"] for e in events)
@@ -1174,8 +1174,8 @@ def test_run_panel_ships_a_live_cost_tile_wired_to_task_lanes():
     run is in flight; the web panel only filled its tiles from the final
     summary event, so both sat on "—" for the whole run. The cost tile
     and the accumulation that feeds it must ship together."""
-    html = UI_PATH.read_text()
-    js = APP_JS_PATH.read_text()
+    html = UI_PATH.read_text(encoding="utf-8")
+    js = APP_JS_PATH.read_text(encoding="utf-8")
     assert 'id="stCost"' in html, "the run panel lost its cost tile"
     assert 'stCost' in js, "nothing writes to the cost tile"
     # summed from the task lanes, not just copied out of the summary event
@@ -1402,7 +1402,7 @@ def test_diffs_route_serves_the_collected_diffs():
 
 
 def test_changes_view_ships_in_the_ui():
-    html, js = UI_PATH.read_text(), APP_JS_PATH.read_text()
+    html, js = UI_PATH.read_text(encoding="utf-8"), APP_JS_PATH.read_text(encoding="utf-8")
     assert 'id="viewTabs"' in html and 'data-v="diffs"' in html
     assert "renderDiffs" in js and 'ev.kind === "diff"' in js
 

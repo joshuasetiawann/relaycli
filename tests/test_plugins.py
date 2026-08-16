@@ -15,12 +15,12 @@ from relaycli.plugins.loader import Plugin, discover_plugins, load_all_plugins, 
 
 # --- loader: discovery -------------------------------------------------
 def test_discover_plugins_finds_py_files_and_packages(tmp_path):
-    (tmp_path / "one.py").write_text("__plugin_name__ = 'one'\n")
-    (tmp_path / "_ignored.py").write_text("should not be discovered\n")
-    (tmp_path / "not_a_plugin.txt").write_text("irrelevant\n")
+    (tmp_path / "one.py").write_text("__plugin_name__ = 'one'\n", encoding="utf-8")
+    (tmp_path / "_ignored.py").write_text("should not be discovered\n", encoding="utf-8")
+    (tmp_path / "not_a_plugin.txt").write_text("irrelevant\n", encoding="utf-8")
     pkg = tmp_path / "pkgplugin"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text("__plugin_name__ = 'pkgplugin'\n")
+    (pkg / "__init__.py").write_text("__plugin_name__ = 'pkgplugin'\n", encoding="utf-8")
     empty_dir = tmp_path / "not_a_package"
     empty_dir.mkdir()
 
@@ -40,7 +40,7 @@ def test_load_plugin_reads_metadata_and_hooks(tmp_path):
         "__version__ = '1.2.3'\n"
         "__description__ = 'says hi'\n"
         "def on_session_start(**kw):\n"
-        "    return 'started'\n"
+        "    return 'started'\n", encoding="utf-8"
     )
     plugin = load_plugin(tmp_path / "greeter.py")
     assert plugin.ok
@@ -53,7 +53,7 @@ def test_load_plugin_reads_metadata_and_hooks(tmp_path):
 
 
 def test_load_plugin_defaults_name_to_filename_without_dunder(tmp_path):
-    (tmp_path / "nameless.py").write_text("x = 1\n")
+    (tmp_path / "nameless.py").write_text("x = 1\n", encoding="utf-8")
     plugin = load_plugin(tmp_path / "nameless.py")
     assert plugin.ok
     assert plugin.name == "nameless"
@@ -64,7 +64,7 @@ def test_load_plugin_defaults_name_to_filename_without_dunder(tmp_path):
 def test_load_plugin_loads_a_package_directory(tmp_path):
     pkg = tmp_path / "pkgplugin"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text("__plugin_name__ = 'pkgplugin'\n")
+    (pkg / "__init__.py").write_text("__plugin_name__ = 'pkgplugin'\n", encoding="utf-8")
     plugin = load_plugin(pkg)
     assert plugin.ok
     assert plugin.name == "pkgplugin"
@@ -72,7 +72,7 @@ def test_load_plugin_loads_a_package_directory(tmp_path):
 
 # --- loader: failure is visible, not silent (the Stage 1 fix) ----------
 def test_load_plugin_syntax_error_is_visible_not_dropped(tmp_path):
-    (tmp_path / "broken.py").write_text("this is not valid python !!\n")
+    (tmp_path / "broken.py").write_text("this is not valid python !!\n", encoding="utf-8")
     plugin = load_plugin(tmp_path / "broken.py")
     assert isinstance(plugin, Plugin)
     assert not plugin.ok
@@ -81,15 +81,15 @@ def test_load_plugin_syntax_error_is_visible_not_dropped(tmp_path):
 
 
 def test_load_plugin_runtime_error_at_import_time_is_visible(tmp_path):
-    (tmp_path / "explodes.py").write_text("raise RuntimeError('boom at import')\n")
+    (tmp_path / "explodes.py").write_text("raise RuntimeError('boom at import')\n", encoding="utf-8")
     plugin = load_plugin(tmp_path / "explodes.py")
     assert not plugin.ok
     assert "boom at import" in plugin.error
 
 
 def test_load_all_plugins_includes_failed_plugins_not_just_successful_ones(tmp_path):
-    (tmp_path / "good.py").write_text("__plugin_name__ = 'good'\n")
-    (tmp_path / "bad.py").write_text("raise ValueError('nope')\n")
+    (tmp_path / "good.py").write_text("__plugin_name__ = 'good'\n", encoding="utf-8")
+    (tmp_path / "bad.py").write_text("raise ValueError('nope')\n", encoding="utf-8")
 
     plugins = load_all_plugins(extra_dirs=[tmp_path])
 
@@ -100,7 +100,7 @@ def test_load_all_plugins_includes_failed_plugins_not_just_successful_ones(tmp_p
 
 
 def test_load_plugin_logs_the_failure(tmp_path, caplog):
-    (tmp_path / "broken.py").write_text("raise RuntimeError('logged boom')\n")
+    (tmp_path / "broken.py").write_text("raise RuntimeError('logged boom')\n", encoding="utf-8")
     with caplog.at_level("ERROR", logger="relaycli.plugins.loader"):
         load_plugin(tmp_path / "broken.py")
     assert any("broken" in r.message and "failed to load" in r.message for r in caplog.records)
@@ -235,7 +235,7 @@ def test_load_manifest_none_when_absent(tmp_path):
 def test_load_manifest_reads_plugin_toml(tmp_path):
     from relaycli.plugins.manifest import load_manifest
 
-    (tmp_path / "plugin.toml").write_text('name = "demo"\ncapabilities = ["net"]\n')
+    (tmp_path / "plugin.toml").write_text('name = "demo"\ncapabilities = ["net"]\n', encoding="utf-8")
     manifest = load_manifest(tmp_path)
     assert manifest.name == "demo"
     assert manifest.capabilities == ("net",)
@@ -245,9 +245,9 @@ def test_load_manifest_reads_plugin_toml(tmp_path):
 def test_load_plugin_prefers_manifest_over_dunders(tmp_path):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text("__plugin_name__ = 'dunder-name'\n__version__ = '0.0.1'\n")
+    (pkg / "__init__.py").write_text("__plugin_name__ = 'dunder-name'\n__version__ = '0.0.1'\n", encoding="utf-8")
     (pkg / "plugin.toml").write_text(
-        'name = "manifest-name"\nversion = "2.0"\ndescription = "from manifest"\ncapabilities = ["read"]\n'
+        'name = "manifest-name"\nversion = "2.0"\ndescription = "from manifest"\ncapabilities = ["read"]\n', encoding="utf-8"
     )
     plugin = load_plugin(pkg)
     assert plugin.ok
@@ -261,7 +261,7 @@ def test_load_plugin_prefers_manifest_over_dunders(tmp_path):
 def test_load_plugin_without_manifest_still_works(tmp_path):
     pkg = tmp_path / "pkg"
     pkg.mkdir()
-    (pkg / "__init__.py").write_text("__plugin_name__ = 'old-style'\n")
+    (pkg / "__init__.py").write_text("__plugin_name__ = 'old-style'\n", encoding="utf-8")
     plugin = load_plugin(pkg)
     assert plugin.ok
     assert plugin.name == "old-style"
@@ -274,8 +274,8 @@ def test_load_plugin_invalid_manifest_fails_loud_before_exec(tmp_path):
     pkg.mkdir()
     # If exec ran despite the bad manifest, this would leave evidence —
     # it must not, since the manifest check happens first.
-    (pkg / "__init__.py").write_text("(tmp_path / 'ran.txt').write_text('yes')\n")
-    (pkg / "plugin.toml").write_text('capabilities = ["read"]\n')  # missing name
+    (pkg / "__init__.py").write_text("(tmp_path / 'ran.txt').write_text('yes')\n", encoding="utf-8")
+    (pkg / "plugin.toml").write_text('capabilities = ["read"]\n', encoding="utf-8")  # missing name
     plugin = load_plugin(pkg)
     assert not plugin.ok
     assert "plugin.toml" in plugin.error
@@ -285,8 +285,8 @@ def test_load_plugin_invalid_manifest_fails_loud_before_exec(tmp_path):
 def test_single_file_plugins_ignore_sibling_manifests(tmp_path):
     """plugin.toml only applies to package directories — a lone .py file
     plugin has no directory of its own to carry one."""
-    (tmp_path / "solo.py").write_text("__plugin_name__ = 'solo'\n")
-    (tmp_path / "plugin.toml").write_text('name = "should-not-apply"\n')
+    (tmp_path / "solo.py").write_text("__plugin_name__ = 'solo'\n", encoding="utf-8")
+    (tmp_path / "plugin.toml").write_text('name = "should-not-apply"\n', encoding="utf-8")
     plugin = load_plugin(tmp_path / "solo.py")
     assert plugin.name == "solo"
     assert plugin.manifest is None
@@ -296,11 +296,11 @@ def test_single_file_plugins_ignore_sibling_manifests(tmp_path):
 def _pkg_source(tmp_path, name="demo", *, manifest=True, capabilities=("read",)) -> Path:
     src = tmp_path / "src" / name
     src.mkdir(parents=True)
-    (src / "__init__.py").write_text("def on_tool_start(**kw):\n    return None\n")
+    (src / "__init__.py").write_text("def on_tool_start(**kw):\n    return None\n", encoding="utf-8")
     if manifest:
         caps = ", ".join(f'"{c}"' for c in capabilities)
         (src / "plugin.toml").write_text(
-            f'name = "{name}"\nversion = "1.0"\ndescription = "test plugin"\ncapabilities = [{caps}]\n'
+            f'name = "{name}"\nversion = "1.0"\ndescription = "test plugin"\ncapabilities = [{caps}]\n', encoding="utf-8"
         )
     return src
 
@@ -340,8 +340,8 @@ def test_preview_install_propagates_manifest_errors(tmp_path):
 
     src = tmp_path / "src" / "bad"
     src.mkdir(parents=True)
-    (src / "__init__.py").write_text("")
-    (src / "plugin.toml").write_text("capabilities = ['read']")  # valid TOML, but missing required 'name'
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    (src / "plugin.toml").write_text("capabilities = ['read']", encoding="utf-8")  # valid TOML, but missing required 'name'
     with pytest.raises(ManifestError):
         preview_install(src, plugin_dir=tmp_path / "installed")
 
@@ -356,8 +356,8 @@ def test_install_plugin_rejects_path_traversal_via_manifest_name(tmp_path):
     escape_target = tmp_path / "outside" / "should-not-exist"
     src = tmp_path / "src" / "evil"
     src.mkdir(parents=True)
-    (src / "__init__.py").write_text("")
-    (src / "plugin.toml").write_text('name = "../outside/should-not-exist"\n')
+    (src / "__init__.py").write_text("", encoding="utf-8")
+    (src / "plugin.toml").write_text('name = "../outside/should-not-exist"\n', encoding="utf-8")
     plugin_dir = tmp_path / "installed"
     plugin_dir.mkdir()
 
@@ -380,7 +380,7 @@ def test_install_plugin_accepts_a_multi_dot_filename(tmp_path):
     src = tmp_path / "src"
     src.mkdir()
     weird = src / "my.plugin.py"
-    weird.write_text("__plugin_name__ = 'weird'\n")
+    weird.write_text("__plugin_name__ = 'weird'\n", encoding="utf-8")
     plugin_dir = tmp_path / "installed"
 
     plugin = install_plugin(weird, plugin_dir=plugin_dir)
@@ -404,7 +404,7 @@ def test_install_plugin_single_file(tmp_path):
     from relaycli.plugins.manager import install_plugin
 
     src = tmp_path / "solo.py"
-    src.write_text("__plugin_name__ = 'solo'\n")
+    src.write_text("__plugin_name__ = 'solo'\n", encoding="utf-8")
     dest_dir = tmp_path / "installed"
     plugin = install_plugin(src, plugin_dir=dest_dir)
     assert plugin.ok
@@ -428,7 +428,7 @@ def test_install_plugin_overwrite_replaces(tmp_path):
     dest_dir = tmp_path / "installed"
     install_plugin(src, plugin_dir=dest_dir)
     # Change the source, reinstall with overwrite — the new content should land.
-    (src / "plugin.toml").write_text('name = "demo"\nversion = "2.0"\ndescription = "d"\ncapabilities = []\n')
+    (src / "plugin.toml").write_text('name = "demo"\nversion = "2.0"\ndescription = "d"\ncapabilities = []\n', encoding="utf-8")
     plugin = install_plugin(src, overwrite=True, plugin_dir=dest_dir)
     assert plugin.version == "2.0"
 
@@ -442,11 +442,11 @@ def test_install_plugin_never_partially_copies_on_rejection(tmp_path):
     src = _pkg_source(tmp_path)
     dest_dir = tmp_path / "installed"
     install_plugin(src, plugin_dir=dest_dir)
-    before = (dest_dir / "demo" / "plugin.toml").read_text()
-    (src / "plugin.toml").write_text('name = "demo"\nversion = "999"\ndescription = "d"\ncapabilities = []\n')
+    before = (dest_dir / "demo" / "plugin.toml").read_text(encoding="utf-8")
+    (src / "plugin.toml").write_text('name = "demo"\nversion = "999"\ndescription = "d"\ncapabilities = []\n', encoding="utf-8")
     with pytest.raises(PluginInstallError):
         install_plugin(src, plugin_dir=dest_dir)
-    assert (dest_dir / "demo" / "plugin.toml").read_text() == before
+    assert (dest_dir / "demo" / "plugin.toml").read_text(encoding="utf-8") == before
 
 
 def test_get_installed_finds_by_manifest_name(tmp_path):

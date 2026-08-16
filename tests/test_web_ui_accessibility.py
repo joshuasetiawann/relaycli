@@ -13,11 +13,11 @@ from relaycli.ui.web import APP_JS_PATH, UI_PATH
 
 
 def _html() -> str:
-    return UI_PATH.read_text()
+    return UI_PATH.read_text(encoding="utf-8")
 
 
 def _js() -> str:
-    return APP_JS_PATH.read_text()
+    return APP_JS_PATH.read_text(encoding="utf-8")
 
 
 def test_html_declares_a_language():

@@ -27,7 +27,7 @@ def _console():
 
 def test_config_perms_flags_world_readable(tmp_path: Path):
     cfg = tmp_path / "config.toml"
-    cfg.write_text("x = 1\n")
+    cfg.write_text("x = 1\n", encoding="utf-8")
     cfg.chmod(0o644)
     checks = check_config_perms(cfg, tmp_path)
     assert checks[0].status == doctor.FAIL
@@ -75,16 +75,16 @@ def test_key_drift_detects_mismatch(tmp_path: Path, monkeypatch):
     import relaycli.doctor as d
 
     cfg = tmp_path / "config.toml"
-    cfg.write_text('OPENROUTER_API_KEY = "sk-or-old"\n')
+    cfg.write_text('OPENROUTER_API_KEY = "sk-or-old"\n', encoding="utf-8")
     monkeypatch.setattr(d, "CONFIG_FILE", cfg)
     proj = tmp_path / "proj"
     proj.mkdir()
-    (proj / ".env").write_text("OPENROUTER_API_KEY=sk-or-new\n")
+    (proj / ".env").write_text("OPENROUTER_API_KEY=sk-or-new\n", encoding="utf-8")
     check = check_key_drift(Settings(), proj)
     assert check.status == doctor.WARN
     assert "DIFFERENT" in check.detail
 
-    (proj / ".env").write_text("OPENROUTER_API_KEY=sk-or-old\n")
+    (proj / ".env").write_text("OPENROUTER_API_KEY=sk-or-old\n", encoding="utf-8")
     assert check_key_drift(Settings(), proj).status == doctor.OK
 
     assert check_key_drift(Settings(), tmp_path / "empty").status == doctor.SKIP

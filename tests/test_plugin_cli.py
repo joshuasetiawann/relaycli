@@ -43,10 +43,10 @@ def _isolated_plugin_dir(tmp_path, monkeypatch):
 def _pkg_source(tmp_path, name="demo", capabilities=("read",)) -> Path:
     src = tmp_path / "src" / name
     src.mkdir(parents=True)
-    (src / "__init__.py").write_text("def on_tool_start(**kw):\n    return None\n")
+    (src / "__init__.py").write_text("def on_tool_start(**kw):\n    return None\n", encoding="utf-8")
     caps = ", ".join(f'"{c}"' for c in capabilities)
     (src / "plugin.toml").write_text(
-        f'name = "{name}"\nversion = "1.0"\ndescription = "test plugin"\ncapabilities = [{caps}]\n'
+        f'name = "{name}"\nversion = "1.0"\ndescription = "test plugin"\ncapabilities = [{caps}]\n', encoding="utf-8"
     )
     return src
 

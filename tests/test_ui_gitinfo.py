@@ -25,7 +25,7 @@ def _init_repo(path):
     subprocess.run(["git", "init", "-q", "-b", "trunk", str(path)], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.email", "t@example.com"], check=True)
     subprocess.run(["git", "-C", str(path), "config", "user.name", "Test"], check=True)
-    (path / "seed.txt").write_text("seed\n")
+    (path / "seed.txt").write_text("seed\n", encoding="utf-8")
     subprocess.run(["git", "-C", str(path), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(path), "commit", "-qm", "seed"], check=True)
 
@@ -39,8 +39,8 @@ def test_reads_the_branch_and_a_clean_tree(tmp_path):
 
 def test_counts_every_changed_path(tmp_path):
     _init_repo(tmp_path)
-    (tmp_path / "seed.txt").write_text("changed\n")
-    (tmp_path / "new.txt").write_text("new\n")
+    (tmp_path / "seed.txt").write_text("changed\n", encoding="utf-8")
+    (tmp_path / "new.txt").write_text("new\n", encoding="utf-8")
     assert gitinfo.read_status(tmp_path).dirty == 2
 
 
@@ -93,7 +93,7 @@ def test_repeat_calls_inside_the_ttl_do_not_fork_git_again(tmp_path):
 def test_the_cache_does_expire(tmp_path):
     _init_repo(tmp_path)
     assert gitinfo.status(tmp_path, now=0.0).dirty == 0
-    (tmp_path / "seed.txt").write_text("changed\n")
+    (tmp_path / "seed.txt").write_text("changed\n", encoding="utf-8")
     assert gitinfo.status(tmp_path, now=0.0).dirty == 0, "still inside the TTL"
     assert gitinfo.status(tmp_path, now=gitinfo.CACHE_TTL_S + 1).dirty == 1
 
@@ -104,6 +104,6 @@ def test_two_repositories_do_not_share_one_cache_entry(tmp_path):
     b.mkdir()
     _init_repo(a)
     _init_repo(b)
-    (b / "seed.txt").write_text("changed\n")
+    (b / "seed.txt").write_text("changed\n", encoding="utf-8")
     assert gitinfo.status(a, now=0.0).dirty == 0
     assert gitinfo.status(b, now=0.0).dirty == 1

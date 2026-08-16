@@ -237,7 +237,7 @@ def test_atomic_write_preserves_mode_and_content(tmp_path):
     target.write_text("old\n", encoding="utf-8")
     os.chmod(target, 0o640)
     atomic_write(target, "new\n")
-    assert target.read_text() == "new\n"
+    assert target.read_text(encoding="utf-8") == "new\n"
     if os.name == "posix":
         assert (target.stat().st_mode & 0o777) == 0o640
     # no temp files left behind
@@ -248,7 +248,7 @@ def test_write_file_overwrite_leaves_no_tempfiles(sample_project):
     ctx = make_context(sample_project, PermissionMode.full_auto)
     res = write_file(WriteFileArgs(path="app.py", content="print('x')\n"), ctx)
     assert res.ok
-    assert (sample_project / "app.py").read_text() == "print('x')\n"
+    assert (sample_project / "app.py").read_text(encoding="utf-8") == "print('x')\n"
     assert not list(sample_project.glob("*.relaytmp"))
 
 

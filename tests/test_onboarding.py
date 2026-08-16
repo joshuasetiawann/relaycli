@@ -31,6 +31,6 @@ def test_run_init_writes_flat_model(monkeypatch, tmp_path):
 
     run_init(model="auto", yes=True, console=None)
 
-    text = (tmp_path / "config.toml").read_text()
+    text = (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert 'model = "ollama_chat/llama3.1:8b"' in text
     assert 'permission_mode = "suggest"' in text

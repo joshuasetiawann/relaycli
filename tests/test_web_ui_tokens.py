@@ -43,15 +43,15 @@ def _contrast(fg: str, bg: str) -> float:
 
 
 def _html() -> str:
-    return UI_PATH.read_text()
+    return UI_PATH.read_text(encoding="utf-8")
 
 
 def _css() -> str:
-    return STYLES_PATH.read_text()
+    return STYLES_PATH.read_text(encoding="utf-8")
 
 
 def _js() -> str:
-    return APP_JS_PATH.read_text()
+    return APP_JS_PATH.read_text(encoding="utf-8")
 
 
 def test_old_web_blue_accent_is_gone():

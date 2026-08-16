@@ -62,10 +62,10 @@ def test_edit_file_refused_without_a_held_lease(sample_project):
     ctx = make_context(sample_project, PermissionMode.full_auto)
     ctx.lease_manager = LeaseManager()
     ctx.current_task_id = "t1"
-    original = (sample_project / "app.py").read_text()
+    original = (sample_project / "app.py").read_text(encoding="utf-8")
     res = edit_file(EditFileArgs(path="app.py", old_string="'hi'", new_string="'lo'"), ctx)
     assert not res.ok
-    assert (sample_project / "app.py").read_text() == original
+    assert (sample_project / "app.py").read_text(encoding="utf-8") == original
 
 
 def test_create_folder_refused_without_a_held_lease(sample_project):
@@ -81,11 +81,11 @@ def test_apply_patch_refused_without_a_held_lease(sample_project):
     ctx = make_context(sample_project, PermissionMode.full_auto)
     ctx.lease_manager = LeaseManager()
     ctx.current_task_id = "t1"
-    original = (sample_project / "app.py").read_text()
+    original = (sample_project / "app.py").read_text(encoding="utf-8")
     patch_text = "--- app.py\n+++ app.py\n@@ -1,2 +1,2 @@\n def hello():\n-    return 'hi'\n+    return 'lo'\n"
     res = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
     assert not res.ok
-    assert (sample_project / "app.py").read_text() == original
+    assert (sample_project / "app.py").read_text(encoding="utf-8") == original
 
 
 # --- lease held by the current task: allowed -------------------------------
@@ -132,7 +132,7 @@ def test_write_file_refused_when_a_different_task_holds_the_lease(sample_project
 def test_apply_patch_checks_every_touched_file_before_applying_any(sample_project):
     """One file in a multi-file patch lacks a lease -> the whole patch is
     refused, not partially applied."""
-    (sample_project / "b.py").write_text("y = 1\n")
+    (sample_project / "b.py").write_text("y = 1\n", encoding="utf-8")
     ctx = make_context(sample_project, PermissionMode.full_auto)
     ctx.lease_manager = LeaseManager()
     ctx.current_task_id = "t1"
@@ -144,5 +144,5 @@ def test_apply_patch_checks_every_touched_file_before_applying_any(sample_projec
     with mock_patch("subprocess.run", side_effect=FileNotFoundError):
         res = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
     assert not res.ok
-    assert (sample_project / "app.py").read_text() == "def hello():\n    return 'hi'\n\n# TODO: write tests\n"
-    assert (sample_project / "b.py").read_text() == "y = 1\n"
+    assert (sample_project / "app.py").read_text(encoding="utf-8") == "def hello():\n    return 'hi'\n\n# TODO: write tests\n"
+    assert (sample_project / "b.py").read_text(encoding="utf-8") == "y = 1\n"

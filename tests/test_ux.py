@@ -268,8 +268,8 @@ def test_repl_frontend_fashion_shop_scaffold_uses_fashion_copy(monkeypatch, tmp_
         "buatin saya website toko baju bukan toko sepatu buat ulang ya"
     ) is False
 
-    html = (tmp_path / "toko-baju" / "index.html").read_text()
-    app_js = (tmp_path / "toko-baju" / "app.js").read_text()
+    html = (tmp_path / "toko-baju" / "index.html").read_text(encoding="utf-8")
+    app_js = (tmp_path / "toko-baju" / "app.js").read_text(encoding="utf-8")
     assert "Baju harian" in html
     assert "City Coach Jacket" in html
     assert "Everyday Cotton Tee" in app_js
@@ -285,9 +285,9 @@ def test_repl_frontend_fashion_shop_scaffold_respects_quoted_folder_and_dark_ton
         'tolong build ulang website toko baju online di folder baru bernama "toko baju" pake html css js aja nuansa hitam gekao'
     ) is False
 
-    html = (tmp_path / "toko baju" / "index.html").read_text()
-    css = (tmp_path / "toko baju" / "styles.css").read_text()
-    app_js = (tmp_path / "toko baju" / "app.js").read_text()
+    html = (tmp_path / "toko baju" / "index.html").read_text(encoding="utf-8")
+    css = (tmp_path / "toko baju" / "styles.css").read_text(encoding="utf-8")
+    app_js = (tmp_path / "toko baju" / "app.js").read_text(encoding="utf-8")
     assert 'class="theme-dark"' in html
     assert "Baju harian" in html
     assert "Everyday Cotton Tee" in app_js
@@ -302,8 +302,8 @@ def test_repl_mandarin_learning_platform_scaffold(monkeypatch, tmp_path):
 
     assert repl._handle_line("buatin saya web platform belajar mandarin") is False
 
-    html = (tmp_path / "belajar-mandarin" / "index.html").read_text()
-    app_js = (tmp_path / "belajar-mandarin" / "app.js").read_text()
+    html = (tmp_path / "belajar-mandarin" / "index.html").read_text(encoding="utf-8")
+    app_js = (tmp_path / "belajar-mandarin" / "app.js").read_text(encoding="utf-8")
     assert "MandarinLab" in html
     assert "Belajar Mandarin" in html
     assert "Modul populer" in html

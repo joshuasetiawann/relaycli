@@ -281,7 +281,7 @@ def test_git_log(tmp_path, ctx):
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, capture_output=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, capture_output=True)
-    (tmp_path / "f.txt").write_text("hello")
+    (tmp_path / "f.txt").write_text("hello", encoding="utf-8")
     subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
     subprocess.run(["git", "commit", "-m", "first commit"], cwd=tmp_path, capture_output=True)
     ctx2 = ToolContext(project=ProjectContext(tmp_path),
@@ -368,7 +368,7 @@ def test_git_empty_args_is_a_clean_error(ctx):
 
 def test_apply_patch_simple(tmp_path, ctx):
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
-    (tmp_path / "test.txt").write_text("hello world\n")
+    (tmp_path / "test.txt").write_text("hello world\n", encoding="utf-8")
     patch_text = "--- test.txt\n+++ test.txt\n@@ -1 +1 @@\n-hello world\n+hello patched\n"
     with mock_patch("subprocess.run") as mock:
         mock.return_value.returncode = 0
@@ -382,7 +382,7 @@ def test_apply_patch_simple(tmp_path, ctx):
 
 def test_apply_patch_fallback_when_patch_missing(tmp_path, ctx):
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
-    (tmp_path / "file.txt").write_text("line1\nline2\nline3\n")
+    (tmp_path / "file.txt").write_text("line1\nline2\nline3\n", encoding="utf-8")
     patch_text = (
         "--- file.txt\n+++ file.txt\n@@ -1,3 +1,3 @@\n line1\n-line2\n+modified\n line3\n"
     )
@@ -390,18 +390,18 @@ def test_apply_patch_fallback_when_patch_missing(tmp_path, ctx):
         mock.side_effect = FileNotFoundError()
         result = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
     if result.ok:
-        assert (tmp_path / "file.txt").read_text() == "line1\nmodified\nline3\n"
+        assert (tmp_path / "file.txt").read_text(encoding="utf-8") == "line1\nmodified\nline3\n"
 
 def test_apply_patch_no_patch_command(tmp_path, ctx):
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
-    (tmp_path / "f.txt").write_text("a\nb\nc\n")
+    (tmp_path / "f.txt").write_text("a\nb\nc\n", encoding="utf-8")
     diff_body = (
         "--- f.txt\n+++ f.txt\n@@ -1,3 +1,3 @@\n a\n-b\n+bb\n c\n"
     )
     with mock_patch("subprocess.run", side_effect=FileNotFoundError):
         result = apply_patch(ApplyPatchArgs(patch=diff_body), ctx)
     assert result.ok
-    assert (tmp_path / "f.txt").read_text() == "a\nbb\nc\n"
+    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "a\nbb\nc\n"
 
 def test_apply_patch_new_file(tmp_path, ctx):
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
@@ -409,7 +409,7 @@ def test_apply_patch_new_file(tmp_path, ctx):
     with mock_patch("subprocess.run", side_effect=FileNotFoundError):
         result = apply_patch(ApplyPatchArgs(patch=diff_body), ctx)
     if result.ok:
-        assert (tmp_path / "new.txt").read_text().strip() == "new content"
+        assert (tmp_path / "new.txt").read_text(encoding="utf-8").strip() == "new content"
 
 def test_apply_patch_malformed_patch(ctx):
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
@@ -419,7 +419,7 @@ def test_apply_patch_malformed_patch(ctx):
 
 def test_apply_patch_via_registry(tmp_path, ctx):
     r = default_registry()
-    (tmp_path / "f.txt").write_text("old\n")
+    (tmp_path / "f.txt").write_text("old\n", encoding="utf-8")
     diff_body = "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-old\n+new\n"
     with mock_patch("subprocess.run") as mock:
         mock.return_value.returncode = 0
@@ -433,7 +433,7 @@ def test_apply_patch_via_registry(tmp_path, ctx):
 
 def test_apply_patch_requires_permission_declined(tmp_path):
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
-    (tmp_path / "f.txt").write_text("old\n")
+    (tmp_path / "f.txt").write_text("old\n", encoding="utf-8")
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     ctx = ToolContext(
         project=ProjectContext(tmp_path),
@@ -444,12 +444,12 @@ def test_apply_patch_requires_permission_declined(tmp_path):
     result = apply_patch(ApplyPatchArgs(patch=diff_body), ctx)
     assert not result.ok
     assert "not approved" in result.output
-    assert (tmp_path / "f.txt").read_text() == "old\n"
+    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "old\n"
 
 
 def test_apply_patch_requires_permission_approved(tmp_path):
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
-    (tmp_path / "f.txt").write_text("old\n")
+    (tmp_path / "f.txt").write_text("old\n", encoding="utf-8")
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     ctx = ToolContext(
         project=ProjectContext(tmp_path),
@@ -460,7 +460,7 @@ def test_apply_patch_requires_permission_approved(tmp_path):
     with mock_patch("subprocess.run", side_effect=FileNotFoundError):
         result = apply_patch(ApplyPatchArgs(patch=diff_body), ctx)
     assert result.ok
-    assert (tmp_path / "f.txt").read_text() == "new\n"
+    assert (tmp_path / "f.txt").read_text(encoding="utf-8") == "new\n"
 
 
 def test_apply_patch_auto_approved_in_full_auto(tmp_path, ctx):
@@ -468,7 +468,7 @@ def test_apply_patch_auto_approved_in_full_auto(tmp_path, ctx):
     only passes if full_auto genuinely bypasses the prompt rather than
     hanging or erroring on a missing prompter."""
     from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
-    (tmp_path / "f.txt").write_text("old\n")
+    (tmp_path / "f.txt").write_text("old\n", encoding="utf-8")
     ctx2 = ToolContext(project=ProjectContext(tmp_path), permissions=PermissionManager(PermissionMode.full_auto, console=ctx.console), console=ctx.console)
     diff_body = "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-old\n+new\n"
     with mock_patch("subprocess.run", side_effect=FileNotFoundError):

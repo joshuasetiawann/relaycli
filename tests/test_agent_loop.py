@@ -106,7 +106,7 @@ def test_full_read_edit_run_cycle(sample_project):
     assert result.stopped_reason == "done"
     assert result.iterations == 4
     assert result.tool_calls == 3
-    assert "return 'hello'" in (sample_project / "app.py").read_text()
+    assert "return 'hello'" in (sample_project / "app.py").read_text(encoding="utf-8")
     assert result.usage.total_tokens == 32  # 4 calls * 8
 
 
@@ -129,7 +129,7 @@ def test_agent_recovers_when_model_edits_before_reading(sample_project):
     result = agent.run("update app.py")
 
     assert result.stopped_reason == "done"
-    assert "return 'hello'" in (sample_project / "app.py").read_text()
+    assert "return 'hello'" in (sample_project / "app.py").read_text(encoding="utf-8")
     tool_msgs = [m for m in llm.calls[1] if m.get("role") == "tool"]
     assert any("Read-before-edit is required" in (m.get("content") or "") for m in tool_msgs)
     assert any("return 'hi'" in (m.get("content") or "") for m in tool_msgs)
@@ -151,7 +151,7 @@ def test_text_tool_json_is_executed(sample_project):
 
     assert result.stopped_reason == "done"
     assert result.tool_calls == 1
-    assert (sample_project / "mandarin" / "index.html").read_text() == "<h1>你好</h1>"
+    assert (sample_project / "mandarin" / "index.html").read_text(encoding="utf-8") == "<h1>你好</h1>"
     tool_msgs = [m for m in llm.calls[-1] if m.get("role") == "tool"]
     assert any("Wrote" in (m.get("content") or "") for m in tool_msgs)
 
@@ -193,7 +193,7 @@ def test_text_tool_array_json_executes_multiple_calls(sample_project):
     assert result.stopped_reason == "done"
     assert result.tool_calls == 2
     assert (sample_project / "shop").is_dir()
-    assert (sample_project / "shop" / "index.html").read_text() == "<h1>Shop</h1>"
+    assert (sample_project / "shop" / "index.html").read_text(encoding="utf-8") == "<h1>Shop</h1>"
 
 
 def test_text_tool_alias_and_string_args_are_normalized(sample_project):
@@ -247,7 +247,7 @@ def test_actionable_frontend_task_retries_when_no_files_written(sample_project):
 
     assert result.stopped_reason == "done"
     assert result.tool_calls == 2
-    assert (sample_project / "toko laptop" / "index.html").read_text() == "<h1>Toko Laptop</h1>"
+    assert (sample_project / "toko laptop" / "index.html").read_text(encoding="utf-8") == "<h1>Toko Laptop</h1>"
     user_messages = [
         m.get("content", "") for m in llm.calls[2]
         if m.get("role") == "user"
@@ -274,7 +274,7 @@ def test_actionable_frontend_task_nudges_after_folder_creation(sample_project):
 
     assert result.stopped_reason == "done"
     assert result.tool_calls == 2
-    assert (sample_project / "marketplace-shopee" / "index.html").read_text() == (
+    assert (sample_project / "marketplace-shopee" / "index.html").read_text(encoding="utf-8") == (
         "<h1>Marketplace</h1>"
     )
     user_messages = [
@@ -307,7 +307,7 @@ def test_actionable_file_task_recovers_from_plain_done_claim(sample_project):
     )
 
     assert result.stopped_reason == "done"
-    assert (sample_project / "marketplace-shopee" / "index.html").read_text() == (
+    assert (sample_project / "marketplace-shopee" / "index.html").read_text(encoding="utf-8") == (
         "<h1>Marketplace</h1>"
     )
     assert any("I created the marketplace" in text for text in reporter.discarded)
@@ -334,7 +334,7 @@ def test_actionable_file_task_recovers_from_short_done_without_write(sample_proj
     result = agent.run("buat website demo di folder demo", reporter=reporter)
 
     assert result.stopped_reason == "done"
-    assert (sample_project / "demo" / "index.html").read_text() == "<h1>Demo</h1>"
+    assert (sample_project / "demo" / "index.html").read_text(encoding="utf-8") == "<h1>Demo</h1>"
     assert reporter.discarded == ["Done."]
     assert reporter.rendered == ["Done."]
 
@@ -396,7 +396,7 @@ def test_actionable_file_task_recovers_after_fake_created_file_claim(sample_proj
 
     assert result.stopped_reason == "done"
     assert result.tool_calls == 2
-    assert (sample_project / "smoke-folder" / "ok.txt").read_text() == "OK"
+    assert (sample_project / "smoke-folder" / "ok.txt").read_text(encoding="utf-8") == "OK"
 
 
 def test_explain_website_prompt_can_finish_without_file_write(sample_project):
@@ -449,7 +449,7 @@ def test_unknown_text_tool_json_is_retried_then_recovers(sample_project):
 
     assert result.stopped_reason == "done"
     assert result.tool_calls == 1
-    assert (sample_project / "web-app" / "index.html").read_text() == "<h1>OK</h1>"
+    assert (sample_project / "web-app" / "index.html").read_text(encoding="utf-8") == "<h1>OK</h1>"
     user_messages = [
         m.get("content", "") for m in llm.calls[1]
         if m.get("role") == "user"

@@ -120,7 +120,7 @@ def test_successful_spawn_returns_child_result(tmp_path):
 
 def test_spawned_agent_shares_project_permissions_and_file_cache(tmp_path):
     ctx = _ctx(tmp_path)
-    (tmp_path / "existing.py").write_text("x = 1\n")
+    (tmp_path / "existing.py").write_text("x = 1\n", encoding="utf-8")
     res = spawn_agent(SpawnAgentArgs(role="backend", goal="do it"), ctx)
     assert res.ok  # constructing the child Agent against the real project succeeded
 

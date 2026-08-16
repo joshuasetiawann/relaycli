@@ -75,7 +75,7 @@ def test_write_file_populates_diff_as_new_file(sample_project):
 
 def test_write_file_no_change_returns_empty_diff_list(sample_project):
     ctx = make_context(sample_project, PermissionMode.full_auto)
-    original = (sample_project / "app.py").read_text()
+    original = (sample_project / "app.py").read_text(encoding="utf-8")
     res = write_file(WriteFileArgs(path="app.py", content=original), ctx)
     assert res.ok
     assert res.diff == []
