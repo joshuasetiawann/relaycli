@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import io
+import os
 from pathlib import Path
 
+import pytest
 from rich.console import Console
 
 import relaycli.doctor as doctor
@@ -25,6 +27,7 @@ def _console():
     return Console(file=io.StringIO(), force_terminal=False, width=120)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no POSIX mode bits")
 def test_config_perms_flags_world_readable(tmp_path: Path):
     cfg = tmp_path / "config.toml"
     cfg.write_text("x = 1\n", encoding="utf-8")
@@ -35,6 +38,17 @@ def test_config_perms_flags_world_readable(tmp_path: Path):
     tmp_path.chmod(0o700)
     checks = check_config_perms(cfg, tmp_path)
     assert [c.status for c in checks] == [doctor.OK, doctor.OK]
+
+
+def test_config_perms_is_skipped_on_windows(tmp_path: Path, monkeypatch):
+    # st_mode is synthesised as 0666 there whatever the ACL says, so the
+    # POSIX check would fail forever and `chmod 600` is advice nobody can act
+    # on. It has to read as unchecked, not as a failure.
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.setattr(os, "name", "nt")
+    checks = check_config_perms(cfg, tmp_path)
+    assert [c.status for c in checks] == [doctor.SKIP]
 
 
 def test_config_missing_is_warn(tmp_path: Path):

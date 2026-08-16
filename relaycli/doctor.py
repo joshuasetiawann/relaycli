@@ -39,6 +39,17 @@ def check_config_perms(
     if not config_file.exists():
         checks.append(Check("config file", WARN, f"{config_file} does not exist yet"))
         return checks
+    if os.name == "nt":
+        # Windows has no POSIX mode bits: st_mode is synthesised as 0666/0777
+        # whatever the ACL says, and `chmod 600` is not advice anyone can
+        # follow. Report it as unchecked rather than as a failure nobody can
+        # clear.
+        checks.append(Check(
+            "config perms", SKIP,
+            f"{config_file} — POSIX modes do not apply on Windows; "
+            "the file inherits your user profile's ACL",
+        ))
+        return checks
     mode = stat.S_IMODE(os.stat(config_file).st_mode)
     if mode & 0o077:
         checks.append(Check(

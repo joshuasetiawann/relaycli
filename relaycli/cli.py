@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -18,6 +19,14 @@ from rich.table import Table
 
 from relaycli import __version__
 from relaycli.config import CONFIG_FILE, PermissionMode, Settings, get_settings
+
+# Windows consoles default to the ANSI codepage (cp1252 on this locale), and
+# every glyph in the design system — ✓, ▌, box-drawing — is outside it, so the
+# first styled line raised UnicodeEncodeError before the banner finished. Do
+# this before Console() is built: Rich caches the stream's encoding.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
 
 app = typer.Typer(
     name="relaycli",
