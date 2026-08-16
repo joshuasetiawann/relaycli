@@ -127,3 +127,28 @@ def test_pull_ollama_model_posts_normalized_name(monkeypatch):
 def test_ollama_model_name_rejects_whitespace():
     with pytest.raises(ValueError):
         model_catalog.normalize_ollama_model_name("qwen 0.5b")
+
+
+def test_installed_flag_survives_the_recent_dedupe(monkeypatch):
+    # A local model you have actually used lands in "Recent", and the
+    # provider loop then skips it as a duplicate — so grouping alone can no
+    # longer tell you it is on disk. The flag has to travel with the row.
+    from relaycli.appconfig import set_base_model
+
+    monkeypatch.setattr(
+        model_catalog,
+        "ollama_models",
+        lambda settings, timeout=0.8: ["qwen2.5-coder:1.5b", "smollm2:360m"],
+    )
+    set_base_model("ollama_chat/qwen2.5-coder:1.5b")
+
+    rows = model_catalog.model_choices(
+        _settings(model="ollama_chat/qwen2.5-coder:1.5b"), live=False
+    )
+    by_id = {r["id"]: r for r in rows}
+
+    used = by_id["ollama_chat/qwen2.5-coder:1.5b"]
+    assert used["group"] == "Recent" and used["installed"] is True
+    assert by_id["ollama_chat/smollm2:360m"]["installed"] is True
+    # Catalog suggestions for models that were never pulled stay unflagged.
+    assert by_id["openrouter/z-ai/glm-4.7"]["installed"] is False

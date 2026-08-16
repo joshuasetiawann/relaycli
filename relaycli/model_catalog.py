@@ -31,6 +31,10 @@ class ModelChoice:
     provider: str
     source: str = "catalog"
     current: bool = False
+    # Pulled and sitting on this machine's disk, so it runs with no key and no
+    # network. Independent of `group`: a locally-installed model shows up under
+    # "Recent" too, and the caller still needs to know it is local.
+    installed: bool = False
 
     def as_dict(self) -> dict[str, str | bool]:
         return {
@@ -41,6 +45,7 @@ class ModelChoice:
             "provider": self.provider,
             "source": self.source,
             "current": self.current,
+            "installed": self.installed,
         }
 
 
@@ -169,6 +174,13 @@ def model_choices(
     provider_filter = (provider_filter or "").strip().lower() or None
     query = (query or "").strip().lower()
 
+    # Probed once up front rather than inside the provider loop: "Recent" is
+    # built first and the dedupe below drops anything it already listed, so
+    # without this the models you actually use would be the ones missing from
+    # the installed set.
+    installed_entries = detected_ollama_models(settings, timeout=timeout)
+    installed_ids = {model_id for model_id, _ in installed_entries}
+
     choices: list[ModelChoice] = []
     for model_id in _recent_model_ids():
         choice = ModelChoice(
@@ -179,6 +191,7 @@ def model_choices(
             provider=_provider_from_model_id(model_id),
             source="recent",
             current=model_id == current,
+            installed=model_id in installed_ids,
         )
         if (not provider_filter or provider_filter in {"recent", choice.provider}) and _matches(choice, query):
             choices.append(choice)
@@ -189,9 +202,8 @@ def model_choices(
         entries = list(fallback)
         source = "catalog"
         if provider == "ollama":
-            installed = detected_ollama_models(settings, timeout=timeout)
-            if installed:
-                entries = installed
+            if installed_entries:
+                entries = installed_entries
                 source = "installed"
         elif live:
             fetched = live_provider_models(settings, provider, timeout=timeout)
@@ -209,6 +221,7 @@ def model_choices(
                 provider=provider,
                 source=source,
                 current=model_id == current,
+                installed=model_id in installed_ids,
             )
             if _matches(choice, query):
                 choices.append(choice)
@@ -224,6 +237,7 @@ def model_choices(
             provider=_provider_from_model_id(current),
             source="current",
             current=True,
+            installed=current in installed_ids,
         ))
     return [choice.as_dict() for choice in choices]
 

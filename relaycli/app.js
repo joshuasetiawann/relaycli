@@ -218,6 +218,17 @@ function renderModels() {
     selectedProvider = (current && current.provider) || providers[0].id;
   }
 
+  // What is actually pulled onto this machine's disk — runs with no key and
+  // no network. Its own row because you can't get at it otherwise: these
+  // models are deduped out of the provider list once they reach Recent.
+  const installed = all.filter(m => m.installed);
+  $("installedItems").innerHTML = installed.length
+    ? `<div class="head">On this PC · ${installed.length}</div><div class="recent-row">` +
+      installed.map((m, i) => modelButton(m, i, "recent")).join("") + `</div>`
+    : `<div class="head">On this PC</div>` +
+      `<div class="model-empty">no local models — pull one under Advanced, or start Ollama</div>`;
+  bindModelButtons($("installedItems"), installed);
+
   $("recentItems").innerHTML = recent.length
     ? `<div class="head">Recent</div><div class="recent-row">` +
       recent.slice(0, 8).map((m, i) => modelButton(m, i, "recent")).join("") + `</div>`
