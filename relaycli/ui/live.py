@@ -38,8 +38,7 @@ Still absent from the design, and named here so the gap is not mistaken
 for an oversight: the permission band (§08), the diff review queue, the
 plan-review screen, and focus mode's lease/graph strips. Each needs a
 Scheduler or Agent capability that does not exist yet — a staged-edit
-permission mode, a lease queue, an inbox into a running Agent — not a
-renderer.
+permission mode, a lease queue — not a renderer.
 """
 
 from __future__ import annotations
@@ -421,8 +420,8 @@ def key_strip_hints(lanes: list[LaneView]) -> list[frame.KeyHint]:
     waiting = [lane.task_id for lane in lanes if lane.awaiting_you]
     hints = [frame.KeyHint("tab", "lane"), frame.KeyHint("1-9", "jump"),
              frame.KeyHint("enter", "focus"), frame.KeyHint("m", "merged"),
-             frame.KeyHint("^k", "collapse"), frame.KeyHint("x", "drop"),
-             frame.KeyHint("R", "retry")]
+             frame.KeyHint("^k", "collapse"), frame.KeyHint("s", "steer"),
+             frame.KeyHint("x", "drop"), frame.KeyHint("R", "retry")]
     if waiting:
         hints.append(frame.KeyHint("y/n", "answer", ", ".join(waiting[:2])))
     hints.extend([frame.KeyHint("esc", "stop all"), frame.KeyHint("?", "keys")])
@@ -499,10 +498,23 @@ def render_frame_lines(
         return lines + render_help_overlay(mode)
 
     lanes = lane_views_for(scheduler, selected=state.selected, activity=activity)
+    if state.steering:
+        target = lanes[state.selected] if 0 <= state.selected < len(lanes) else None
+        # Naming the addressee in the strip, not just the row, is what
+        # stops a note going to whichever lane the cursor happened to be
+        # on: `s` does not move the cursor, and the lane list keeps
+        # redrawing underneath the field while you type.
+        strip = [frame.KeyHint("enter", "send", id_role_label(target.task_id, target.role_id)
+                               if target else ""),
+                 frame.KeyHint("esc", "cancel")]
+    else:
+        strip = key_strip_hints(lanes)
     bottom = [frame.render_rule(columns, mode, width),
-              frame.render_input_row(columns, mode, width,
-                                     placeholder="watching — esc stops every agent"),
-              frame.render_key_strip(key_strip_hints(lanes), columns, mode, width)]
+              frame.render_input_row(
+                  columns, mode, width,
+                  placeholder="watching — esc stops every agent",
+                  typed=state.steer_text if state.steering else None),
+              frame.render_key_strip(strip, columns, mode, width)]
 
     # Lanes get whatever is left once the pinned chrome and §4's transcript
     # floor are subtracted, capped at the nine rows §4 allows them: "the
@@ -575,6 +587,51 @@ def dispatch_lane_action(scheduler: "Scheduler | None", action: str, selected: i
     return task_id
 
 
+def dispatch_steer(scheduler: "Scheduler | None", note: str, selected: int) -> tuple[str, bool]:
+    """Send a typed note to the lane under the cursor. Returns
+    (task_id, delivered).
+
+    Delivery is genuinely uncertain here in a way drop and retry are not:
+    those queue a request the Scheduler applies whenever it next gets to
+    it, while a steer needs an Agent that is running *now*. A task that
+    finished while the note was being typed simply has nobody to hand it
+    to, and the caller says so rather than letting the field look like it
+    worked. An empty task id means there was nothing under the cursor at
+    all.
+    """
+    if scheduler is None:
+        return "", False
+    task_ids = list(scheduler.graph.tasks)
+    if not (0 <= selected < len(task_ids)):
+        return "", False
+    task_id = task_ids[selected]
+    return task_id, scheduler.request_steer(task_id, note)
+
+
+def _send_steer(scheduler: "Scheduler | None", note: str, selected: int,
+                activity: "LaneActivity | None") -> tuple[str, bool]:
+    """dispatch_steer, plus the transcript line that records what happened.
+
+    The record is not decoration. A steer produces no visible change until
+    the agent's next iteration — which may be a whole model call away —
+    so without a line saying the note was taken, the only feedback is the
+    field emptying, which looks identical to esc.
+    """
+    task_id, delivered = dispatch_steer(scheduler, note, selected)
+    if activity is None:
+        return task_id, delivered
+    role_id = ""
+    if scheduler is not None and task_id in scheduler.graph.tasks:
+        role_id = scheduler.graph.tasks[task_id].role_id
+    activity.transcript.append(frame.TranscriptEntry(
+        stamp=_stamp(), kind="note", task_id=task_id, role_id=role_id,
+        text=(f"steer → {note}" if delivered else
+              f"steer not delivered ({task_id or 'no lane'} is not running) → {note}"),
+        ok=delivered,
+    ))
+    return task_id, delivered
+
+
 class LiveFrame:
     """Rich __rich_console__ renderable: Live's own background-refresh
     thread calls this on every frame, so it must read live.scheduler
@@ -630,15 +687,27 @@ async def _run_with_live_frame(
         return len(scheduler.graph.tasks) if scheduler is not None else 0
 
     def on_key(key: str) -> None:
-        action = keymap.parse_key(key)
         with state_lock:
             current = state_box["state"]
-            state_box["state"] = keymap.apply_action(current, action, lane_count())
+            if current.steering:
+                # Typing regime: every key is a character until enter or
+                # esc closes the field. No lane action can fire from here,
+                # which is the point — `x` in a sentence must type an x.
+                state_box["state"], note = keymap.steer_key(current, key)
+                action = None
+            else:
+                action = keymap.parse_key(key)
+                state_box["state"] = keymap.apply_action(current, action, lane_count())
+                note = None
+        if note is not None:
+            _send_steer(holder.get("scheduler"), note, current.selected, activity)
+            return
         # Lane actions address the Scheduler, not the view. Requests are
         # queued there and applied on its own loop thread, so calling this
         # from the key reader thread is safe; the resulting status change
         # shows up through the normal graph read on the next frame.
-        dispatch_lane_action(holder.get("scheduler"), action.action, current.selected)
+        if action is not None:
+            dispatch_lane_action(holder.get("scheduler"), action.action, current.selected)
 
     def should_stop() -> bool:
         return get_state().stop_requested

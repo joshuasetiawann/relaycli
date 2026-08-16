@@ -908,3 +908,65 @@ def test_agent_run_offline_allows_local_model(tmp_path):
     result = agent.run("do the thing")
     assert result.stopped_reason == "done"
     assert llm.attempted_models == ["ollama_chat/llama3.1"]
+
+# --- steer: an inbox into an agent that is already running --------------
+def test_steer_note_reaches_the_model_on_the_next_iteration(tmp_path):
+    """The note has to arrive as a user turn the model actually sees —
+    queueing it somewhere the loop never reads would be a key that looks
+    like it worked."""
+    llm = FakeLLM([_resp("thinking", [_tc("read_file", {"path": "a.txt"}, "c1")]),
+                   _resp("done")])
+    (tmp_path / "a.txt").write_text("hi\n", encoding="utf-8")
+    agent = _build_agent(tmp_path, llm)
+    agent.steer("also update the README")
+
+    result = agent.run("read a.txt")
+
+    assert result.stopped_reason == "done"
+    sent = [m["content"] for m in llm.calls[0] if m["role"] == "user"]
+    assert any("also update the README" in str(c) for c in sent)
+
+
+def test_a_steer_that_lands_while_the_model_is_finishing_still_runs(tmp_path):
+    """"wait, also…" arrives exactly when the agent is one sentence from
+    done. Dropping it there would make the key a coin flip against
+    timing."""
+    llm = FakeLLM([_resp("all done"), _resp("and the extra thing too")])
+    agent = _build_agent(tmp_path, llm)
+
+    # Queue the note from inside the model call itself, which is exactly
+    # where a keypress lands: after the iteration's own drain, before the
+    # reply that would have ended the run.
+    inner_complete = llm.complete
+    typed = []
+
+    def complete_and_type(*args, **kwargs):
+        response = inner_complete(*args, **kwargs)
+        if not typed:
+            typed.append(True)
+            agent.steer("and the extra thing")
+        return response
+
+    llm.complete = complete_and_type
+    result = agent.run("do the thing")
+
+    assert result.stopped_reason == "done"
+    assert result.final_text == "and the extra thing too"
+    assert result.iterations == 2
+
+
+def test_blank_steer_notes_are_not_queued(tmp_path):
+    agent = _build_agent(tmp_path, FakeLLM([_resp("done")]))
+    assert agent.steer("   ") is False
+    assert agent.steer("") is False
+    assert agent.steer(" go ") is True
+    assert agent._inbox == ["go"]
+
+
+def test_steering_an_agent_that_never_runs_changes_nothing(tmp_path):
+    """The inbox is drained by run(); a note queued against an agent that
+    is never run must not leak into the next one."""
+    agent = _build_agent(tmp_path, FakeLLM([_resp("done")]))
+    agent.steer("hello")
+    assert agent._apply_steer() is True
+    assert agent._apply_steer() is False   # drained, not replayed

@@ -283,14 +283,21 @@ def render_key_strip(hints: list[KeyHint], columns: ColumnWidths,
 
 
 def render_input_row(columns: ColumnWidths, mode: theme.ColorMode, width: int,
-                     *, placeholder: str) -> Text:
+                     *, placeholder: str, typed: str | None = None) -> Text:
     """`❯ ask, or / for commands` — the design's caret line.
 
-    The caret is drawn, the placeholder is drawn, and nothing is typed
-    into it: the live frame has no channel into a running Agent, so a real
-    input here would accept a message it could never deliver. It is shown
-    because the caret is what tells you the run has not taken your
-    terminal away from you, and it says what it can actually do.
+    `typed=None` is the idle row: the caret and a placeholder saying what
+    the line can actually do. The caret is drawn even then, because it is
+    what tells you the run has not taken your terminal away from you.
+
+    A string — including `""` — means the steer field is open, and the row
+    draws what has been typed so far in the body style with a block
+    cursor after it. Empty draws just the cursor, so opening the field is
+    visible before the first character lands. The field is one line and
+    keymap caps the note at STEER_MAX_CHARS, but a narrow terminal can
+    still run out first, so the text is clipped from the *left*: the tail
+    is where the cursor is, and a field that hides what you are currently
+    typing is worse than one that hides what you typed a moment ago.
     """
     palette = theme.palette_for(mode)
     caret = theme.MARKERS["prompt_caret"]
@@ -298,7 +305,15 @@ def render_input_row(columns: ColumnWidths, mode: theme.ColorMode, width: int,
     row.append(" " * gutter_left(columns))
     row.append(f"{caret.symbol if palette else caret.ascii} ",
                style=theme.style_for(mode, "accent") if palette else None)
-    row.append(placeholder, style=theme.style_for(mode, "caret_idle") if palette else None)
+    if typed is None:
+        row.append(placeholder, style=theme.style_for(mode, "caret_idle") if palette else None)
+        return row
+    cursor = theme.MARKERS["focus_rail"]
+    cursor_text = cursor.symbol if palette else cursor.ascii
+    room = max(width - row.cell_len - len(cursor_text), 0)
+    row.append(typed[len(typed) - room:] if room else "",
+               style=theme.style_for(mode, "text") if palette else None)
+    row.append(cursor_text, style=theme.style_for(mode, "accent") if palette else None)
     return row
 
 

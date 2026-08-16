@@ -963,16 +963,25 @@ class Repl:
             self.console.print("[dim]not a git repository — no diff available.[/dim]")
             return
         try:
+            # encoding/errors, like the `!` shell path above: git writes the
+            # diff in UTF-8 regardless of locale, and text=True alone decodes
+            # it with the locale's codec instead. The failure is nastier than
+            # a traceback — the decode happens on subprocess's own reader
+            # thread, so run() returns "successfully" with stdout=None and
+            # the crash lands one line later on something that looks
+            # unrelated. Any diff touching a non-ASCII character is enough.
             proc = subprocess.run(
                 ["git", "-C", str(self.project.root), "diff", "--no-color"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=15,
             )
         except (OSError, subprocess.SubprocessError) as exc:
             self.console.print(f"[red]git diff failed:[/red] {exc}")
             return
-        out = proc.stdout.strip()
+        out = (proc.stdout or "").strip()
         if not out:
             self.console.print("[dim]no uncommitted changes.[/dim]")
             return

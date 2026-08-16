@@ -110,7 +110,22 @@ class TaskAgentFactory:
         return agent, ctx
 
 
-def make_run_task(agent_factory, reporter_factory=None):
+def steer_running_agent(live_agents: dict, task_id: str, note: str) -> bool:
+    """Deliver `note` to the agent currently running `task_id`, if there
+    is one. The Scheduler's `steer=` sink — see Scheduler.request_steer.
+
+    A miss is a plain False, not an error: by the time a keystroke gets
+    here the task it addressed may have finished, and the live view has
+    to be able to say "that lane isn't running" rather than raise inside
+    a key handler.
+    """
+    agent = live_agents.get(task_id)
+    if agent is None:
+        return False
+    return agent.steer(note)
+
+
+def make_run_task(agent_factory, reporter_factory=None, live_agents=None):
     """A Scheduler-compatible run_task callable, closing over agent_factory
     (production TaskAgentFactory, or a fake for tests) — kept as its own
     function so it's unit-testable independent of Scheduler.run()'s own
@@ -122,15 +137,25 @@ def make_run_task(agent_factory, reporter_factory=None):
     ever sees which files an agent touched, which is also what a diff review
     surface needs. Closed in a finally, since a Reporter typically buffers
     the assistant's last block until told the run is over.
+
+    `live_agents`, if given, is the dict `steer_running_agent` reads: the
+    task's agent is registered in it for exactly as long as it is running.
+    Registration has to happen here rather than in the factory, because
+    the factory has no way to learn when the agent is done and a stale
+    entry would send a steer to an agent that already returned.
     """
 
     async def run_task(task) -> TaskOutcome:
         def _run_sync() -> TaskOutcome:
             agent, ctx = agent_factory(task.role_id, task.id)
             reporter = reporter_factory(task.id, task.role_id) if reporter_factory else None
+            if live_agents is not None:
+                live_agents[task.id] = agent
             try:
                 result = agent.run(task.goal, reporter=reporter)
             finally:
+                if live_agents is not None:
+                    live_agents.pop(task.id, None)
                 if reporter is not None and hasattr(reporter, "close"):
                     reporter.close()
             return TaskOutcome(
@@ -211,10 +236,16 @@ async def run_parallel(
         settings=settings, console=console, project=project, permissions=permissions,
         llm=llm, leases=leases, budget=budget,
     )
+    # task id -> the Agent running it, right now. Written and cleared on
+    # task threads, read on the key-reader thread; a plain dict is enough
+    # because each of those operations is a single atomic dict op and no
+    # reader ever needs two of them to agree.
+    live_agents: dict[str, Agent] = {}
     scheduler = Scheduler(
-        graph, make_run_task(factory, reporter_factory),
+        graph, make_run_task(factory, reporter_factory, live_agents),
         max_concurrent_agents=settings.max_concurrent_agents,
         leases=leases, budget=budget, on_tick=on_tick, should_stop=should_stop,
+        steer=lambda task_id, note: steer_running_agent(live_agents, task_id, note),
     )
     if on_scheduler_ready is not None:
         on_scheduler_ready(scheduler)

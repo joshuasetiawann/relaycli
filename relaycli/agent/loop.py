@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -49,6 +50,15 @@ _JSON_SELF_CORRECT_RETRIES = 1
 _MISSING = object()
 _NAME_KEYS = ("name", "tool", "tool_name", "function_name", "action")
 _ARG_KEYS = ("arguments", "args", "parameters", "params", "input")
+
+# Prefix on a steer note (Agent.steer) when it enters the session. It has
+# to say where the text came from: without it a note reads as one more
+# line of the original request, and a model that has already decided the
+# request is finished has no reason to revisit it.
+_STEER_PREFIX = (
+    "The user sent this while you were working. It updates the request — "
+    "act on it before you finish:\n\n"
+)
 
 _SYSTEM_TEMPLATE = """You are RelayCLI, a terminal coding agent working inside a user's project.
 
@@ -136,6 +146,13 @@ class Agent:
         self.session = Session(self._build_system_prompt(), token_budget=self.settings.token_budget, model=self.model)
         self._current_iteration = 0
         self._current_request = ""
+        # Mid-run instructions from another thread (the live view's `s`
+        # key). run() drains it at its own iteration boundary rather than
+        # letting the caller touch self.session directly: a message
+        # appended while to_messages() is being built for a model call
+        # would be a torn read of the conversation.
+        self._inbox_lock = threading.Lock()
+        self._inbox: list[str] = []
 
     @property
     def model(self) -> str:
@@ -166,6 +183,36 @@ class Agent:
     def set_skills_block(self, block: str) -> None:
         self._skills_block = block
         self.refresh_system_prompt()
+
+    def steer(self, note: str) -> bool:
+        """Queue an instruction for an agent that is already running.
+
+        Safe from any thread. The note lands at the next iteration
+        boundary, or immediately before the agent would have finished —
+        whichever comes first, so a note typed while the model is writing
+        its closing summary still gets acted on instead of being answered
+        after the fact. Returns whether it was queued; blank notes are
+        not, since an accidental empty `enter` should cost nothing.
+
+        It does not interrupt the model call in flight. Nothing can:
+        Agent.run is synchronous and a task agent runs inside a thread.
+        """
+        note = note.strip()
+        if not note:
+            return False
+        with self._inbox_lock:
+            self._inbox.append(note)
+        return True
+
+    def _apply_steer(self) -> bool:
+        """Move queued notes into the session as user turns. Returns
+        whether there were any — run() uses that to keep going instead of
+        finishing."""
+        with self._inbox_lock:
+            notes, self._inbox = self._inbox, []
+        for note in notes:
+            self.session.add_user(_STEER_PREFIX + note)
+        return bool(notes)
 
     def run(self, request: str, *, reporter: Reporter | None = None) -> AgentResult:
         reporter = reporter or Reporter()
@@ -202,6 +249,9 @@ class Agent:
                                    elapsed=time.perf_counter() - started)
             self._current_iteration = i
             reporter.iteration(i)
+            # Before trim(), so a note counts against the same token budget
+            # as any other user turn instead of being appended past it.
+            self._apply_steer()
             self.session.trim()
 
             try:
@@ -328,6 +378,13 @@ class Agent:
                                        "an explicit request to use write_file.",
                             iterations=i, tool_calls=tool_calls, usage=usage,
                             stopped_reason="error", elapsed=time.perf_counter() - started)
+                if self._apply_steer():
+                    # A note landed while this reply was being written. The
+                    # agent is one statement from finishing, which is exactly
+                    # when "wait, also…" arrives — answering it on the next
+                    # iteration is the whole point of steering, and dropping
+                    # it here would make the key a coin flip against timing.
+                    continue
                 return AgentResult(final_text=response.text, iterations=i, tool_calls=tool_calls,
                                    usage=usage, stopped_reason="done",
                                    elapsed=time.perf_counter() - started)

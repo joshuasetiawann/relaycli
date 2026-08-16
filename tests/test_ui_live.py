@@ -882,3 +882,158 @@ def test_the_lane_region_stays_bounded_even_on_a_tall_terminal():
     first_rule = next(i for i, line in enumerate(body) if set(line.strip()) == {"─"})
     header = next(i for i, line in enumerate(body) if "transcript" in line)
     assert header - first_rule - 1 <= LANE_LIST_MAX_ROWS
+
+
+# --- s (steer): dispatch, feedback, and the field the frame draws ----------
+def _steerable_scheduler(*ids: str, running: set[str] | None = None) -> Scheduler:
+    """A settled graph plus a steer sink that only accepts the ids in
+    `running` — the real sink's behaviour, where a task that has already
+    returned has no agent left to hand a note to."""
+    accepted = running if running is not None else set(ids)
+    sched = _settled_scheduler(*ids)
+    sched.steered = []
+
+    def sink(task_id, note):
+        if task_id not in accepted:
+            return False
+        sched.steered.append((task_id, note))
+        return True
+
+    sched._steer = sink
+    return sched
+
+
+def test_steer_goes_to_the_lane_under_the_cursor():
+    from relaycli.ui.live import dispatch_steer
+
+    sched = _steerable_scheduler("a", "b", "c")
+    assert dispatch_steer(sched, "also add a test", 1) == ("b", True)
+    assert sched.steered == [("b", "also add a test")]
+
+
+def test_steer_reports_a_lane_that_is_no_longer_running():
+    """The note was typed while the lane was alive and arrived after it
+    finished. Saying it landed would be a lie the user acts on."""
+    from relaycli.ui.live import dispatch_steer
+
+    sched = _steerable_scheduler("a", "b", running={"a"})
+    assert dispatch_steer(sched, "hello", 1) == ("b", False)
+    assert sched.steered == []
+
+
+def test_steer_before_the_graph_exists_addresses_nothing():
+    from relaycli.ui.live import dispatch_steer
+
+    assert dispatch_steer(None, "hello", 0) == ("", False)
+
+
+def test_steer_ignores_a_cursor_past_the_end_of_the_graph():
+    from relaycli.ui.live import dispatch_steer
+
+    assert dispatch_steer(_steerable_scheduler("a"), "hello", 7) == ("", False)
+
+
+def test_steer_targets_the_same_lane_the_frame_highlights():
+    """dispatch indexes graph order and lane_views_for renders graph
+    order. If they diverged, a note would go to a lane other than the
+    highlighted one — silent, and impossible to notice from the frame."""
+    from relaycli.ui.live import dispatch_steer
+
+    sched = _steerable_scheduler("zebra", "alpha", "middle")
+    highlighted = next(l.task_id for l in lane_views_for(sched, selected=2) if l.focused)
+    assert dispatch_steer(sched, "note", 2)[0] == highlighted
+
+
+def test_a_delivered_steer_is_recorded_in_the_transcript():
+    """A steer produces no visible change until the agent's next
+    iteration. Without a line saying it was taken, the only feedback is
+    the field emptying — which looks exactly like esc."""
+    from relaycli.ui.live import LaneActivity, _send_steer
+
+    sched = _steerable_scheduler("a", "b")
+    activity = LaneActivity()
+    _send_steer(sched, "also add a test", 1, activity)
+
+    entry = activity.transcript.entries()[-1]
+    assert entry.task_id == "b" and entry.role_id == "coder"
+    assert entry.ok and "also add a test" in entry.text
+
+
+def test_an_undelivered_steer_says_so_in_the_transcript():
+    from relaycli.ui.live import LaneActivity, _send_steer
+
+    sched = _steerable_scheduler("a", "b", running={"a"})
+    activity = LaneActivity()
+    _send_steer(sched, "hello", 1, activity)
+
+    entry = activity.transcript.entries()[-1]
+    assert entry.ok is False and "not delivered" in entry.text
+
+
+def test_the_input_row_draws_what_is_being_typed():
+    from relaycli.ui.keymap import ViewState
+
+    sched = _settled_scheduler("a")
+    console = Console(file=io.StringIO(), width=120, height=24, force_terminal=True)
+    state = ViewState(steering=True, steer_text="also add a test")
+    row = next(line for line in render_frame_lines(sched, console, "dark", state)
+               if "also add a test" in line.plain)
+    assert "watching" not in row.plain   # the idle placeholder is gone
+
+
+def test_the_idle_row_keeps_its_placeholder():
+    sched = _settled_scheduler("a")
+    console = Console(file=io.StringIO(), width=120, height=24, force_terminal=True)
+    plain = "\n".join(line.plain for line in render_frame_lines(sched, console, "dark"))
+    assert "watching" in plain
+
+
+def test_the_key_strip_names_the_lane_a_note_would_go_to():
+    """`s` does not move the cursor and the lane list keeps redrawing
+    while you type, so the strip has to say who is being addressed."""
+    from relaycli.ui.keymap import ViewState
+
+    sched = _settled_scheduler("zebra", "alpha")
+    console = Console(file=io.StringIO(), width=120, height=24, force_terminal=True)
+    lines = render_frame_lines(sched, console, "dark",
+                               ViewState(steering=True, selected=1, steer_text="hi"))
+    strip = lines[-1].plain
+    assert "alpha" in strip and "send" in strip and "cancel" in strip
+    assert "stop all" not in strip   # esc cancels the note here, not the run
+
+
+def test_the_steer_field_never_overflows_the_frame():
+    from relaycli.ui.keymap import STEER_MAX_CHARS, ViewState
+
+    sched = _settled_scheduler("a")
+    for width in (120, 200):
+        console = Console(file=io.StringIO(), width=width, height=24, force_terminal=True)
+        state = ViewState(steering=True, steer_text="x" * STEER_MAX_CHARS)
+        for line in render_frame_lines(sched, console, "dark", state):
+            assert line.cell_len <= width, f"{line.plain!r} overflowed {width} columns"
+
+
+def test_the_steer_row_itself_fits_the_narrowest_terminal_the_frame_allows():
+    """80 columns is the floor the whole frame is gated on, and a
+    STEER_MAX_CHARS note is wider than that — so the row, not the cap, is
+    what has to hold the line. Asserted against the renderer directly:
+    the frame-level check above cannot run at 80 on a legacy Windows
+    console, which reports one column fewer than it is given."""
+    from relaycli.ui.frame import render_input_row
+    from relaycli.ui.keymap import STEER_MAX_CHARS
+
+    for width in (80, 120):
+        row = render_input_row(resolve_columns(width), "dark", width,
+                               placeholder="idle", typed="x" * STEER_MAX_CHARS)
+        assert row.cell_len <= width
+
+
+def test_a_clipped_field_keeps_the_end_the_user_is_typing():
+    """Clipping from the left, not the right: the tail is where the
+    cursor is, and a field that hides what you are typing right now is
+    worse than one that hides what you typed a moment ago."""
+    from relaycli.ui.frame import render_input_row
+
+    typed = "".join(str(i % 10) for i in range(200))
+    row = render_input_row(resolve_columns(80), "dark", 80, placeholder="idle", typed=typed)
+    assert row.plain.rstrip("▌").endswith(typed[-10:])

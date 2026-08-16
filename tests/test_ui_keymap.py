@@ -10,7 +10,8 @@ what the state ends up rendering as)."""
 from __future__ import annotations
 
 from relaycli.ui import keymap, keyreader
-from relaycli.ui.keymap import KeyAction, ViewState, apply_action, handle_key, parse_key
+from relaycli.ui.keymap import (KeyAction, ViewState, apply_action, handle_key, parse_key,
+                                steer_key)
 
 
 # --- parse_key ---------------------------------------------------------
@@ -193,3 +194,98 @@ def test_lane_actions_are_declared_for_the_dispatcher():
 def test_help_covers_the_lane_actions_too():
     described = " ".join(keys for keys, _ in keymap.KEY_HELP)
     assert "x" in described and "R" in described
+
+
+# --- s (steer): the one binding that opens a text field ----------------
+def test_s_opens_the_steer_field():
+    assert parse_key("s") == KeyAction("steer_task")
+    state = apply_action(ViewState(selected=2), KeyAction("steer_task"), 5)
+    assert state.steering and state.steer_text == ""
+    assert state.selected == 2  # opening the field must not move the cursor
+
+
+def test_s_does_nothing_before_the_graph_exists():
+    """A field opened over zero lanes has nowhere to send to; enter would
+    then be a keystroke that silently does nothing."""
+    assert apply_action(ViewState(), KeyAction("steer_task"), 0).steering is False
+
+
+def test_s_closes_the_help_overlay_it_would_otherwise_hide_behind():
+    """The overlay replaces the lane list, so the field would open under a
+    screen covering the lane it addresses."""
+    state = apply_action(ViewState(show_help=True), KeyAction("steer_task"), 3)
+    assert state.steering and state.show_help is False
+
+
+def test_typing_accumulates_and_sends_on_enter():
+    state = ViewState(steering=True)
+    for char in "fix the tests":
+        state, sent = steer_key(state, char)
+        assert sent is None
+    assert state.steer_text == "fix the tests"
+    state, sent = steer_key(state, "\r")
+    assert sent == "fix the tests"
+    assert state.steering is False and state.steer_text == ""
+
+
+def test_command_keys_are_plain_characters_while_typing():
+    """`x` drops a task at top level. Inside a sentence it is a letter —
+    if this regressed, typing "fix" would cancel the lane you were
+    steering."""
+    state = ViewState(steering=True, selected=1)
+    for char in "xR?m":
+        state = handle_key(state, char, 4)
+    assert state.steer_text == "xR?m"
+    assert state.selected == 1 and state.show_help is False and state.merged is False
+
+
+def test_esc_cancels_the_note_instead_of_stopping_the_run():
+    """At top level esc stops every agent. Backing out of a half-typed
+    note must never reach that."""
+    state, sent = steer_key(ViewState(steering=True, steer_text="never mind"), "\x1b")
+    assert sent is None
+    assert state.steering is False and state.steer_text == ""
+    assert state.stop_requested is False
+
+
+def test_backspace_deletes_the_last_character():
+    for key in keymap.KEY_BACKSPACE:
+        state, sent = steer_key(ViewState(steering=True, steer_text="abc"), key)
+        assert state.steer_text == "ab" and sent is None
+
+
+def test_backspace_on_an_empty_field_is_harmless():
+    state, _ = steer_key(ViewState(steering=True), "\x7f")
+    assert state.steer_text == ""
+
+
+def test_enter_on_an_empty_field_sends_nothing_and_closes():
+    state, sent = steer_key(ViewState(steering=True, steer_text="   "), "\r")
+    assert sent is None and state.steering is False
+
+
+def test_escape_sequences_and_control_characters_are_not_typed():
+    """An arrow key arrives as a multi-byte sequence; typed literally it
+    would put mojibake in the note and in the row."""
+    for key in ("\x1b[Z", "\x1b[A", "\x0b", "\t"):
+        state, sent = steer_key(ViewState(steering=True, steer_text="ok"), key)
+        assert state.steer_text == "ok" and sent is None
+
+
+def test_the_note_is_capped_rather_than_scrolling_the_field():
+    state = ViewState(steering=True, steer_text="x" * keymap.STEER_MAX_CHARS)
+    state, _ = steer_key(state, "y")
+    assert state.steer_text == "x" * keymap.STEER_MAX_CHARS
+
+
+def test_steer_is_not_a_lane_action():
+    """LANE_ACTIONS are dispatched the instant the key is hit. Steer has
+    nothing to send until enter, so listing it there would fire an empty
+    note on every `s`."""
+    assert "steer_task" not in keymap.LANE_ACTIONS
+    assert "steer_task" in keymap.Action.__args__
+
+
+def test_help_covers_steer():
+    described = " ".join(keys for keys, _ in keymap.KEY_HELP)
+    assert "s" in described.split()

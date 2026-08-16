@@ -74,6 +74,7 @@ class Scheduler:
         should_stop: Callable[[], bool] | None = None,
         should_stop_poll_interval: float = 0.2,
         on_tick: Callable[[], None] | None = None,
+        steer: Callable[[str, str], bool] | None = None,
     ) -> None:
         self.graph = graph
         self._run_task = run_task
@@ -84,6 +85,7 @@ class Scheduler:
         self._should_stop = should_stop
         self._should_stop_poll_interval = should_stop_poll_interval
         self._on_tick = on_tick
+        self._steer = steer
         # Public, like graph/budget/leases — on_tick's whole point is
         # letting a live view read state mid-run, and per-task usage/cost
         # (outcomes) plus per-task elapsed time (task_started_at) aren't
@@ -121,6 +123,24 @@ class Scheduler:
         task too late.)"""
         with self._control_lock:
             self._retry_requests.add(task_id)
+
+    def request_steer(self, task_id: str, note: str) -> bool:
+        """Hand a mid-run instruction to one task's agent.
+
+        Unlike cancel and retry this is *not* queued for run() to apply:
+        it changes nothing the scheduler owns — no graph node, no lease,
+        no future — so there is nothing that has to happen on the loop's
+        own thread. It goes straight to the agent, whose own inbox lock
+        makes the call safe from the key-reader thread.
+
+        Returns whether it was delivered. False covers every honest miss
+        — no steer sink wired up, an unknown task, a task that is not
+        running right now, an empty note — and the caller is expected to
+        say so rather than let the key look like it worked.
+        """
+        if self._steer is None:
+            return False
+        return self._steer(task_id, note)
 
     async def _drain_control_requests(self, running: dict[str, asyncio.Task]) -> None:
         """Apply queued cancel/retry requests. Async because a cancelled

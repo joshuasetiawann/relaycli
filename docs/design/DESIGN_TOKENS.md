@@ -404,6 +404,13 @@ oversight.
 - the transcript, focused and merged (`m`), with the
   `├─ a1 ▣ bnd transcript ───` header;
 - the input caret line and the key strip;
+- `s` steer: the caret line becomes a real one-line field, and what you
+  type reaches the selected lane's Agent through its own inbox
+  (`Agent.steer`), drained at that agent's next iteration. It cannot
+  interrupt a model call in flight — nothing can, `Agent.run` is
+  synchronous inside a thread — so a note is one reply away rather than
+  immediate, and one that arrives as the agent is finishing keeps it
+  going instead of being dropped;
 - the `?` overlay, built from the key table so it cannot drift.
 
 **Not built, and why** — every one of these is blocked on a capability
@@ -411,7 +418,6 @@ that does not exist yet, not on a renderer:
 
 | Screen / element | What it needs first |
 |---|---|
-| `s` steer | a channel into a running Agent; `Agent.run` is synchronous inside a thread, with no inbox |
 | `p` / `r` preempt & retarget, `l` jump to holder | `LeaseManager` has no reassignment and no queue |
 | lease queue position + ETA on the lease line | a lease *queue*; there is none, and §8 rules out inventing the numbers |
 | permission band (§08), and the `?` awaiting-you lane state with it | the live frame only runs in full-auto, which is the mode that does not prompt. The renderer draws the state and the key strip carries its badge — both are tested — but nothing sets it, because in this mode nothing asks. |

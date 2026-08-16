@@ -265,3 +265,133 @@ def test_make_run_task_without_a_reporter_factory_still_works():
     outcome = asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
     assert outcome.ok is True
     assert agent.reporters == [None]
+
+
+# --- live_agents: the registry a steer is routed through -------------------
+class _SteerableAgent(_FakeTaskAgent):
+    """_FakeTaskAgent plus the real Agent's steer()/inbox, and a hook that
+    fires while run() is in flight — which is the only window in which a
+    steer can legitimately be delivered."""
+
+    def __init__(self, result: AgentResult, *, during_run=None):
+        super().__init__(result)
+        self.notes: list[str] = []
+        self._during_run = during_run
+
+    def steer(self, note: str) -> bool:
+        note = note.strip()
+        if not note:
+            return False
+        self.notes.append(note)
+        return True
+
+    def run(self, goal: str, *, reporter=None) -> AgentResult:
+        if self._during_run is not None:
+            self._during_run()
+        return super().run(goal, reporter=reporter)
+
+
+def _done(text="done"):
+    return AgentResult(final_text=text, iterations=1, tool_calls=0,
+                       usage=Usage(), stopped_reason="done")
+
+
+def test_a_running_task_is_reachable_for_steering():
+    from relaycli.agent.orchestrator import steer_running_agent
+
+    live_agents: dict = {}
+    seen = []
+
+    agent = _SteerableAgent(
+        _done(),
+        during_run=lambda: seen.append(
+            steer_running_agent(live_agents, "t1", "also add a test")),
+    )
+    run_task = make_run_task(lambda r, t: (agent, _FakeCtx(read_files=set())),
+                             live_agents=live_agents)
+    asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
+
+    assert seen == [True]
+    assert agent.notes == ["also add a test"]
+
+
+def test_the_registry_is_emptied_when_the_task_ends():
+    """A stale entry would hand a note to an agent that already returned —
+    accepted silently and acted on by nobody."""
+    from relaycli.agent.orchestrator import steer_running_agent
+
+    live_agents: dict = {}
+    agent = _SteerableAgent(_done())
+    run_task = make_run_task(lambda r, t: (agent, _FakeCtx(read_files=set())),
+                             live_agents=live_agents)
+    asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
+
+    assert live_agents == {}
+    assert steer_running_agent(live_agents, "t1", "too late") is False
+    assert agent.notes == []
+
+
+def test_the_registry_is_emptied_when_the_task_crashes():
+    live_agents: dict = {}
+
+    class _Exploding(_SteerableAgent):
+        def run(self, goal, *, reporter=None):
+            raise RuntimeError("boom")
+
+    run_task = make_run_task(lambda r, t: (_Exploding(_done()), _FakeCtx(read_files=set())),
+                             live_agents=live_agents)
+    with pytest.raises(RuntimeError):
+        asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x")))
+    assert live_agents == {}
+
+
+def test_steering_an_unknown_task_is_a_plain_false():
+    """By the time a keystroke reaches here the lane it addressed may not
+    exist; a key handler must not raise."""
+    from relaycli.agent.orchestrator import steer_running_agent
+
+    assert steer_running_agent({}, "nope", "hello") is False
+
+
+def test_make_run_task_still_works_without_a_registry():
+    """Every pre-existing caller passes two arguments."""
+    run_task = make_run_task(lambda r, t: (_FakeTaskAgent(_done()), _FakeCtx(read_files=set())))
+    assert asyncio.run(run_task(Task(id="t1", role_id="backend", goal="x"))).ok
+
+
+def test_the_whole_steer_path_is_wired_the_way_run_parallel_wires_it():
+    """Every link above is unit-tested on its own; this is the seam.
+
+    A steer crosses four pieces — Scheduler.request_steer, the sink
+    run_parallel builds, the live_agents registry make_run_task fills,
+    and Agent.steer. Wiring three of them and forgetting the fourth
+    (passing the sink but not the registry, say) leaves every unit test
+    green and the key silently dead.
+    """
+    from relaycli.agent.scheduler import Scheduler
+    from relaycli.agent.graph import TaskGraph
+    from relaycli.agent.orchestrator import steer_running_agent
+
+    live_agents: dict = {}
+    graph = TaskGraph.from_tasks([Task(id="t1", role_id="backend", goal="x")])
+    holder: dict = {}
+
+    agent = _SteerableAgent(
+        _done(),
+        # Steer through the Scheduler's public API, from inside the run,
+        # exactly as the key-reader thread does.
+        during_run=lambda: holder.setdefault(
+            "sent", holder["sched"].request_steer("t1", "also add a test")),
+    )
+    sched = Scheduler(
+        graph,
+        make_run_task(lambda r, t: (agent, _FakeCtx(read_files=set())),
+                      None, live_agents),
+        steer=lambda task_id, note: steer_running_agent(live_agents, task_id, note),
+    )
+    holder["sched"] = sched
+    asyncio.run(sched.run())
+
+    assert holder["sent"] is True
+    assert agent.notes == ["also add a test"]
+    assert sched.request_steer("t1", "too late") is False   # run is over

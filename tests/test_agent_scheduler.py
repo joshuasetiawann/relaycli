@@ -577,3 +577,49 @@ def test_retry_is_refused_for_a_task_that_did_not_fail():
     assert graph.reset_for_retry("t1") is False      # done
     graph.mark_failed("t1")
     assert graph.reset_for_retry("t1") is True       # failed -> retryable
+
+
+# --- request_steer: a passthrough, not a queued request --------------------
+def _noop_runner():
+    async def run_task(task):
+        return _instant_ok(task)
+    return run_task
+
+
+def test_request_steer_reaches_the_sink_with_the_task_and_note():
+    sent = []
+
+    def sink(task_id, note):
+        sent.append((task_id, note))
+        return True
+
+    sched = Scheduler(TaskGraph.from_tasks([Task(id="a", role_id="coder", goal="x")]),
+                      _noop_runner(), steer=sink)
+    assert sched.request_steer("a", "also add a test") is True
+    assert sent == [("a", "also add a test")]
+
+
+def test_request_steer_reports_a_sink_that_could_not_deliver():
+    """The lane may have finished while the note was being typed. The
+    caller has to be able to say so rather than let the key look like it
+    worked."""
+    sched = Scheduler(TaskGraph.from_tasks([Task(id="a", role_id="coder", goal="x")]),
+                      _noop_runner(), steer=lambda task_id, note: False)
+    assert sched.request_steer("a", "hello") is False
+
+
+def test_request_steer_without_a_sink_is_false_not_an_error():
+    """Every pre-existing Scheduler construction — the whole test suite,
+    and the progress-lines path — passes no steer sink at all."""
+    sched = Scheduler(TaskGraph.from_tasks([Task(id="a", role_id="coder", goal="x")]),
+                      _noop_runner())
+    assert sched.request_steer("a", "hello") is False
+
+
+def test_request_steer_queues_nothing_the_run_loop_has_to_drain():
+    """Unlike cancel/retry it changes nothing the scheduler owns, so it
+    must not accumulate state that a finished run would strand."""
+    sched = Scheduler(TaskGraph.from_tasks([Task(id="a", role_id="coder", goal="x")]),
+                      _noop_runner(), steer=lambda t, n: True)
+    sched.request_steer("a", "hello")
+    assert sched._cancel_requests == set() and sched._retry_requests == set()

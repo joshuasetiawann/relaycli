@@ -308,6 +308,7 @@ While that live view is up, the lane list is navigable:
 | `^k` | collapse / expand the lane list |
 | `x` | drop the selected task, freeing its file lease |
 | `R` | retry the selected task once it has failed |
+| `s` | steer the selected agent — type a note, `enter` sends, `esc` cancels |
 | `?` | toggle the key overlay |
 
 `esc` peels one layer at a time (overlay, then focus, then stop), so it
@@ -323,9 +324,23 @@ way. `R` puts a failed task back in the queue and un-blocks everything
 that was waiting on it; it applies while the run is still going, so retry
 a lane while its siblings are still working.
 
-The desktop UI has the same two controls as buttons on each task lane,
-each shown only when it applies: **drop** while a task is still live,
-**retry** once it has failed or been dropped.
+`s` opens a one-line field on the input row and sends what you type to
+the agent on the selected lane, as an extra instruction on top of the
+goal it was given. While the field is open every key is a character —
+`x` types an `x` rather than dropping the lane — and the key strip names
+the lane the note will go to, since `s` does not move the cursor.
+
+A note lands at that agent's next iteration: it cannot interrupt a model
+call already in flight, so the effect is one reply away, not immediate.
+If the note arrives while the agent is writing what would have been its
+final answer, the agent keeps going and answers it rather than finishing
+— which is when "wait, also…" usually gets typed. A lane that has
+already finished has no agent to hand it to; the transcript says so
+instead of the field just emptying.
+
+The desktop UI has the drop and retry controls as buttons on each task
+lane, each shown only when it applies: **drop** while a task is still
+live, **retry** once it has failed or been dropped.
 
 ### Reviewing what changed
 
