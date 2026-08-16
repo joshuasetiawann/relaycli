@@ -374,23 +374,25 @@ def test_slash_diff_no_crash():
 
 
 # --- rendering ---------------------------------------------------------
-def test_rich_reporter_tool_lines_have_claude_shape():
-    # Two-line outcome: "⏺ tool_name" then an indented "⎿  summary".
+def test_rich_reporter_draws_one_design_row_per_tool_use():
+    # §03's transcript: `HH:MM:SS read_file src/x · 118 lines`, one row per
+    # tool *use*. The old shape was Claude Code's two-line "⏺ name" then an
+    # indented "⎿  summary", which doubled the length of every run and
+    # belonged to a visual language this product no longer speaks.
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     reporter = RichReporter(console)
-    call = ToolCall(id="c1", name="edit_file", arguments="{}")
+    call = ToolCall(id="c1", name="edit_file", arguments='{"path": "app.py"}')
     reporter.tool_end(call, ToolResult(ok=True, output="ok", summary="edit app.py (+2 -1)"))
     reporter.tool_end(
-        ToolCall(id="c2", name="run_command", arguments="{}"),
+        ToolCall(id="c2", name="run_command", arguments='{"command": "pytest"}'),
         ToolResult(ok=False, output="boom", summary="run pytest → exit 1"),
     )
     out = _out(console)
-    assert "⏺ edit_file" in out
-    assert "⏺ run_command" in out
-    assert out.count("⎿") == 2
-    # the summary sits on the ⎿ line, not glued to the tool name
-    lines = [l.strip() for l in out.splitlines() if l.strip()]
-    assert any(l.startswith("⎿") and "edit app.py (+2 -1)" in l for l in lines)
+    assert "⏺" not in out and "⎿" not in out
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    assert any(re.match(r"\d\d:\d\d:\d\d edit_file app\.py · edit app\.py", line)
+               for line in lines), lines
+    assert any("run_command pytest · run pytest → exit 1" in line for line in lines), lines
 
 
 def test_rich_reporter_tool_error_shape():
@@ -398,7 +400,7 @@ def test_rich_reporter_tool_error_shape():
     reporter = RichReporter(console)
     reporter.tool_end(ToolCall(id="c1", name="read_file", arguments="{}"), None)
     out = _out(console)
-    assert "⏺ read_file" in out and "error" in out
+    assert "read_file" in out and "error" in out
 
 
 def test_rich_reporter_shows_tool_error_detail():
@@ -422,7 +424,7 @@ def test_rich_reporter_shows_tool_error_detail():
     assert "belajar-mandarin/index.html" in out
 
 
-def test_assistant_blocks_get_one_bullet_each():
+def test_assistant_blocks_get_one_stamped_row_each():
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     reporter = RichReporter(console)
     reporter.assistant_token("Hello ")
@@ -430,10 +432,9 @@ def test_assistant_blocks_get_one_bullet_each():
     reporter.assistant_end()
     reporter.assistant_token("Again")
     reporter.assistant_end()
-    out = _out(console)
-    assert "⏺ Hello world" in out
-    assert "⏺ Again" in out
-    assert out.count("⏺") == 2
+    stamped = [line for line in _out(console).splitlines() if re.search(r"\d\d:\d\d:\d\d", line)]
+    assert len(stamped) == 2
+    assert "Hello world" in stamped[0] and "Again" in stamped[1]
 
 
 def test_reporter_no_spinner_frames_on_non_terminal():
@@ -447,7 +448,7 @@ def test_reporter_no_spinner_frames_on_non_terminal():
     reporter.close()
     out = _out(console)
     assert "working" not in out
-    assert "⏺ hi" in out
+    assert "hi" in out
 
 
 def test_reporter_close_is_idempotent():
@@ -484,10 +485,11 @@ def test_rich_reporter_model_and_tool_logs():
     reporter.tool_end(call, ToolResult(ok=True, output="x", summary="read app.py"))
 
     out = _out(console)
-    assert "→ model" in out and "fake/model" in out
-    assert "← model" in out and "1 tool call" in out
-    assert "→ tool" in out and "read_file" in out and "app.py" in out
-    assert "read app.py" in out
+    assert "model fake/model · step 1" in out
+    assert "1 tool call · 12 tok" in out
+    # One row for the tool, carrying its name, its target and its summary —
+    # tool_start no longer prints; the in-flight state is the spinner's job.
+    assert "read_file app.py · read app.py" in out
 
 
 
@@ -938,12 +940,18 @@ def test_banner_warns_when_workspace_is_home(tmp_path):
     assert "whole home" not in _out(console2)
 
 
-def test_banner_has_claude_style_welcome():
+def test_banner_greets_with_the_design_status_bar():
+    # The greeting is §03's status bar, not the old bordered key/value
+    # panel: same renderer the parallel frame uses, so the two halves of
+    # the product look like one product. The facts the bar has no column
+    # for — model, key status — follow underneath.
     repl, console = _hermetic_repl(model="ollama_chat/llama3.1")
     repl._print_banner()
     out = _out(console)
-    assert "✻ RelayCLI" in out
-    assert "agent workspace" in out
+    assert "▌relay" in out          # the focus rail + name, wide or compact
+    assert "─────" in out           # the rule under the bar
+    assert "ollama_chat/llama3.1" in out
+    assert "✻" not in out           # the retired Claude-clay identity mark
 
 
 # --- slash-command menu ------------------------------------------------

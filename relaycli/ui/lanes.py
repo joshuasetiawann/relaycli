@@ -19,6 +19,38 @@ from relaycli.ui import theme
 from relaycli.ui.layout import LANE_GROUPING_THRESHOLD, ColumnWidths
 
 
+def tool_target(call) -> str:
+    """The path-ish argument worth showing beside a tool name.
+
+    ToolCall.arguments is the raw JSON *string* the model produced, not a
+    dict — reading it as a mapping silently yielded "" for every call ever
+    made, which is why this column rendered the tool name and never its
+    target. Tools name the argument differently (path/file/pattern/
+    command), so take the first that is present rather than teaching this
+    about every tool.
+
+    Lives here rather than in ui/live.py because both transcripts need it:
+    the lane's `tool_target` column and the single-agent run's transcript
+    row, and the latter must not drag the scheduler in to get one string.
+    """
+    parse = getattr(call, "parsed_arguments", None)
+    args: object
+    if callable(parse):
+        try:
+            args = parse()
+        except (ValueError, TypeError):
+            return ""
+    else:
+        args = getattr(call, "arguments", None)
+    if not isinstance(args, dict):
+        return ""
+    for key in ("path", "file", "file_path", "pattern", "query", "command"):
+        value = args.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 @dataclass(frozen=True)
 class LaneView:
     """Everything one lane row needs to render. Deliberately plain data —

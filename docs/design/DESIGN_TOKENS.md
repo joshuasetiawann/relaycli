@@ -413,6 +413,27 @@ oversight.
   going instead of being dropped;
 - the `?` overlay, built from the key table so it cannot drift.
 
+**The ordinary single-agent path draws it too** (`ui/render.py`). The
+frame above only runs under `--experimental-parallel`, which is off by
+default — so for most sessions the design was something you never saw.
+`relaycli` and `relaycli -p` now open with the same §03 status bar and
+rule (`render_session_bar`, one agent, no budget denominator so no
+meter), and the run itself is §03's transcript: one `HH:MM:SS read_file
+src/x · 118 lines` row per tool use, drawn by the same
+`frame.render_transcript_line` a lane's transcript uses, ending on the §2
+settled glyph (`✓ done`, `✗ error`). What it replaced was Claude Code's
+vocabulary — a rounded `✻ RelayCLI` panel, `→ model` / `→ tool` / `⏺` /
+`⎿` / `■` — which is why the two halves of the product did not read as
+one product.
+
+Three departures from §03 the linear form requires: there is no lane, so
+an in-flight tool shows in the spinner instead of a row (a start row plus
+an end row doubled every run for no extra fact); run bookkeeping the
+transcript has no entry kind for — token counts, step edges — sits under
+the stamp column in `muted`; and tool *errors* wrap like prose rather
+than clipping, because a clipped error is the one line you were reading
+the transcript for.
+
 **Not built, and why** — every one of these is blocked on a capability
 that does not exist yet, not on a renderer:
 

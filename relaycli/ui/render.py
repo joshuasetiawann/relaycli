@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import difflib
 import re
+import textwrap
 import time
 from typing import TYPE_CHECKING
 
@@ -127,8 +128,12 @@ def render_diff(console: Console, old: str, new: str, path: str) -> tuple[int, i
 # welcome chrome and the prompt. Replaces the former Claude-clay #D97757.
 ACCENT = theme.DARK.accent
 
-_STOP_STYLE = {"done": "green", "max_iterations": "yellow", "error": "red",
-               "review_exhausted": "yellow", "stopped": "yellow"}
+# Why a run ended -> the §2 task state it corresponds to. The glyph and the
+# hue both come from that state, so an ended run reads exactly like a
+# settled lane rather than inventing a third vocabulary (the old `■` was
+# in neither).
+_STOP_STATE = {"done": "done", "max_iterations": "cancelled", "error": "failed",
+               "review_exhausted": "cancelled", "stopped": "cancelled"}
 _TOOL_ACTIVITY = {
     "list_dir": "listing directory",
     "find_files": "searching files",
@@ -183,8 +188,27 @@ def render_local_reply(console: Console, reply) -> None:
     ))
 
 
+def _transcript_layout(console: Console):
+    """`(width, ColumnWidths)` for the linear transcript.
+
+    `resolve_columns` refuses below 80 because a *lane list* cannot lose
+    any more columns; a transcript has none to lose, so a narrow terminal
+    clamps to the 80-column layout instead of refusing to print the run.
+    """
+    from relaycli.ui.layout import MINIMUM_WIDTH, resolve_columns
+
+    width = max(console.width, MINIMUM_WIDTH)
+    return width, resolve_columns(width)
+
+
 class RichReporter:
-    """Rich presentation of an agent run, in Claude Code's visual language.
+    """Rich presentation of an agent run, as §03's transcript.
+
+    `HH:MM:SS read src/auth/session.ts · 118 lines` — the same rows
+    `ui/frame.render_transcript_line` draws inside the parallel frame, so a
+    single-agent run and a lane's transcript are the same artifact. It used
+    to be Claude Code's `→ tool` / `⏺` / `⎿` vocabulary, which is why the
+    two halves of the product did not look related.
 
     Implements the duck-typed Reporter protocol used by :meth:`Agent.run`
     (assistant_token / assistant_end / tool_start / tool_end / iteration). The
@@ -199,12 +223,81 @@ class RichReporter:
     """
 
     def __init__(self, console: Console) -> None:
+        # Local: ui.lanes reaches agent.graph, and agent -> tools -> render
+        # is a real cycle this module has always had to import around.
+        from relaycli.ui.frame import STAMP_WIDTH
+        from relaycli.ui.lanes import gutter_left
+
         self.console = console
         self._streaming = False
         self._buf: list[str] = []
         self.tools_used: list[str] = []
         self._status = None
         self._tool_started: dict[str, float] = {}
+        self._mode = session_color_mode()
+        # Frozen at construction: Rich reads the width per print anyway, and
+        # a transcript whose stamp column jumps mid-run because the window
+        # was dragged is worse than one that stays put.
+        self._width, self._columns = _transcript_layout(console)
+        self._stamp_width = STAMP_WIDTH
+        self._gutter = gutter_left(self._columns)
+        # The column wrapped text lives in — the same arithmetic
+        # frame.render_transcript does, so a wrapped row lands exactly where
+        # the frame's own continuation rows would.
+        self._body_width = max(
+            self._width - self._columns.gutter - self._gutter - STAMP_WIDTH, 20)
+
+    # -- transcript rows (ui/frame) -----------------------------------------
+    def _row(self, **fields) -> None:
+        """One §03 transcript row, clipped to the terminal — §6's "streaming
+        text appends, never re-lays-out": a wrapped tool line would reflow
+        every row above it on the next token."""
+        from relaycli.ui import frame
+
+        entry = frame.TranscriptEntry(stamp=time.strftime("%H:%M:%S"), **fields)
+        self.console.print(
+            frame.render_transcript_line(entry, self._columns, self._mode,
+                                         self._width, merged=False))
+
+    def _wrapped(self, text: str, *, kind: str = "text", ok: bool = True) -> None:
+        """The two row kinds that must stay readable at any width: assistant
+        prose and tool errors. Clipping either loses the thing you were
+        reading the transcript for.
+
+        The model's own line breaks survive the wrap — it writes lists and
+        fenced code, and re-flowing those into one paragraph loses the
+        structure the breaks were carrying. Continuation rows get a blank
+        stamp so the timestamps stay a column instead of repeating.
+        """
+        from relaycli.ui import frame
+
+        body = self._body_width
+        chunks: list[str] = []
+        for line in text.rstrip("\n").split("\n"):
+            # break_on_hyphens=False: the text here is full of paths and
+            # identifiers, and splitting `belajar-mandarin/index.html`
+            # across two rows makes it uncopyable and unsearchable.
+            chunks.extend(textwrap.wrap(line, width=body, break_on_hyphens=False) or [""])
+
+        stamp = time.strftime("%H:%M:%S")
+        blank = " " * (self._stamp_width - 1)
+        for index, chunk in enumerate(chunks):
+            entry = frame.TranscriptEntry(
+                stamp=stamp if index == 0 else blank, kind=kind, text=chunk, ok=ok)
+            self.console.print(
+                frame.render_transcript_line(entry, self._columns, self._mode,
+                                             self._width, merged=False))
+
+    def _meta(self, text: str) -> None:
+        """A muted row under the stamp column — run bookkeeping (token
+        counts, step edges) that §03's transcript has no entry kind for."""
+        indent = " " * (self._gutter + self._stamp_width)
+        for chunk in textwrap.wrap(text, width=self._body_width, break_on_hyphens=False):
+            # Wrapped here, not by the terminal: a terminal-wrapped line
+            # loses the indent on its second row and breaks the stamp column.
+            self.console.print(
+                _tinted(self._mode, "muted", indent + escape(chunk)), highlight=False,
+            )
 
     # -- working spinner ---------------------------------------------------
     def _spin(self, message: str = "working… (ctrl-c to interrupt)") -> None:
@@ -231,12 +324,15 @@ class RichReporter:
 
     def model_start(self, n: int, model: str) -> None:
         self._unspin()
-        self.console.print(f"[dim]→ model[/dim] step {n} · [bold]{escape(model)}[/bold]")
-        if model.startswith(("ollama_chat/", "ollama/")):
-            self.console.print(
-                "[dim]  Ollama local is generating now · `ollama ps` should show "
-                "`100% GPU` when acceleration is active.[/dim]"
-            )
+        # The full litellm id, not the short name a lane's 15-column model
+        # cell has to settle for: this row has the width, and "model" alone
+        # (all `short_model_name("fake/model")` leaves) names nothing.
+        self._row(kind="tool", tool="model", target=model, text=f"step {n}")
+        if model.startswith(("ollama_chat/", "ollama/")) and n == 1:
+            # Once per run, not per step: after the first step you know it
+            # is Ollama, and the reminder is nine rows of noise by step ten.
+            self._meta("Ollama local is generating · `ollama ps` should show "
+                       "100% GPU when acceleration is active.")
         self._spin(f"waiting for {model}… (ctrl-c to interrupt)")
 
     def model_end(
@@ -247,11 +343,11 @@ class RichReporter:
             detail = f"{tool_calls} tool call{'s' if tool_calls != 1 else ''}"
         else:
             detail = "answer" if has_text else "empty response"
-        self.console.print(f"[dim]← model[/dim] {detail} · {usage.total_tokens} tok")
+        self._meta(f"{detail} · {usage.total_tokens} tok")
 
     def model_error(self, n: int, model: str, error: Exception) -> None:
         self._unspin()
-        self.console.print("[red]← model error[/red]")
+        self._row(kind="result", ok=False, text="✗ model error")
 
     def assistant_token(self, text: str) -> None:
         self._buf.append(text)
@@ -267,11 +363,7 @@ class RichReporter:
             self._streaming = False
             return
         self._unspin()
-        self.console.file.write("⏺ ")
-        self.console.file.write(text)
-        if not text.endswith("\n"):
-            self.console.file.write("\n")
-        self.console.file.flush()
+        self._wrapped(text)
         self._streaming = False
 
     def assistant_discard(self) -> None:
@@ -279,48 +371,51 @@ class RichReporter:
         self._streaming = False
 
     def tool_start(self, call: "ToolCall") -> None:
-        self._unspin()
+        # No row of its own. §03 writes one line per tool *use* — the
+        # in-flight state lives in the lane, and this transcript has no
+        # lane, so it lives in the spinner instead. A start row plus an end
+        # row doubled the length of every run for no extra fact.
         self._tool_started[call.id] = time.perf_counter()
-        from relaycli.agent import _compact
-
-        args = _compact(call.arguments, limit=120)
-        suffix = f" [dim]{escape(args)}[/dim]" if args and args != "{}" else ""
-        action = _TOOL_ACTIVITY.get(call.name, "using tool")
-        self.console.print(
-            f"[dim]→ tool[/dim] [bold]{escape(call.name)}[/bold] "
-            f"[dim]{escape(action)}[/dim]{suffix}"
-        )
+        self._spin(f"{_TOOL_ACTIVITY.get(call.name, 'using tool')}… (ctrl-c to interrupt)")
 
     def tool_end(self, call: "ToolCall", result: "ToolResult | None") -> None:
+        from relaycli.ui.lanes import tool_target
+
         self.tools_used.append(call.name)
         self._unspin()
-        ok = result is not None and result.ok
-        dot = "[green]⏺[/green]" if ok else "[red]⏺[/red]"
-        # Escape: summaries can embed model-controlled text (commands, paths).
-        self.console.print(f"{dot} [bold]{escape(call.name)}[/bold]")
-        outcome = "error" if result is None else (result.summary or call.name)
-        elapsed = ""
         started = self._tool_started.pop(call.id, None)
-        if started is not None:
-            elapsed = f" · {time.perf_counter() - started:.1f}s"
-        self.console.print(f"  [dim]⎿  {escape(outcome)}{elapsed}[/dim]")
+        # Sub-0.1s reads would all read "0.0s", which says nothing except
+        # that the column exists. §03 only times the calls worth timing.
+        seconds = time.perf_counter() - started if started is not None else 0.0
+        elapsed = f"{seconds:.1f}s" if seconds >= 0.1 else ""
+        outcome = "error" if result is None else (result.summary or call.name)
+        # `· 240 lines · 1.4s` — the design's own detail tail. Nothing here
+        # is markup: render_transcript_line builds rich Text, so a summary
+        # holding model-controlled text cannot inject a style.
+        detail = " · ".join(part for part in (outcome, elapsed) if part)
+        self._row(kind="tool", tool=call.name, target=tool_target(call), text=detail)
         if result is not None and not result.ok and result.output:
-            self.console.print(f"  [red]↳ {escape(brief_tool_error(result.output))}[/red]")
+            self._wrapped(f"✗ {brief_tool_error(result.output)}", kind="result", ok=False)
 
 
 def render_task_summary(
     console: Console, result: "AgentResult", tools_used: list[str] | None = None
 ) -> None:
-    """Print a clean end-of-task summary line."""
-    style = _STOP_STYLE.get(result.stopped_reason, "white")
+    """The settled line: `✓ done  1 steps · 0 tool calls · 3.3k tokens …`,
+    in the §2 state glyph and hue the outcome maps to."""
+    mode = session_color_mode()
+    state = _STOP_STATE.get(result.stopped_reason, "failed")
+    glyph = theme.TASK_STATE_GLYPHS[state]
+    palette = theme.palette_for(mode)
+    token = theme.TASK_STATE_COLOR[state]
 
     # On "done" the final text was already streamed token-by-token. On error /
     # max_iterations it was only constructed, never shown — print it or the
     # user gets a silent failure.
     if result.stopped_reason != "done" and getattr(result, "final_text", ""):
         console.print()
-        text = friendly_error_text(result.final_text)
-        console.print(f"[{style}]{escape(text)}[/{style}]")
+        console.print(_tinted(mode, token, escape(friendly_error_text(result.final_text))),
+                      highlight=False)
 
     tools_note = ""
     if tools_used:
@@ -331,10 +426,14 @@ def render_task_summary(
 
     console.print()
     console.print(
-        f"[{style}]■ {result.stopped_reason}[/{style}]  "
-        f"[dim]{result.iterations} steps · {result.tool_calls} tool calls"
-        f"{tools_note} · {result.usage.total_tokens} tokens · "
-        f"${result.usage.cost_usd:.6f} · {result.elapsed:.1f}s[/dim]"
+        _tinted(mode, token,
+                f"{glyph.symbol if palette else glyph.ascii} {result.stopped_reason}")
+        + "  "
+        + _tinted(mode, "muted",
+                  escape(f"{result.iterations} steps · {result.tool_calls} tool calls"
+                         f"{tools_note} · {result.usage.total_tokens} tokens · "
+                         f"${result.usage.cost_usd:.6f} · {result.elapsed:.1f}s")),
+        highlight=False,
     )
 
 
@@ -434,12 +533,21 @@ def short_model_name(model: str) -> str:
     return model.rsplit("/", 1)[-1] or model
 
 
-# key_status (relaycli.core.llm.key_status) -> how the banner shows it.
+# key_status (relaycli.core.llm.key_status) -> the words and the design
+# token they are tinted with. "not needed" is muted because a local model
+# having no key to miss is metadata, not good news worth a hue.
 _KEY_NOTE = {
-    "detected": "[green]key detected[/green]",
-    "missing": "[bold yellow]key missing ⚠[/bold yellow]",
-    "not needed": "[blue]no key needed[/blue]",
+    "detected": ("key detected", "success"),
+    "missing": ("key missing ⚠", "warning"),
+    "not needed": ("no key needed", "muted"),
 }
+
+
+def _key_note(key_status: str | None, mode: "theme.ColorMode") -> str:
+    """The key-status words, tinted — or "" when the provider is unknown,
+    where the banner makes no claim about credentials either way."""
+    note = _KEY_NOTE.get(key_status or "")
+    return _tinted(mode, note[1], note[0]) if note else ""
 
 # PermissionMode value -> what it means for the user, in one clause.
 _MODE_MEANING = {
@@ -449,26 +557,96 @@ _MODE_MEANING = {
 }
 
 
+def session_color_mode() -> "theme.ColorMode":
+    """The dark / light / NO_COLOR mode this session draws in — the same
+    resolution ui/live.py does, so the single-agent screens and the
+    parallel frame can never end up on different palettes."""
+    from relaycli.config.manager import load_app_config
+
+    return theme.current_color_mode(load_app_config().preference("theme"))
+
+
+def render_session_bar(
+    console: Console, settings: "Settings", root: "Path", *,
+    agents: int = 1, tokens: int = 0, spent_usd: float = 0.0,
+    limit_usd: float | None = None, rule: bool = True,
+) -> None:
+    """§03's status bar — `▌relaycli ~/src/app  git:main  clean  mode:ask
+    … 1 agent  8.1k tok  $0.09` — for the single-agent screens.
+
+    The parallel frame has always drawn this; the ordinary path drew a
+    key/value grid instead, so the two halves of the product did not look
+    like the same product. Same renderer, same tokens, one agent.
+
+    Below 80 columns `resolve_columns` refuses outright — that rule is
+    about the *lane list*, whose columns genuinely stop fitting. A status
+    bar has no columns to lose and truncates cleanly, so it clamps rather
+    than refusing to greet you in a narrow terminal.
+    """
+    from relaycli.ui import frame, gitinfo
+    from relaycli.ui.layout import MINIMUM_WIDTH, resolve_columns
+
+    width = max(console.width, MINIMUM_WIDTH)
+    columns = resolve_columns(width)
+    mode = session_color_mode()
+    repo = gitinfo.status(root)
+    data = frame.StatusBarData(
+        cwd=root, branch=repo.branch, dirty=repo.dirty,
+        permission_mode=getattr(settings.permission_mode, "value", str(settings.permission_mode)),
+        agents=agents, tokens=tokens, spent_usd=spent_usd, limit_usd=limit_usd,
+    )
+    console.print(frame.render_status_bar(data, columns, mode, width))
+    if rule:
+        console.print(frame.render_rule(columns, mode, width))
+
+
+def _tinted(mode: "theme.ColorMode", token: str, text: str) -> str:
+    """Rich markup for one design token — or bare text under NO_COLOR."""
+    style = theme.style_for(mode, token)
+    return f"[{style}]{text}[/{style}]" if style else text
+
+
 def render_welcome(
     console: Console, settings: "Settings", root: "Path", key_status: str | None
 ) -> None:
-    """The REPL welcome panel: version, cwd, model/key, mode, relay, hints.
+    """The REPL greeting: §03's status bar, the rule under it, then the
+    few facts the bar has no column for.
+
+    This used to be a bordered key/value panel in the old Claude-clay
+    identity — a different product from the one the parallel frame draws.
+    The bar carries cwd, branch, dirty count and mode now, so only what it
+    cannot show is spelled out below: which model, whether its key is
+    there, and the relay routing.
 
     ``key_status`` comes from :func:`relaycli.core.llm.key_status`; None means
     "unknown provider" and the banner makes no claim about credentials.
     """
+    from pathlib import Path as _Path
+
     from relaycli import __version__
 
-    model_cell = f"[green]{escape(settings.model)}[/green]"
-    note = _KEY_NOTE.get(key_status or "")
-    if note:
-        model_cell += f"  {note}"
+    mode = session_color_mode()
 
-    mode = str(settings.permission_mode)
-    mode_cell = f"[yellow]{mode}[/yellow]"
-    meaning = _MODE_MEANING.get(mode)
+    def muted(text: str) -> str:
+        return _tinted(mode, "muted", text)
+
+    def say(markup: str = "") -> None:
+        # highlight=False: Rich's repr highlighter bolds the digits inside
+        # a model id ("qwen2.5" -> "qwen2.**5**") and re-colors the slash in
+        # "/relay", which fights the palette these lines were tinted with.
+        console.print(markup, highlight=False)
+
+    render_session_bar(console, settings, root)
+
+    model_line = muted("model ") + _tinted(mode, "text", escape(settings.model))
+    note = _key_note(key_status, mode)
+    if note:
+        model_line += f"  {note}"
+    say(model_line)
+
+    meaning = _MODE_MEANING.get(str(settings.permission_mode))
     if meaning:
-        mode_cell += f" [dim]— {meaning}[/dim]"
+        say(muted(f"mode  {settings.permission_mode} — {meaning}"))
 
     if settings.relay_enabled:
         from relaycli.agent.router import routing_table
@@ -477,48 +655,22 @@ def render_welcome(
             f"{role}:{escape(short_model_name(m))}"
             for role, m in routing_table(settings).items()
         )
-        relay_cell = f"[cyan]on[/cyan]  [dim]{routes}[/dim]"
+        say(muted("relay ") + _tinted(mode, "running", "on") + muted(f"  {routes}"))
     else:
-        relay_cell = "[dim]off — /relay on for planner → coder → reviewer[/dim]"
+        say(muted("relay off — /relay on for planner → coder → reviewer"))
 
-    grid = Table.grid(padding=(0, 2))
-    grid.add_column(style="dim", no_wrap=True)
-    # fold: long values (deep cwd paths) wrap instead of being ellipsized —
-    # truncating the very info the banner exists to show helps no one.
-    grid.add_column(overflow="fold")
-    grid.add_row(
-        "", f"[bold {ACCENT}]✻[/bold {ACCENT}] "
-            f"[bold]RelayCLI[/bold] [dim]v{__version__}[/dim] "
-            "[dim]agent workspace[/dim]"
-    )
-    grid.add_row("", "[dim]plan, edit, run, review - from this project root[/dim]")
-    grid.add_row("cwd", escape(str(root)))
-    grid.add_row("model", model_cell)
-    grid.add_row("mode", mode_cell)
-    grid.add_row("relay", relay_cell)
-    grid.add_row("", "")
-    grid.add_row("", '[dim]Try: "explain this repo" · "fix failing tests" · "build a small UI"[/dim]')
-    grid.add_row("", "[dim]/ commands · !cmd shell · Ctrl-D quit[/dim]")
-
-    from pathlib import Path as _Path
+    say()
+    say(muted(f'RelayCLI v{__version__} · try "explain this repo" · '
+              '"fix failing tests" · "build a small UI"'))
+    say(muted("/ commands · !cmd shell · Ctrl-D quit"))
 
     if root in (_Path.home(), _Path(_Path.home().anchor)):
-        grid.add_row("", "")
-        grid.add_row(
-            "", "[yellow]⚠ This is your whole home directory — the agent can read "
-                "and change anything under it.[/yellow]\n[dim]Better: cd into a "
-                "project folder (e.g. mkdir ~/proyek/app && cd ~/proyek/app) and "
-                "run relaycli there.[/dim]"
-        )
-    console.print(Panel(
-        grid,
-        title="[bold]RelayCLI[/bold]",
-        title_align="left",
-        subtitle="[dim]type / for commands[/dim]",
-        subtitle_align="right",
-        border_style=ACCENT,
-        expand=False,
-    ))
+        say()
+        say(_tinted(mode, "warning",
+                    "⚠ This is your whole home directory — the agent can read and "
+                    "change anything under it."))
+        say(muted("Better: cd into a project folder (e.g. mkdir ~/proyek/app && "
+                  "cd ~/proyek/app) and run relaycli there."))
     render_model_warning(console, settings)
 
 
@@ -534,14 +686,15 @@ def render_model_warning(console: Console, settings: "Settings") -> None:
 def render_status_line(
     console: Console, settings: "Settings", root: "Path", key_status: str | None = None
 ) -> None:
-    """One-line session status (the one-shot header; same fields as the banner)."""
-    parts = [f"[dim]model[/dim] [green]{escape(settings.model)}[/green]"]
-    note = _KEY_NOTE.get(key_status or "")
+    """The one-shot (`-p`) header: the same §03 status bar the REPL and the
+    parallel frame draw, plus the model line the bar has no column for."""
+    mode = session_color_mode()
+    render_session_bar(console, settings, root)
+    line = _tinted(mode, "muted", "model ") + _tinted(mode, "text", escape(settings.model))
+    note = _key_note(key_status, mode)
     if note:
-        parts.append(note)
-    parts.append(f"[dim]mode[/dim] [yellow]{settings.permission_mode}[/yellow]")
-    parts.append(f"[dim]cwd[/dim] {escape(str(root))}")
-    console.print("  ".join(parts))
+        line += f"  {note}"
+    console.print(line, highlight=False)
 
 
 def render_help(console: Console) -> None:
@@ -595,33 +748,39 @@ def render_routing_banner(console: Console, settings: "Settings") -> None:
 
 def render_relay_summary(console: Console, result: "RelayResult") -> None:
     """Print the end-of-relay summary: notes, per-role lines, and totals."""
-    style = _STOP_STYLE.get(result.stopped_reason, "white")
+    mode = session_color_mode()
+    state = _STOP_STATE.get(result.stopped_reason, "failed")
+    glyph = theme.TASK_STATE_GLYPHS[state]
+    palette = theme.palette_for(mode)
+    token = theme.TASK_STATE_COLOR[state]
 
     # error/max_iterations texts are constructed, never streamed. Anything
     # else (done, review_exhausted) was already streamed live by its role —
     # re-printing would duplicate the coder's report.
     if result.stopped_reason in ("error", "max_iterations") and result.final_text:
         console.print()
-        text = friendly_error_text(result.final_text)
-        console.print(f"[{style}]{escape(text)}[/{style}]")
+        console.print(_tinted(mode, token, escape(friendly_error_text(result.final_text))),
+                      highlight=False)
 
     for note in result.notes:
-        console.print(f"[yellow]⚠ {escape(note)}[/yellow]")
+        console.print(_tinted(mode, "warning", f"⚠ {escape(note)}"), highlight=False)
 
     console.print()
     for run in result.role_runs:
         r = run.result
-        role = str(run.role)
-        console.print(
-            f"[dim]{role:<9} {escape(run.model)} · {r.iterations} steps · "
-            f"{r.usage.total_tokens} tokens · ${r.usage.cost_usd:.6f}[/dim]"
-        )
+        console.print(_tinted(mode, "muted", escape(
+            f"{str(run.role):<9} {run.model} · {r.iterations} steps · "
+            f"{r.usage.total_tokens} tokens · ${r.usage.cost_usd:.6f}")), highlight=False)
     verdict_note = f" · verdict {result.verdict}" if result.verdict else ""
     console.print(
-        f"[{style}]■ {result.stopped_reason}[/{style}]  "
-        f"[dim]{result.cycles + 1} cycle(s){verdict_note} · "
-        f"{result.usage.total_tokens} tokens · ${result.usage.cost_usd:.6f} · "
-        f"{result.elapsed:.1f}s[/dim]"
+        _tinted(mode, token,
+                f"{glyph.symbol if palette else glyph.ascii} {result.stopped_reason}")
+        + "  "
+        + _tinted(mode, "muted", escape(
+            f"{result.cycles + 1} cycle(s){verdict_note} · "
+            f"{result.usage.total_tokens} tokens · ${result.usage.cost_usd:.6f} · "
+            f"{result.elapsed:.1f}s")),
+        highlight=False,
     )
 
 

@@ -59,7 +59,7 @@ from relaycli.core.config import PermissionMode
 from relaycli.ui import frame, keymap, keyreader, theme
 from relaycli.ui.lanes import (GroupHeader, GroupSummary, LaneView, group_for_display,
                                id_role_label, render_group_header, render_group_row,
-                               render_lane_row, render_lease_row)
+                               render_lane_row, render_lease_row, tool_target)
 from relaycli.ui.layout import (LANE_GROUPING_THRESHOLD, LANE_LIST_MAX_ROWS,
                                 MIN_TRANSCRIPT_ROWS, RULE_ROWS, TRANSCRIPT_HEADER_ROWS,
                                 TooNarrowError, resolve_columns, transcript_rows)
@@ -211,7 +211,7 @@ class LaneActivity:
                         role_id=role_id, text=text))
 
             def tool_start(self, call) -> None:
-                target = _target_of(call)
+                target = tool_target(call)
                 activity._set(task_id, call.name, target)
                 activity.transcript.append(frame.TranscriptEntry(
                     stamp=_stamp(), kind="tool", task_id=task_id, role_id=role_id,
@@ -258,34 +258,6 @@ class LaneActivity:
         with self._lock:
             first, latest = self._models.get(task_id, ("", ""))
         return latest, bool(first and latest and first != latest)
-
-
-def _target_of(call) -> str:
-    """The path-ish argument worth showing beside a tool name.
-
-    ToolCall.arguments is the raw JSON *string* the model produced, not a
-    dict — reading it as a mapping silently yielded "" for every call ever
-    made, which is why this column rendered the tool name and never its
-    target. Tools name the argument differently (path/file/pattern/
-    command), so take the first that is present rather than teaching this
-    about every tool.
-    """
-    parse = getattr(call, "parsed_arguments", None)
-    args: object
-    if callable(parse):
-        try:
-            args = parse()
-        except (ValueError, TypeError):
-            return ""
-    else:
-        args = getattr(call, "arguments", None)
-    if not isinstance(args, dict):
-        return ""
-    for key in ("path", "file", "file_path", "pattern", "query", "command"):
-        value = args.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
 
 
 def _elapsed_for(scheduler: "Scheduler", task_id: str, status: str) -> float | None:

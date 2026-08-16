@@ -735,14 +735,14 @@ def test_the_target_survives_a_real_tool_call():
     """The regression this guards: ToolCall.arguments is the model's raw
     JSON string, and reading it as a mapping returned "" for every call
     ever made."""
-    from relaycli.ui.live import _target_of
+    from relaycli.ui.lanes import tool_target as _target_of
 
     assert _target_of(ToolCall(id="1", name="edit",
                                arguments='{"path": "src/lease/queue.ts"}')) == "src/lease/queue.ts"
 
 
 def test_malformed_tool_arguments_do_not_take_the_frame_down():
-    from relaycli.ui.live import _target_of
+    from relaycli.ui.lanes import tool_target as _target_of
 
     assert _target_of(ToolCall(id="1", name="edit", arguments="{not json")) == ""
     assert _target_of(ToolCall(id="1", name="edit", arguments="")) == ""
