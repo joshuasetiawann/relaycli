@@ -244,7 +244,12 @@ def test_run_command_runs_in_project_root(sample_project):
     ctx = make_context(sample_project, PermissionMode.full_auto)
     res = run_command(RunCommandArgs(command="pwd"), ctx)
     assert res.ok
-    assert str(sample_project.resolve()) in res.output
+    # `pwd` answers in its shell's own dialect — `/c/Users/…` under Git
+    # Bash, `/home/…` on Linux — so asserting the native path string only
+    # ever passed on POSIX. The claim under test is "it ran in the project
+    # root", and the trailing components prove that in either dialect.
+    tail = "/".join(sample_project.resolve().parts[-3:])
+    assert tail in res.output.replace("\\", "/")
 
 
 def test_run_command_scrubs_any_api_key_suffix(monkeypatch, sample_project):

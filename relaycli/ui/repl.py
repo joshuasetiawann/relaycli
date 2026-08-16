@@ -45,6 +45,7 @@ from relaycli.slash import ARG_COMPLETIONS as _ARG_COMPLETIONS
 from relaycli.slash import COMMANDS as SLASH_COMMAND_ROWS
 from relaycli.slash import SLASH_COMMANDS
 from relaycli.ui import theme as _theme
+from relaycli.ui.prompting import PlainSession, prompt_session
 
 
 # SLATE INSTRUMENT chrome (docs/design/DESIGN_TOKENS.md): accent caret,
@@ -181,7 +182,7 @@ class Repl:
         self.console.print("[dim]bye.[/dim]")
 
     # -- prompt setup ----------------------------------------------------
-    def _build_prompt_session(self) -> PromptSession:
+    def _build_prompt_session(self) -> "PromptSession | PlainSession":
         # 0700 dir + 0600 history: the history records typed prompts (which may
         # contain secrets), so keep it unreadable by other local users.
         ensure_config_dir()
@@ -203,7 +204,10 @@ class Repl:
         def _newline(event) -> None:
             event.current_buffer.insert_text("\n")
 
-        return PromptSession(
+        # prompt_session, not PromptSession: on a terminal prompt_toolkit
+        # refuses (Git Bash / mintty on Windows) this degrades to input()
+        # instead of taking the whole REPL down before the first prompt.
+        return prompt_session(
             history=history,
             key_bindings=kb,
             multiline=True,

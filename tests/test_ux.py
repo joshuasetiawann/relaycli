@@ -451,6 +451,31 @@ def test_reporter_no_spinner_frames_on_non_terminal():
     assert "hi" in out
 
 
+def test_prompt_session_falls_back_when_the_terminal_is_refused(monkeypatch):
+    # Git Bash / mintty on Windows sets TERM=xterm-256color but hands Python
+    # a pipe, so PromptSession() raises NoConsoleScreenBufferError before a
+    # single character is read — which took `relaycli` and `relaycli config`
+    # down with a traceback on a shell people actually use. A pipe is a fine
+    # place to read a line from, so degrade instead of dying.
+    import prompt_toolkit
+
+    from relaycli.ui.prompting import PlainSession, prompt_session
+
+    def refuse(**_kwargs):
+        raise RuntimeError("Found xterm-256color, while expecting a Windows console")
+
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", refuse)
+    session = prompt_session(multiline=True)
+    assert isinstance(session, PlainSession)
+
+    # It has to take prompt_toolkit's formatted-text prompt as well as a
+    # plain string: the REPL passes the first, the config menu the second,
+    # and neither knows which kind of session it was handed.
+    monkeypatch.setattr("builtins.input", lambda message="": f"saw {message!r}")
+    assert session.prompt([("class:prompt", "❯ ")]) == "saw '❯ '"
+    assert session.prompt("config › ") == "saw 'config › '"
+
+
 def test_reporter_close_is_idempotent():
     console = Console(file=io.StringIO(), force_terminal=False, width=100)
     reporter = RichReporter(console)

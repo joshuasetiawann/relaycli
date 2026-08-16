@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
 import threading
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -116,6 +119,43 @@ def _scrubbed_env() -> dict[str, str]:
     }
 
 
+@lru_cache(maxsize=1)
+def _windows_posix_shell() -> str | None:
+    """Path to a real POSIX shell on Windows, or None to use cmd.exe.
+
+    The model writes POSIX shell — `$VAR`, `${VAR:-default}`, `&&`, pipes,
+    `pwd` — because that is what "run a shell command" means on every other
+    platform and in every example it was trained on. cmd.exe does not fail
+    on those; it passes them through as literal text, so the command exits 0
+    and returns nonsense, which is worse than an error. Where a POSIX shell
+    is installed (Git for Windows ships one), use it.
+
+    `System32\\bash.exe` is excluded on purpose: that is the WSL launcher,
+    which runs in a different filesystem where the project's `cwd` does not
+    exist and every path in the command means something else.
+    """
+    if os.name != "nt":
+        return None
+
+    candidates: list[Path] = []
+    git = shutil.which("git")
+    if git:
+        # Git for Windows lays out <root>/cmd/git.exe beside <root>/bin/bash.exe.
+        candidates.append(Path(git).resolve().parent.parent / "bin" / "bash.exe")
+    found = shutil.which("bash")
+    if found:
+        candidates.append(Path(found))
+
+    system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
+    for candidate in candidates:
+        try:
+            if candidate.is_file() and system32 not in candidate.parents:
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
     """SIGKILL the command's whole process group (POSIX) so backgrounded /
     piped children don't survive the timeout; fall back to killing the leader."""
@@ -145,7 +185,12 @@ def _execute_shell(command: str, cwd: str, timeout: int) -> tuple[int, str, str,
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True  # own process group -> killpg works
 
-    proc = subprocess.Popen(command, shell=True, **popen_kwargs)
+    shell = _windows_posix_shell()
+    if shell is None:
+        # POSIX (/bin/sh), or a Windows box with no POSIX shell to offer.
+        proc = subprocess.Popen(command, shell=True, **popen_kwargs)
+    else:
+        proc = subprocess.Popen([shell, "-c", command], **popen_kwargs)
 
     buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     overflow = {"hit": False}

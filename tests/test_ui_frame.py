@@ -147,8 +147,12 @@ def test_the_meter_turns_amber_before_it_matters_and_flags_the_ceiling():
 
 
 def test_short_path_contracts_home():
+    # The `~` form is POSIX all the way through on every platform — `~` is
+    # itself a POSIX spelling, and `~/src\x` is a path in no convention.
     assert short_path(Path.home() / "src/x") == "~/src/x"
-    assert short_path(Path("/etc/hosts")) == "/etc/hosts"
+    # Outside home there is no `~` to be consistent with, so the platform's
+    # own separator wins: that is a real path you could paste into a shell.
+    assert short_path(Path("/etc/hosts")) == str(Path("/etc/hosts"))
     assert short_path(None) == ""
 
 

@@ -88,11 +88,19 @@ def budget_meter_ascii(fraction: float) -> str:
 def short_path(path: Path | None) -> str:
     """`~/src/relay-api`. Absolute paths under $HOME contract to `~`; the
     status bar has one line to say where you are, and the home prefix is
-    the part of it you already know."""
+    the part of it you already know.
+
+    The contracted form stays POSIX all the way through — `as_posix()`, not
+    `str()`. `~` is itself a POSIX spelling of home, so a Windows `str()`
+    tail produced `~/src\\relay-api`: half one convention, half the other,
+    and a path in neither. A path that is *not* under home is printed with
+    the platform's own separator, because that one is a real absolute path
+    you might paste into your own shell.
+    """
     if path is None:
         return ""
     try:
-        return "~/" + str(path.relative_to(Path.home()))
+        return "~/" + path.relative_to(Path.home()).as_posix()
     except ValueError:
         return str(path)
 

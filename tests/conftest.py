@@ -15,6 +15,26 @@ from relaycli.tools.base import ToolContext
 
 
 @pytest.fixture(autouse=True)
+def _console_width_means_console_width(monkeypatch):
+    """`Console(width=120)` must report 120 columns.
+
+    On Windows, Rich detects a legacy console and reserves the last cell —
+    writing it scrolls the real conhost — so `Console(width=120).width` is
+    119 and `width=80` is 79, which is below the frame's own minimum. Every
+    layout test then measures a terminal one column narrower than the one it
+    asked for, and the 80-column cases fail outright.
+
+    That reservation is right for a real console and wrong for these tests:
+    they render into a StringIO, which has no last cell to protect. Patch
+    the detection rather than each Console call, so a test that says 120
+    means 120 on every platform. Tests that want the legacy behaviour can
+    still pass `legacy_windows=True` explicitly, which wins over this.
+    """
+    monkeypatch.setattr("rich.console.detect_legacy_windows", lambda: False)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_mcp_servers(monkeypatch):
     """Never let a developer's real [mcp] config spawn server processes in
     tests. MCP tests build their own MCPServerConfig / stub this back."""

@@ -167,7 +167,10 @@ def test_relative_returns_posix_style_path_within_root(tmp_path: Path):
     sub = tmp_path / "a" / "b.py"
     sub.parent.mkdir(parents=True)
     sub.write_text("x", encoding="utf-8")
-    assert ctx.relative(sub) == str(Path("a") / "b.py")
+    # Posix-style on every platform, as the name says: this string is
+    # model-facing, and `a\b.py` on Windows contradicted every other path
+    # the same model is shown.
+    assert ctx.relative(sub) == "a/b.py"
 
 
 def test_relative_falls_back_to_str_for_unresolvable_path(tmp_path: Path):

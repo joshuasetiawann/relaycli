@@ -29,6 +29,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import socket
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1039,6 +1040,32 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
     return Handler
 
 
+class _ExclusiveHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that actually refuses a port someone else holds.
+
+    POSIX `SO_REUSEADDR` only bypasses TIME_WAIT: a second bind to a *live*
+    port still fails, which is what the "port busy → fall back to an
+    ephemeral port" path here has always assumed. Windows spells a
+    different flag with the same name — there `SO_REUSEADDR` lets the
+    second socket bind a port a live socket already holds, and the two
+    servers then split incoming connections between them at the kernel's
+    discretion. Two RelayCLI sessions on one port would each answer some of
+    your requests, and the fallback would never fire because nothing ever
+    reported the port as busy.
+
+    `SO_EXCLUSIVEADDRUSE` is the Windows spelling of what the POSIX code
+    already expected, so each platform gets the flag that means "this port
+    is mine".
+    """
+
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:  # pragma: no cover - exercised via serve()
+        if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def serve(
     settings: Settings,
     port: int = 8484,
@@ -1049,7 +1076,7 @@ def serve(
 ) -> None:
     """Serve the desktop UI until Ctrl-C (loopback by default)."""
     session = WebSession(settings)
-    server = ThreadingHTTPServer((host, port), make_handler(session, allow_hosts))
+    server = _ExclusiveHTTPServer((host, port), make_handler(session, allow_hosts))
     console = Console()
     # Read back the actual bound port, not the requested one — `--port 0`
     # (a standard "pick any free port" convention) would otherwise print a
@@ -1098,9 +1125,9 @@ def serve_background(settings: Settings, port: int = 8484) -> tuple[ThreadingHTT
 
     session = WebSession(settings)
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(session))
+        server = _ExclusiveHTTPServer(("127.0.0.1", port), make_handler(session))
     except OSError:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+        server = _ExclusiveHTTPServer(("127.0.0.1", 0), make_handler(session))
     url = f"http://127.0.0.1:{server.server_address[1]}"
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, url

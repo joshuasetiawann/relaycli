@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import stat
 
 import pytest
@@ -60,7 +61,13 @@ def test_save_is_0600_and_preserves_unknown_keys(cfg_path):
     cfg.tiers["fast"] = "gpt-4o-mini"
     save_app_config(cfg)
 
-    assert stat.S_IMODE(cfg_path.stat().st_mode) == 0o600
+    if os.name != "nt":
+        # Windows has no POSIX mode bits — st_mode is synthesised as 0666
+        # whatever the ACL says, so this can only ever be asserted where it
+        # means something. The file's real protection there is the user
+        # profile's ACL, which is why doctor.check_config_perms reports the
+        # whole check as SKIP rather than as a failure nobody can clear.
+        assert stat.S_IMODE(cfg_path.stat().st_mode) == 0o600
     text = cfg_path.read_text(encoding="utf-8")
     assert 'model = "openrouter/x"' in text
     assert "relay_enabled = true" in text

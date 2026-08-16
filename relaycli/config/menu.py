@@ -179,8 +179,8 @@ class SettingsMenu:
 
 
 def _run_loop(console: Console, menu, banner_key: str) -> None:
-    from prompt_toolkit import PromptSession
-    session = PromptSession()
+    from relaycli.ui.prompting import prompt_session
+    session = prompt_session()
     while True:
         console.print()
         menu.render(console)

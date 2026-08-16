@@ -45,9 +45,21 @@ class ProjectContext:
         return resolved == self.root or self.root in resolved.parents
 
     def relative(self, path: str | Path) -> str:
+        """A project-relative path, always with `/` separators.
+
+        This string is model-facing: it lands in the system prompt, in tool
+        summaries, and in "use one of these exact relative paths" errors. On
+        Windows `str()` produced `belajar-mandarin\\index.html`, so the model
+        was shown one spelling and asked for another everywhere else — and
+        the same repo read differently on Windows than on CI. Windows accepts
+        `/` in every path API, so POSIX is the spelling that works on both.
+
+        A path outside the project keeps the platform's own separator: that
+        one is a real absolute path, not a portable project reference.
+        """
         p = Path(path)
         try:
-            return str(p.resolve().relative_to(self.root))
+            return p.resolve().relative_to(self.root).as_posix()
         except (ValueError, OSError):
             return str(p)
 
