@@ -46,6 +46,14 @@ class StatusBarData:
     tokens: int = 0
     spent_usd: float = 0.0
     limit_usd: float | None = None
+    # §11's launch bar is the one screen that carries it (`▌relaycli 0.9.2`).
+    # A running frame leaves it empty: the version does not change
+    # mid-session, and those columns are worth more to the branch name.
+    version: str = ""
+    # §11 again: with nothing running the bar says `idle` where a live one
+    # says `4 agents  128.4k tok`. Neither number means anything yet, and
+    # printing `1 agent  0 tok` before you have typed claims otherwise.
+    idle: bool = False
 
 
 def budget_fraction(data: StatusBarData) -> float | None:
@@ -147,6 +155,13 @@ def render_status_bar(data: StatusBarData, columns: ColumnWidths,
         name = "relay" if compact else "relaycli"
         left.append(f"{rail.symbol if palette else rail.ascii}{name}",
                     style=f"bold {tint('accent')}" if palette else "bold")
+        if data.version:
+            # Kept even in the 80-column form. §04's cut order gives up
+            # elapsed, tokens and the model — all of which a *running*
+            # frame is showing you second by second — and this is the one
+            # bar that is not running: it greets you once, and which build
+            # greeted you is the fact a bug report needs.
+            left.append(f" {data.version}", style=tint("muted"))
 
         cwd = short_path(data.cwd)
         if cwd:
@@ -168,7 +183,9 @@ def render_status_bar(data: StatusBarData, columns: ColumnWidths,
         return left
 
     right = Text()
-    if compact:
+    if data.idle:
+        right.append("idle", style=tint("muted"))
+    elif compact:
         right.append(f"{data.agents}a", style=tint("running"))
     else:
         right.append(f"{data.agents} agent{'' if data.agents == 1 else 's'}",

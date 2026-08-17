@@ -6,8 +6,9 @@ from dataclasses import dataclass
 
 from rich.console import Console
 from rich.markup import escape
-from rich.panel import Panel
 from rich.table import Table
+
+from relaycli.ui.console import slate_console
 
 from relaycli.config.manager import (
     PROVIDER_ENV, AppConfig, ProviderConfig, RoleConfig, effective_roles,
@@ -15,9 +16,6 @@ from relaycli.config.manager import (
 )
 from relaycli.core.config import PermissionMode
 from relaycli.core.roles import TIERS, builtin_role
-from relaycli.ui.theme import DARK as _DARK
-
-ACCENT = _DARK.accent
 
 
 @dataclass
@@ -26,23 +24,30 @@ class ConfigMenu:
     section: str = "roles"
 
     def render(self, console: Console) -> None:
-        console.print(Panel(f"[bold {ACCENT}]Configuration[/bold {ACCENT}]   [dim]providers & keys · roles & models — separate from /settings[/dim]", border_style=ACCENT, expand=False))
+        from relaycli.ui.render import render_screen_heading
+
+        render_screen_heading(console, "CONFIGURATION", "providers & keys · roles & models — separate from /settings")
         if self.section == "providers":
             self._render_providers(console)
         else:
             self._render_roles(console)
-        console.print("[dim]› roles · providers · enable/disable <role> · model <role> <model|tier> · tier <t> <model> · key <provider> <env:VAR|value> · q[/dim]")
+        console.print("[dim]› roles · providers · enable/disable <role> · model <role> <model|tier> · tier <t> <model> · key <provider> <env:VAR|value> · q[/dim]", highlight=False)
 
     def _render_roles(self, console: Console) -> None:
+        from relaycli.ui.render import role_label
+
         t = Table(title="Roles & Models", show_header=True, header_style="bold", box=None)
         t.add_column("role", style="cyan", no_wrap=True)
         t.add_column("on")
         t.add_column("assigned")
         t.add_column("resolved model")
         for r in effective_roles(self.cfg):
-            mark = "[green]✓[/green]" if r.enabled else "[dim]✗[/dim]"
+            mark = "[green][✓][/green]" if r.enabled else "[dim][ ][/dim]"
             resolved = f"[red]{escape(r.error)}[/red]" if r.error else escape(str(r.model))
-            t.add_row(r.id, mark, escape(r.assigned), resolved)
+            # §2's role mark, not the bare id: the family glyph groups
+            # sixteen roles into five readable blocks, and the 3-letter
+            # code is the same one a lane shows while that role runs.
+            t.add_row(role_label(r.id), mark, escape(r.assigned), resolved)
         console.print(t)
         tt = Table(title="Tiers", show_header=True, header_style="bold", box=None)
         tt.add_column("tier", style="cyan", no_wrap=True)
@@ -135,7 +140,9 @@ class SettingsMenu:
     cfg: AppConfig
 
     def render(self, console: Console) -> None:
-        console.print(Panel(f"[bold {ACCENT}]Settings[/bold {ACCENT}]   [dim]general preferences only — roles/models/keys live in /config[/dim]", border_style=ACCENT, expand=False))
+        from relaycli.ui.render import render_screen_heading
+
+        render_screen_heading(console, "SETTINGS", "general preferences only — roles/models/keys live in /config")
         t = Table(show_header=True, header_style="bold", box=None)
         t.add_column("preference", style="cyan", no_wrap=True)
         t.add_column("value")
@@ -143,7 +150,7 @@ class SettingsMenu:
         t.add_row("theme", escape(str(self.cfg.preference("theme"))))
         t.add_row("max_context_tokens", escape(str(self.cfg.preference("max_context_tokens"))))
         console.print(t)
-        console.print("[dim]› mode <suggest|auto-edit|full-auto> · theme <name> · context <n> · q[/dim]")
+        console.print("[dim]› mode <suggest|auto-edit|full-auto> · theme <name> · context <n> · q[/dim]", highlight=False)
 
     def handle(self, line: str) -> tuple[str, bool]:
         parts = line.strip().split()
@@ -196,10 +203,10 @@ def _run_loop(console: Console, menu, banner_key: str) -> None:
 
 
 def run_configuration(console: Console | None = None) -> None:
-    console = console or Console()
+    console = console or slate_console()
     _run_loop(console, ConfigMenu(load_app_config()), "config")
 
 
 def run_settings(console: Console | None = None) -> None:
-    console = console or Console()
+    console = console or slate_console()
     _run_loop(console, SettingsMenu(load_app_config()), "settings")

@@ -15,9 +15,7 @@ from typing import TYPE_CHECKING
 
 from rich.console import Console
 from rich.markup import escape
-from rich.panel import Panel
 from rich.syntax import Syntax
-from rich.table import Table
 
 from relaycli.ui import theme
 
@@ -113,20 +111,21 @@ def structured_diff(old: str, new: str, path: str) -> "FileDiff":
 
 def render_diff(console: Console, old: str, new: str, path: str) -> tuple[int, int]:
     """Print a colored unified diff and return (added, removed) line counts."""
+    mode = session_color_mode()
     diff_text = make_unified_diff(old, new, path)
     added, removed = diff_stats(old, new)
     if not diff_text:
-        console.print(f"[dim](no changes to {path})[/dim]")
+        _say(console, _tinted(mode, "muted", escape(f"(no changes to {path})")))
         return (0, 0)
     syntax = Syntax(diff_text, "diff", theme="ansi_dark", background_color="default")
     console.print(syntax)
-    console.print(f"[dim]{path}:[/dim] [green]+{added}[/green] [red]-{removed}[/red]")
+    # §2's diff markers: `+` in success, `−` (U+2212, not a hyphen) in
+    # danger, gutter only — never the whole line.
+    _say(console, _tinted(mode, "text", escape(path))
+         + "  " + _tinted(mode, "success", f"+{added}")
+         + " " + _tinted(mode, "danger", f"−{removed}"))
     return (added, removed)
 
-
-# SLATE INSTRUMENT accent (docs/design/DESIGN_TOKENS.md §0-1) — used for the
-# welcome chrome and the prompt. Replaces the former Claude-clay #D97757.
-ACCENT = theme.DARK.accent
 
 # Why a run ended -> the §2 task state it corresponds to. The glyph and the
 # hue both come from that state, so an ended run reads exactly like a
@@ -176,16 +175,17 @@ def friendly_error_text(text: str) -> str:
 
 
 def render_local_reply(console: Console, reply) -> None:
-    """Render a local guide reply without starting the LLM."""
+    """Render a local guide reply without starting the LLM.
 
+    Unboxed, like every other listing here: §12 keeps a drawn border for
+    the permission band and inline diffs, both of which are ephemeral and
+    demand an answer. An answer you merely read should not look like one.
+    """
+    mode = session_color_mode()
     text = getattr(reply, "text", str(reply))
-    console.print(Panel(
-        escape(text),
-        title="guide",
-        title_align="left",
-        border_style=ACCENT,
-        expand=False,
-    ))
+    _say(console, GUTTER + _tinted(mode, "accent", "guide"))
+    for line in text.rstrip("\n").split("\n"):
+        _say(console, BODY_INDENT + _tinted(mode, "text", escape(line)))
 
 
 def _transcript_layout(console: Console):
@@ -414,8 +414,8 @@ def render_task_summary(
     # user gets a silent failure.
     if result.stopped_reason != "done" and getattr(result, "final_text", ""):
         console.print()
-        console.print(_tinted(mode, token, escape(friendly_error_text(result.final_text))),
-                      highlight=False)
+        _say(console, GUTTER + _tinted(mode, token,
+                                      escape(friendly_error_text(result.final_text))))
 
     tools_note = ""
     if tools_used:
@@ -424,21 +424,23 @@ def render_task_summary(
         counts = Counter(tools_used)
         tools_note = " · " + ", ".join(f"{name}×{n}" if n > 1 else name for name, n in counts.items())
 
-    console.print()
-    console.print(
-        _tinted(mode, token,
-                f"{glyph.symbol if palette else glyph.ascii} {result.stopped_reason}")
-        + "  "
-        + _tinted(mode, "muted",
-                  escape(f"{result.iterations} steps · {result.tool_calls} tool calls"
-                         f"{tools_note} · {result.usage.total_tokens} tokens · "
-                         f"${result.usage.cost_usd:.6f} · {result.elapsed:.1f}s")),
-        highlight=False,
-    )
+    _say(console)
+    _say(console, GUTTER
+         + _tinted(mode, token,
+                   f"{glyph.symbol if palette else glyph.ascii} {result.stopped_reason}")
+         + "  "
+         + _tinted(mode, "muted",
+                   escape(f"{result.iterations} steps · {result.tool_calls} tool calls"
+                          f"{tools_note} · {result.usage.total_tokens} tokens · "
+                          f"${result.usage.cost_usd:.6f} · {result.elapsed:.1f}s")))
 
 
-_ROLE_STYLE = {"explorer": "blue", "planner": "cyan", "coder": "magenta",
-               "tester": "green", "reviewer": "yellow"}
+def role_label(role_id: str) -> str:
+    """`▣ cod coder` — §2's family glyph, three-letter code, and the role's
+    own name. Unknown ids fall back to the name alone rather than inventing
+    a mark: the five family glyphs are a closed set."""
+    mark = theme.ROLE_MARKS.get(role_id)
+    return f"{mark.family_glyph} {mark.code} {role_id}" if mark else role_id
 
 
 class RelayRichObserver:
@@ -453,11 +455,19 @@ class RelayRichObserver:
         self.reporters: list[tuple[str, RichReporter]] = []
 
     def role_start(self, role: "Role", model: str, cycle: int) -> None:
-        style = _ROLE_STYLE.get(str(role), "white")
+        """`▣ cod coder  gpt-4o-mini · cycle 2`.
+
+        One hue for every role, not one per role: §12 rejects colour-coding
+        agents outright — identity lives in the id and the role mark, and
+        colour stays reserved for state, which is the thing you need to see
+        peripherally.
+        """
+        mode = session_color_mode()
         cycle_note = f" · cycle {cycle + 1}" if cycle else ""
-        self.console.print(
-            f"\n[bold {style}]◆ {role}[/bold {style}] [dim]{escape(model)}{cycle_note}[/dim]"
-        )
+        _say(self.console)
+        _say(self.console,
+             GUTTER + _tinted(mode, "accent", role_label(str(role)))
+             + "  " + _tinted(mode, "muted", escape(model + cycle_note)))
 
     def reporter_for(self, role: "Role") -> RichReporter:
         reporter = RichReporter(self.console)
@@ -471,61 +481,62 @@ class RelayRichObserver:
 
 
 def render_setup_panel(console: Console, problem: str, detected: dict[str, bool]) -> None:
-    """Actionable guidance when the configured model has no usable credential."""
+    """§11's failure card, for the case where the configured model has no
+    usable credential.
+
+    The design gives every failure the same three-part shape — glyph and
+    what happened, one line of consequence, then the exact commands — and
+    draws none of them in a box. `✗ NO API KEY · anthropic` is that card
+    for this failure.
+    """
     from relaycli.core.config import get_settings
     from relaycli.core.llm import best_ollama_model, ollama_host_label
 
     settings = get_settings()
+    mode = session_color_mode()
     local_model = best_ollama_model(settings)
-    lines = [f"[yellow]⚠ {escape(problem)}[/yellow]", ""]
-    lines.append("Fastest fixes:")
+
+    _say(console)
+    _say(console, GUTTER + _tinted(mode, "danger", "✗ SETUP NEEDED"))
+    _say(console, BODY_INDENT + _tinted(mode, "muted", escape(problem)))
+    _say(console)
+
+    fixes: list[tuple[str, str]] = []
     if local_model:
-        lines.append(
-            f"  • relaycli init     (detected Ollama at {escape(ollama_host_label(settings))}; "
-            f"can use {escape(local_model)})"
-        )
+        fixes.append(("relaycli init",
+                      f"guided setup — Ollama is up at {ollama_host_label(settings)}, "
+                      f"can use {local_model}"))
     else:
-        lines.append("  • relaycli init     (guided setup for Ollama, OpenRouter, or API keys)")
-    lines.append("  • relaycli config set-key <provider> --env <VAR>  (store a key reference)")
-    lines.append("")
-    lines.append("Manual fixes:")
+        fixes.append(("relaycli init", "guided setup for Ollama, OpenRouter, or API keys"))
     # Anchor on our own "Set <VAR> ..." sentence and take the LAST match: the
     # problem string also embeds the model id, which is config-controlled and
     # could be crafted to smuggle a fake *_API_KEY name in front of it.
     hinted = re.findall(r"\bSet ([A-Z][A-Z0-9_]*_API_KEY)\b", problem)
     if hinted:
-        lines.append(f"  • export {hinted[-1]}=...     (for the current model)")
-    lines.append("  • relaycli -m ollama_chat/llama3.1   (local via Ollama, no key; needs `ollama serve`)")
-    lines.append("  • add the key to ~/.relaycli/config.toml or a project .env (names in .env.example)")
+        fixes.append((f"export {hinted[-1]}=...", "the key for the current model"))
+    fixes.append(("relaycli config set-key <provider> --env <VAR>", "store a key reference"))
+    fixes.append(("relaycli -m ollama_chat/llama3.1",
+                  "local via Ollama, no key; needs `ollama serve`"))
+    _pairs(console, mode, fixes)
+
     have = [name for name, ok in detected.items() if ok and name != "ollama"]
     if have:
-        lines.append("")
-        lines.append(f"Keys already detected: {escape(', '.join(have))} — pick one of their models with /model.")
-    # Quiet chrome: the ⚠ problem line inside is already yellow — a loud
-    # yellow border on top of it reads as two warnings.
-    console.print(Panel("\n".join(lines), title="setup needed", title_align="left",
-                        border_style="dim", expand=False))
+        _say(console, BODY_INDENT + _tinted(mode, "muted", escape(
+            f"keys already detected: {', '.join(have)} — pick one of their "
+            "models with /model.")))
 
 
 def render_slash_guide(console: Console) -> None:
     """Compact command palette shown by `/` and in the welcome flow."""
-    table = Table.grid(padding=(0, 2))
-    table.add_column(style="cyan", no_wrap=True)
-    table.add_column()
-    table.add_row("/setup", "guided setup: model, keys, Ollama/n8n/web/postgres")
-    table.add_row("/model", "switch the model")
-    table.add_row("/mode", "suggest | auto-edit | full-auto")
-    table.add_row("/agents", "relay roles and task-split specialists")
-    table.add_row("/services", "optional Docker services")
-    table.add_row("/doctor", "health check")
-    table.add_row("/desktop", "browser UI")
-    console.print(Panel(
-        table,
-        title="press / for commands",
-        title_align="left",
-        border_style="dim",
-        expand=False,
-    ))
+    _pairs(console, session_color_mode(), [
+        ("/setup", "guided setup: model, keys, Ollama/n8n/web/postgres"),
+        ("/model", "switch the model"),
+        ("/mode", "suggest | auto-edit | full-auto"),
+        ("/agents", "relay roles and task-split specialists"),
+        ("/services", "optional Docker services"),
+        ("/doctor", "health check"),
+        ("/desktop", "browser UI"),
+    ], heading="commands · / to filter, /help for all")
 
 
 def short_model_name(model: str) -> str:
@@ -538,7 +549,7 @@ def short_model_name(model: str) -> str:
 # having no key to miss is metadata, not good news worth a hue.
 _KEY_NOTE = {
     "detected": ("key detected", "success"),
-    "missing": ("key missing ⚠", "warning"),
+    "missing": ("key missing ▲", "warning"),
     "not needed": ("no key needed", "muted"),
 }
 
@@ -570,6 +581,7 @@ def render_session_bar(
     console: Console, settings: "Settings", root: "Path", *,
     agents: int = 1, tokens: int = 0, spent_usd: float = 0.0,
     limit_usd: float | None = None, rule: bool = True,
+    version: str = "", idle: bool = False,
 ) -> None:
     """§03's status bar — `▌relaycli ~/src/app  git:main  clean  mode:ask
     … 1 agent  8.1k tok  $0.09` — for the single-agent screens.
@@ -594,6 +606,7 @@ def render_session_bar(
         cwd=root, branch=repo.branch, dirty=repo.dirty,
         permission_mode=getattr(settings.permission_mode, "value", str(settings.permission_mode)),
         agents=agents, tokens=tokens, spent_usd=spent_usd, limit_usd=limit_usd,
+        version=version, idle=idle,
     )
     console.print(frame.render_status_bar(data, columns, mode, width))
     if rule:
@@ -604,6 +617,52 @@ def _tinted(mode: "theme.ColorMode", token: str, text: str) -> str:
     """Rich markup for one design token — or bare text under NO_COLOR."""
     style = theme.style_for(mode, token)
     return f"[{style}]{text}[/{style}]" if style else text
+
+
+# §11's label column: a fixed field so `models`, `roles`, `lanes` and
+# `skills` line their values up.
+FACT_LABEL_WIDTH = 9
+
+# §4's left gutter: the 1 column every frame row starts at, so a line
+# printed here lands on the same margin as the status bar above it. Written
+# out rather than read from `gutter_left(columns)`, because §4 fixes the
+# gutter at 2 for every width — threading a ColumnWidths through six helpers
+# to look up a constant is plumbing, not a decision.
+GUTTER = " "
+# …plus the 2-space indent §11 gives the block under the rule.
+BODY_INDENT = GUTTER + "  "
+
+
+def _say(console: Console, markup: str = "") -> None:
+    """Print pre-tinted markup with Rich's repr highlighter off.
+
+    Left on, it bolds the digits inside a model id (`qwen2.5` ->
+    `qwen2.`**5**) and re-colours the slash in `/relay`, both of which
+    fight the palette the line was already tinted with.
+    """
+    console.print(markup, highlight=False)
+
+
+def _fact(console: Console, mode: "theme.ColorMode", label: str, value: str) -> None:
+    """One `  skills   9 loaded · …` row of §11's launch block."""
+    _say(console, BODY_INDENT + _tinted(mode, "muted", label.ljust(FACT_LABEL_WIDTH)) + value)
+
+
+def _pairs(console: Console, mode: "theme.ColorMode",
+           rows: list[tuple[str, str]], *, heading: str = "") -> None:
+    """A two-column list — name in `text`, what it does in `muted`.
+
+    The shape §11 uses for its command line and `ui/live.render_help_overlay`
+    uses for the `?` overlay. No box: §12 reserves a drawn border for the
+    permission band and inline diffs, which are ephemeral, so a border on a
+    listing reads as something waiting to be answered.
+    """
+    if heading:
+        _say(console, GUTTER + _tinted(mode, "accent", heading))
+    width = max((len(name) for name, _ in rows), default=0)
+    for name, description in rows:
+        _say(console, BODY_INDENT + _tinted(mode, "text", escape(name.ljust(width)))
+             + "  " + _tinted(mode, "muted", escape(description)))
 
 
 def render_welcome(
@@ -630,23 +689,22 @@ def render_welcome(
     def muted(text: str) -> str:
         return _tinted(mode, "muted", text)
 
-    def say(markup: str = "") -> None:
-        # highlight=False: Rich's repr highlighter bolds the digits inside
-        # a model id ("qwen2.5" -> "qwen2.**5**") and re-colors the slash in
-        # "/relay", which fights the palette these lines were tinted with.
-        console.print(markup, highlight=False)
+    # §11's launch bar: it is the one screen that names the version, and it
+    # says `idle` rather than `1 agent  0 tok` — nothing has run yet, and a
+    # count of zero tokens is a number pretending to be a measurement.
+    render_session_bar(console, settings, root, version=__version__, idle=True)
 
-    render_session_bar(console, settings, root)
-
-    model_line = muted("model ") + _tinted(mode, "text", escape(settings.model))
+    model_line = _tinted(mode, "text", escape(settings.model))
     note = _key_note(key_status, mode)
     if note:
         model_line += f"  {note}"
-    say(model_line)
+    _fact(console, mode, "model", model_line)
 
     meaning = _MODE_MEANING.get(str(settings.permission_mode))
     if meaning:
-        say(muted(f"mode  {settings.permission_mode} — {meaning}"))
+        _fact(console, mode, "mode",
+              _tinted(mode, "text", str(settings.permission_mode))
+              + muted(f" · {meaning}"))
 
     if settings.relay_enabled:
         from relaycli.agent.router import routing_table
@@ -655,23 +713,94 @@ def render_welcome(
             f"{role}:{escape(short_model_name(m))}"
             for role, m in routing_table(settings).items()
         )
-        say(muted("relay ") + _tinted(mode, "running", "on") + muted(f"  {routes}"))
+        _fact(console, mode, "relay",
+              _tinted(mode, "running", "on") + muted(f"  {routes}"))
     else:
-        say(muted("relay off — /relay on for planner → coder → reviewer"))
+        _fact(console, mode, "relay",
+              muted("off — /relay on for planner → coder → reviewer"))
 
-    say()
-    say(muted(f'RelayCLI v{__version__} · try "explain this repo" · '
-              '"fix failing tests" · "build a small UI"'))
-    say(muted("/ commands · !cmd shell · Ctrl-D quit"))
+    _render_skills_fact(console, mode, root)
+
+    _say(console)
+    _say(console, muted(BODY_INDENT + 'Describe a change and RelayCLI works it through — try '
+                        '"explain this repo", "fix failing tests".'))
+    # Four, like §11's own line, and they fit one row at 80 columns. The
+    # rest is what /help is for; the keys that quit and run a shell live in
+    # the prompt's bottom toolbar, which is pinned and always in view.
+    _say(console, BODY_INDENT + "   ".join(
+        _tinted(mode, "text", name) + muted(f" {what}") for name, what in (
+            ("/model", "switch model"), ("/mode", "permissions"),
+            ("/doctor", "health check"), ("/help", "all commands"))))
 
     if root in (_Path.home(), _Path(_Path.home().anchor)):
-        say()
-        say(_tinted(mode, "warning",
-                    "⚠ This is your whole home directory — the agent can read and "
-                    "change anything under it."))
-        say(muted("Better: cd into a project folder (e.g. mkdir ~/proyek/app && "
-                  "cd ~/proyek/app) and run relaycli there."))
+        _say(console)
+        # ▲ is §2's warning marker; ⚠ is in neither the glyph set nor the
+        # ASCII fallback table, so it had no NO_COLOR spelling at all.
+        _say(console, _tinted(mode, "warning",
+                              BODY_INDENT + "▲ This is your whole home directory — the agent can "
+                              "read and change anything under it."))
+        _say(console, muted(BODY_INDENT + "  Better: cd into a project folder (e.g. mkdir "
+                            "~/proyek/app && cd ~/proyek/app) and run relaycli there."))
     render_model_warning(console, settings)
+    # Closes the launch block the way §11 does. The caret row under it is
+    # the REPL's own prompt_toolkit line, and its bottom toolbar carries the
+    # key strip — drawing a second, dead `❯` here would be a caret you
+    # cannot type into sitting directly above one you can.
+    _render_rule(console)
+
+
+def _render_skills_fact(console: Console, mode: "theme.ColorMode", root: "Path") -> None:
+    """`skills  9 loaded · ▲ 2 from this repo — they run with your
+    permissions`. §10 marks project-sourced skills because that is a trust
+    boundary: anyone with commit access can change them."""
+    from relaycli.skills import discover_skills
+
+    try:
+        skills = discover_skills(root)
+    except OSError:  # pragma: no cover - discover_skills already guards per-file
+        return
+    if not skills:
+        return
+    line = _tinted(mode, "text", f"{len(skills)} loaded")
+    project = sum(1 for skill in skills.values() if skill.source == "project")
+    if project:
+        line += _tinted(mode, "warning", f" · ▲ {project} from this repo")
+        line += _tinted(mode, "muted",
+                        " — they run with your permissions · /skills inspect")
+    else:
+        line += _tinted(mode, "muted", " · /skills to list them")
+    _fact(console, mode, "skills", line)
+
+
+def render_screen_heading(console: Console, title: str, subtitle: str = "") -> None:
+    """`▌relaycli  ROLES & SKILLS  11 of 16 enabled` and the rule under it.
+
+    §07, §09 and §10 all open a full-screen view this way: the same focus
+    rail and product name the status bar carries, then the screen's name in
+    caps, then what is on it. A bordered panel is what this replaced, and
+    §12 keeps borders for the two things that are ephemeral and demand an
+    answer — the permission band and an inline diff.
+    """
+    mode = session_color_mode()
+    rail = theme.MARKERS["focus_rail"]
+    palette = theme.palette_for(mode)
+    line = GUTTER + _tinted(mode, "accent",
+                            f"[bold]{rail.symbol if palette else rail.ascii}relaycli[/bold]")
+    line += "  " + _tinted(mode, "heading", escape(title))
+    if subtitle:
+        line += "  " + _tinted(mode, "muted", escape(subtitle))
+    _say(console, line)
+    _render_rule(console)
+
+
+def _render_rule(console: Console) -> None:
+    """The full-width `────` divider, from the same renderer the parallel
+    frame uses so a rule is a rule everywhere in the product."""
+    from relaycli.ui import frame
+    from relaycli.ui.layout import MINIMUM_WIDTH, resolve_columns
+
+    width = max(console.width, MINIMUM_WIDTH)
+    console.print(frame.render_rule(resolve_columns(width), session_color_mode(), width))
 
 
 def render_model_warning(console: Console, settings: "Settings") -> None:
@@ -680,7 +809,8 @@ def render_model_warning(console: Console, settings: "Settings") -> None:
 
     warning = tool_capability_warning(settings.model)
     if warning:
-        console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+        mode = session_color_mode()
+        _say(console, _tinted(mode, "warning", BODY_INDENT + f"▲ {escape(warning)}"))
 
 
 def render_status_line(
@@ -698,52 +828,52 @@ def render_status_line(
 
 
 def render_help(console: Console) -> None:
-    """The REPL /help screen: every accepted input form, aligned."""
-    table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
-    table.add_column("input", style="cyan", no_wrap=True)
-    table.add_column("action")
-    table.add_row("<plain text>", "send a request to the agent")
-    table.add_row("/", "show the command palette")
-    table.add_row("/setup", "guided first-run setup (alias: /init)")
-    table.add_row("/init", "alias of /setup")
-    table.add_row("/model \\[name]", "show or switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)")
-    table.add_row("/mode \\[m]", "permission mode: suggest | auto-edit | full-auto")
-    table.add_row("/relay \\[on|off]", "toggle the Planner → Coder → Reviewer pipeline")
-    table.add_row("/agents \\[r on|off]", "show relay agents; toggle explorer/tester")
-    table.add_row("/services \\[start names]", "show/start optional services: ollama, web, postgres, n8n")
-    table.add_row("/doctor", "run a local health check")
-    table.add_row("/skill \\[name]", "toggle a skill for this session (tdd, debug, ponytail, …)")
-    table.add_row("/skill auto \\[on|off]", "toggle per-request skill auto-activation")
-    table.add_row("/skills", "list available skills and where they come from")
-    table.add_row("/memory", "show long-term memory (global + project)")
-    table.add_row("/mcp", "show MCP connectors and their tools")
-    table.add_row("/desktop", "open the desktop web UI in your browser")
-    table.add_row("/config", "roles, per-role models & provider keys (persistent config)")
-    table.add_row("/settings", "general preferences: mode, theme, context limit")
-    table.add_row("/diff", "show uncommitted changes (git diff)")
-    table.add_row("/clear", "reset the conversation")
-    table.add_row("/help", "show this help  (aliases: help, ?)")
-    table.add_row("/exit", "quit  (aliases: exit, quit, Ctrl-D)")
-    table.add_row("!<cmd>", "run a shell command in the project root (e.g. !git status)")
-    table.caption = (
-        "Enter submits · Alt+Enter inserts a newline · Ctrl-R searches history · "
-        "Ctrl-C clears the line · Ctrl-D quits"
-    )
-    console.print(Panel(
-        table,
-        title="[bold]Command palette[/bold]",
-        title_align="left",
-        border_style=ACCENT,
-        expand=False,
-    ))
+    """The REPL /help screen: every accepted input form, aligned.
+
+    Same two-column, box-free shape as the `?` key overlay the parallel
+    frame draws (`ui/live.render_help_overlay`) — this is the linear
+    session's version of that overlay, so it should not be a different
+    artifact.
+    """
+    mode = session_color_mode()
+    _pairs(console, mode, [
+        ("<plain text>", "send a request to the agent"),
+        ("/", "show the command palette"),
+        ("/setup", "guided first-run setup (alias: /init)"),
+        ("/init", "alias of /setup"),
+        ("/model [name]", "show or switch the model (e.g. gpt-4o-mini, ollama_chat/llama3.1)"),
+        ("/mode [m]", "permission mode: suggest | auto-edit | full-auto"),
+        ("/relay [on|off]", "toggle the Planner → Coder → Reviewer pipeline"),
+        ("/agents [r on|off]", "show relay agents; toggle explorer/tester"),
+        ("/services [start names]", "show/start optional services: ollama, web, postgres, n8n"),
+        ("/doctor", "run a local health check"),
+        ("/skill [name]", "toggle a skill for this session (tdd, debug, ponytail, …)"),
+        ("/skill auto [on|off]", "toggle per-request skill auto-activation"),
+        ("/skills", "list available skills and where they come from"),
+        ("/memory", "show long-term memory (global + project)"),
+        ("/mcp", "show MCP connectors and their tools"),
+        ("/desktop", "open the desktop web UI in your browser"),
+        ("/config", "roles, per-role models & provider keys (persistent config)"),
+        ("/settings", "general preferences: mode, theme, context limit"),
+        ("/diff", "show uncommitted changes (git diff)"),
+        ("/clear", "reset the conversation"),
+        ("/help", "show this help  (aliases: help, ?)"),
+        ("/exit", "quit  (aliases: exit, quit, Ctrl-D)"),
+        ("!<cmd>", "run a shell command in the project root (e.g. !git status)"),
+    ], heading="keys & commands")
+    _say(console, BODY_INDENT + _tinted(mode, "muted",
+                                 "Enter submits · Alt+Enter newline · Ctrl-R history · "
+                                 "Ctrl-C clears the line · Ctrl-D quits"))
 
 
 def render_routing_banner(console: Console, settings: "Settings") -> None:
     """Print the role → model routing line (model ids are untrusted: escape)."""
     from relaycli.agent.router import routing_table
 
+    mode = session_color_mode()
     routes = " · ".join(f"{role}:{m}" for role, m in routing_table(settings).items())
-    console.print(f"[dim]relay[/dim] [cyan]on[/cyan]  [dim]{escape(routes)}[/dim]")
+    _say(console, _tinted(mode, "muted", "relay ") + _tinted(mode, "running", "on")
+         + "  " + _tinted(mode, "muted", escape(routes)))
 
 
 def render_relay_summary(console: Console, result: "RelayResult") -> None:
@@ -759,55 +889,65 @@ def render_relay_summary(console: Console, result: "RelayResult") -> None:
     # re-printing would duplicate the coder's report.
     if result.stopped_reason in ("error", "max_iterations") and result.final_text:
         console.print()
-        console.print(_tinted(mode, token, escape(friendly_error_text(result.final_text))),
-                      highlight=False)
+        _say(console, GUTTER + _tinted(mode, token,
+                                      escape(friendly_error_text(result.final_text))))
 
     for note in result.notes:
-        console.print(_tinted(mode, "warning", f"⚠ {escape(note)}"), highlight=False)
+        _say(console, GUTTER + _tinted(mode, "warning", f"▲ {escape(note)}"))
 
-    console.print()
+    _say(console)
     for run in result.role_runs:
         r = run.result
-        console.print(_tinted(mode, "muted", escape(
-            f"{str(run.role):<9} {run.model} · {r.iterations} steps · "
-            f"{r.usage.total_tokens} tokens · ${r.usage.cost_usd:.6f}")), highlight=False)
+        _say(console, BODY_INDENT
+             + _tinted(mode, "text", escape(role_label(str(run.role))))
+             + _tinted(mode, "muted", escape(
+                 f"  {run.model} · {r.iterations} steps · "
+                 f"{r.usage.total_tokens} tokens · ${r.usage.cost_usd:.6f}")))
     verdict_note = f" · verdict {result.verdict}" if result.verdict else ""
-    console.print(
-        _tinted(mode, token,
-                f"{glyph.symbol if palette else glyph.ascii} {result.stopped_reason}")
-        + "  "
-        + _tinted(mode, "muted", escape(
-            f"{result.cycles + 1} cycle(s){verdict_note} · "
-            f"{result.usage.total_tokens} tokens · ${result.usage.cost_usd:.6f} · "
-            f"{result.elapsed:.1f}s")),
-        highlight=False,
-    )
-
-
-_TASK_STATUS_STYLE = {
-    "done": "green", "failed": "red", "cancelled": "yellow", "blocked": "yellow",
-}
+    _say(console, GUTTER
+         + _tinted(mode, token,
+                   f"{glyph.symbol if palette else glyph.ascii} {result.stopped_reason}")
+         + "  "
+         + _tinted(mode, "muted", escape(
+             f"{result.cycles + 1} cycle(s){verdict_note} · "
+             f"{result.usage.total_tokens} tokens · ${result.usage.cost_usd:.6f} · "
+             f"{result.elapsed:.1f}s")))
 
 
 def render_parallel_summary(console: Console, result: "SchedulerResult") -> None:
-    """Print the end-of-run summary for --experimental-parallel: one line
-    per task (status, role, tokens) in graph order, then session totals.
-    Deliberately plain (no lanes/live view — that's Stage 4's terminal UI);
-    this only needs to make a --experimental-parallel run reviewable and
-    benchmarkable today."""
-    for task_id, task in result.graph.tasks.items():
-        style = _TASK_STATUS_STYLE.get(task.status, "white")
-        outcome = result.outcomes.get(task_id)
-        detail = f"{outcome.usage.total_tokens} tokens · ${outcome.usage.cost_usd:.6f}" if outcome else "did not run"
-        console.print(f"[{style}]{task.status:<9}[/{style}] [dim]{task_id} ({task.role_id}) · {detail}[/dim]")
-        if outcome is not None and not outcome.ok and outcome.error:
-            console.print(f"  [red]{escape(outcome.error[:200])}[/red]")
+    """The end-of-run summary for --experimental-parallel: one settled lane
+    per task in graph order, then session totals.
 
-    style = "yellow" if result.stopped_early else ("green" if result.graph.all_ok() else "red")
-    status = "stopped early" if result.stopped_early else ("done" if result.graph.all_ok() else "done with failures")
-    console.print(
-        f"[{style}]■ {status}[/{style}]  "
-        f"[dim]{len(result.outcomes)}/{len(result.graph.tasks)} task(s) ran · "
-        f"{result.budget.spent_tokens_total} tokens · ${result.budget.spent_usd_total:.6f} · "
-        f"{result.elapsed:.1f}s[/dim]"
-    )
+    Each row is §2's state glyph, hue and role mark — the same vocabulary
+    the live lane list uses — so the summary reads as those lanes coming to
+    rest rather than as a separate report. The old `■` was in neither the
+    glyph set nor the ASCII fallback table.
+    """
+    mode = session_color_mode()
+    palette = theme.palette_for(mode)
+
+    def settled(state: str, text: str) -> str:
+        glyph = theme.TASK_STATE_GLYPHS[state]  # type: ignore[index]
+        return _tinted(mode, theme.TASK_STATE_COLOR[state],  # type: ignore[index]
+                       f"{glyph.symbol if palette else glyph.ascii} {text}")
+
+    for task_id, task in result.graph.tasks.items():
+        outcome = result.outcomes.get(task_id)
+        detail = (f"{outcome.usage.total_tokens} tokens · ${outcome.usage.cost_usd:.6f}"
+                  if outcome else "did not run")
+        state = task.status if task.status in theme.TASK_STATE_GLYPHS else "failed"
+        _say(console, BODY_INDENT + settled(state, task.status.ljust(9)) + " "
+             + _tinted(mode, "text", escape(f"{task_id} {role_label(task.role_id)}"))
+             + _tinted(mode, "muted", escape(f" · {detail}")))
+        if outcome is not None and not outcome.ok and outcome.error:
+            _say(console, BODY_INDENT + "  " + _tinted(mode, "danger", escape(outcome.error[:200])))
+
+    state = ("cancelled" if result.stopped_early
+             else ("done" if result.graph.all_ok() else "failed"))
+    status = ("stopped early" if result.stopped_early
+              else ("done" if result.graph.all_ok() else "done with failures"))
+    _say(console)
+    _say(console, BODY_INDENT + settled(state, status) + "  " + _tinted(mode, "muted", escape(
+        f"{len(result.outcomes)}/{len(result.graph.tasks)} task(s) ran · "
+        f"{result.budget.spent_tokens_total} tokens · "
+        f"${result.budget.spent_usd_total:.6f} · {result.elapsed:.1f}s")))

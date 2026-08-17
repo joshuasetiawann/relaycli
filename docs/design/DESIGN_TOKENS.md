@@ -434,6 +434,45 @@ the stamp column in `muted`; and tool *errors* wrap like prose rather
 than clipping, because a clipped error is the one line you were reading
 the transcript for.
 
+**The launch screen is §11** (`ui/render.render_welcome`). `▌relaycli
+0.5.0 … idle  $0.00`, the rule, then §11's own label column — `model` /
+`mode` / `relay` / `skills`, values aligned — then the prose line and four
+commands, then the closing rule. Two fields exist on `StatusBarData` for
+it and nothing else: `version`, which only a bar that greets you once
+carries, and `idle`, which prints `idle` where a running frame prints `4
+agents  128.4k tok`, because before you have typed there is no token count
+to report. `skills` carries §10's trust boundary — `▲ 2 from this repo —
+they run with your permissions`. There is no `❯` row: the REPL's own
+prompt_toolkit caret is the next line on screen and its bottom toolbar is
+the pinned key strip, so drawing §11's caret would put a dead one directly
+above a live one.
+
+**Nothing outside the frame draws a box any more.** §12 gives a border to
+exactly two things — the permission band and an inline diff preview — both
+ephemeral, both demanding an answer. Everything that was a Rich `Panel`
+(the `/` palette, `/help`, the setup failure, a local guide reply,
+`/config`, `/settings`) is now a heading plus aligned columns, and the
+full-screen views open with `render_screen_heading`: `▌relaycli
+CONFIGURATION  providers & keys …` and a rule, the shape §07/§09/§10 use.
+`/config`'s role table carries §2's role marks (`◇ orc orchestrator`) and
+§10's `[✓]` / `[ ]`.
+
+**Colour words are bound to tokens on the Console** (`ui/console.py`).
+Roughly 140 call sites across the slash commands, `doctor`, and the
+`config` / `plugin` / `mcp` subcommands were written against Rich's own
+`[yellow]`, `[cyan]`, `[dim]` — which are not this palette, differ from it
+sharply in light, and stay coloured under `NO_COLOR`. Rich resolves a
+markup tag through `Console.get_style`, which consults the theme before
+parsing the tag as a colour, so `slate_console()` binds the old words to
+the new tokens once instead of asking 140 sites to be rewritten and then
+kept rewritten. `dim` maps to `muted` deliberately: §1 reserves dim
+intensity for frame rules, and every `[dim]` in this codebase meant
+"metadata". Compounds (`[bold yellow]`) are bound whole, because
+`Style.parse` splits its own words and never reaches the theme.
+
+`⚠` is gone everywhere in favour of §2's `▲`: it was in neither the glyph
+set nor the ASCII fallback table, so it had no NO_COLOR spelling at all.
+
 **Not built, and why** — every one of these is blocked on a capability
 that does not exist yet, not on a renderer:
 

@@ -336,7 +336,10 @@ def test_slash_palette_and_unknown_suggestion():
     repl._handle_slash("/")
     repl._handle_slash("/modle")
     text = _out(console)
-    assert "press / for commands" in text
+    # The palette is a heading + two aligned columns now, not a bordered
+    # Rich panel — §12 keeps a drawn border for the things that demand an
+    # answer (the permission band, an inline diff), and a listing is not one.
+    assert "commands" in text and "╭" not in text
     assert "/setup" in text and "/model" in text
     assert "Did you mean" in text and "/model" in text
 
@@ -875,14 +878,14 @@ def test_setup_panel_reshown_after_missing_key_error():
         "LLM error: No API key configured for provider 'openai' (model 'gpt-4o-mini'). "
         "Set OPENAI_API_KEY in your environment / .env, or add it to ~/.relaycli/config.toml.",
     ))
-    assert "setup needed" in _out(console)
+    assert "SETUP NEEDED" in _out(console)
 
 
 def test_setup_panel_not_reshown_for_other_errors():
     repl, console = _hermetic_repl(model="gpt-4o-mini")
     repl._maybe_setup_hint(_Result("error", "LLM error: rate limited (429)"))
     repl._maybe_setup_hint(_Result("done", "all good"))
-    assert "setup needed" not in _out(console)
+    assert "SETUP NEEDED" not in _out(console)
 
 
 # --- welcome banner + prompt ---------------------------------------------
@@ -897,8 +900,8 @@ def test_banner_shows_version_cwd_model_mode_and_key_warning():
     assert "gpt-4o-mini" in out
     assert "suggest" in out
     assert "key missing" in out
-    # Preflight failed -> the setup panel appears right away (non-blocking).
-    assert "setup needed" in out
+    # Preflight failed -> the setup card appears right away (non-blocking).
+    assert "SETUP NEEDED" in out
     assert "export OPENAI_API_KEY=" in out
 
 
@@ -1307,3 +1310,73 @@ def test_recommended_fast_local_model_ignores_only_large_models(monkeypatch):
     monkeypatch.setattr(llm, "ollama_models", lambda settings, timeout=0.8: ["qwen3:4b"])
 
     assert runtime.recommended_fast_local_model(Settings(model="ollama_chat/qwen3:4b")) is None
+
+
+# --- SLATE everywhere: the design outside the parallel frame -------------
+def test_legacy_colour_words_resolve_to_design_tokens():
+    """`[yellow]` is not `warning`. It is the terminal's yellow — a
+    different hue in dark, a badly wrong one in light, and still a colour
+    under NO_COLOR. slate_console binds the old words to the palette so the
+    ~140 sites that predate the tokens stop contradicting them."""
+    from relaycli.ui.console import LEGACY_COLORS, slate_theme
+    from relaycli.ui.theme import style_for
+
+    for mode in ("dark", "light"):
+        styles = slate_theme(mode).styles
+        for word, token in LEGACY_COLORS.items():
+            # Rich lowercases a hex it parsed; the token table is upper.
+            assert (styles[word].color.name.lower()
+                    == style_for(mode, token).lower()), f"{mode}/{word}"
+            # `Style.parse` splits its own words, so a compound never
+            # reaches the theme unless it is bound in its own right.
+            assert styles[f"bold {word}"].bold is True
+
+    # NO_COLOR keeps the weight and drops the hue — §04's own substitution.
+    mono = slate_theme("no_color").styles
+    assert mono["yellow"].color is None
+    assert mono["bold red"].bold is True and mono["bold red"].color is None
+
+
+def test_role_label_is_the_family_glyph_and_code():
+    from relaycli.ui.render import role_label
+
+    assert role_label("orchestrator") == "◇ orc orchestrator"
+    assert role_label("coder") == "▣ cod coder"
+    assert role_label("reviewer") == "⊙ rev reviewer"
+    # The five family glyphs are a closed set, so an id outside it gets the
+    # name alone rather than an invented mark.
+    assert role_label("explorer") == "explorer"
+
+
+def test_launch_screen_is_section_11(tmp_path):
+    """§11: version in the bar, `idle` instead of a token count nothing has
+    produced yet, the aligned label column, and a closing rule."""
+    from relaycli import __version__
+    from relaycli.ui.render import render_welcome
+
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
+    render_welcome(console, _hermetic(model="ollama_chat/llama3.1"), tmp_path, "not needed")
+    out = _out(console)
+
+    assert f"▌relaycli {__version__}" in out
+    assert "idle" in out and "0 tok" not in out
+    for label in ("model", "mode", "relay"):
+        assert f"{label.ljust(9)}" in out
+    # opened by a rule under the bar and closed by one under the block
+    assert out.count("────") >= 2
+    # and no box anywhere: §12 keeps borders for the permission band and
+    # inline diffs, both ephemeral, both demanding an answer.
+    assert "╭" not in out and "│" not in out
+
+
+def test_no_terminal_surface_draws_a_panel():
+    """A regression guard for the whole pass: the screens that used to be
+    bordered Rich panels are headings plus aligned columns now."""
+    from relaycli.ui.render import render_help, render_slash_guide
+
+    for draw in (render_help, render_slash_guide):
+        console = Console(file=io.StringIO(), force_terminal=False, width=120)
+        draw(console)
+        out = _out(console)
+        assert "╭" not in out and "╰" not in out, draw.__name__
+        assert "/model" in out, draw.__name__
