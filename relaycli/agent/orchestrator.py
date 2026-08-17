@@ -17,6 +17,8 @@ from typing import Callable
 
 from rich.console import Console
 
+from relaycli.ui.console import slate_console
+
 from relaycli.agent.budget import BudgetGovernor
 from relaycli.agent.graph import GraphError, TaskGraph, parse_task_graph
 from relaycli.agent.leases import LeaseManager
@@ -215,7 +217,7 @@ async def run_parallel(
     from relaycli.appconfig import load_app_config
     from relaycli.core.roster import specialist_runtime
 
-    console = console or Console()
+    console = console or slate_console()
     project = project or ProjectContext(".")
     permissions = permissions or PermissionManager(settings.permission_mode, console=console)
     llm = llm or LLM(settings)

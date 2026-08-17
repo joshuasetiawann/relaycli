@@ -18,7 +18,7 @@ from relaycli.config import CONFIG_DIR, CONFIG_FILE, Settings
 
 OK, WARN, FAIL, SKIP = "ok", "warn", "fail", "skip"
 
-_ICONS = {OK: "[green]✓[/green]", WARN: "[yellow]⚠[/yellow]",
+_ICONS = {OK: "[green]✓[/green]", WARN: "[yellow]▲[/yellow]",
           FAIL: "[red]✗[/red]", SKIP: "[dim]–[/dim]"}
 
 

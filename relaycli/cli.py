@@ -17,6 +17,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from relaycli.ui.console import slate_console
+
 from relaycli import __version__
 from relaycli.config import CONFIG_FILE, PermissionMode, Settings, get_settings
 
@@ -35,7 +37,7 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
-console = Console()
+console = slate_console()
 
 # `relaycli config …` — role/model/tier/key management (see config_cli).
 from relaycli.config_cli import config_app  # noqa: E402
@@ -188,7 +190,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         fallback = recommended_fast_local_model(settings)
         if fallback and fallback != settings.model:
             old_model = settings.model
-            console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+            console.print(f"[yellow]▲ {escape(warning)}[/yellow]")
             settings.model = fallback
             try:
                 from relaycli.appconfig import set_base_model
@@ -201,7 +203,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
                 "[dim](requires full GPU / avoids CPU-GPU fallback)[/dim]"
             )
         else:
-            console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+            console.print(f"[yellow]▲ {escape(warning)}[/yellow]")
             raise typer.Exit(code=2)
 
     skills_block = ""
@@ -218,7 +220,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     render_model_warning(console, settings)
     if settings.permission_mode is PermissionMode.full_auto:
         console.print(
-            "[bold yellow]⚠ full-auto:[/bold yellow] edits and commands run without asking."
+            "[bold yellow]▲ full-auto:[/bold yellow] edits and commands run without asking."
         )
     console.print()
 

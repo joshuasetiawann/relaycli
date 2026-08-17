@@ -12,6 +12,8 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from relaycli.ui.console import slate_console
+
 from relaycli.appconfig import ProviderConfig, load_app_config, save_app_config
 from relaycli.config import PermissionMode, Settings, reload_settings
 from relaycli.core.llm import best_ollama_model, ollama_host_label, ollama_models
@@ -170,7 +172,7 @@ def run_init(
     yes: bool = False,
     start: bool = False,
 ) -> InitPlan:
-    console = console or Console()
+    console = console or slate_console()
     settings = Settings()
     plan = build_plan(settings, model=model, mode=mode, services=services)
 

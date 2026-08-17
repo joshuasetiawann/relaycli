@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from relaycli.ui.console import slate_console
+
 from relaycli.appconfig import (
     PROVIDER_ENV,
     ProviderConfig,
@@ -28,7 +30,7 @@ from relaycli.core.llm import ollama_models
 from relaycli.model_catalog import model_choices, pull_ollama_model, short_model_name
 from relaycli.core.roles import BUILTIN_ROLES, TIERS, builtin_role
 
-console = Console()
+console = slate_console()
 
 config_app = typer.Typer(
     name="config",

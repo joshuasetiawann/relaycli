@@ -23,6 +23,8 @@ from json_repair import repair_json
 from rich.console import Console
 from rich.markup import escape
 
+from relaycli.ui.console import slate_console
+
 from relaycli.core.config import PermissionMode, Settings, get_settings
 from relaycli.core.context import ProjectContext
 from relaycli.core.llm import LLM, LLMError, LLMResponse, ToolCall, Usage
@@ -115,7 +117,7 @@ class Agent:
         roster_role_id: str | None = None,
     ) -> None:
         self.settings = settings or get_settings()
-        self.console = console or Console()
+        self.console = console or slate_console()
         self.project = project or ProjectContext(Path.cwd())
         self.permissions = permissions or PermissionManager(self.settings.permission_mode, console=self.console)
         self.registry = registry or default_registry()

@@ -12,6 +12,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from relaycli.ui.console import slate_console
+
 from relaycli.core.config import CONFIG_FILE, ensure_config_dir, get_settings, reload_settings
 from relaycli.core.llm import ollama_models
 from relaycli.tools.base import atomic_write
@@ -205,7 +207,7 @@ def effective_roles(cfg: AppConfig) -> list[ResolvedRole]:
 
 
 # ── CLI subcommands ──────────────────────────────────────────────────────
-console = Console()
+console = slate_console()
 config_app = typer.Typer(name="config", help="Manage roles, per-role models, tiers, and provider keys.", no_args_is_help=False, invoke_without_command=True)
 
 

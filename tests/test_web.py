@@ -1105,14 +1105,16 @@ def test_serve_prints_actual_bound_port_not_requested(monkeypatch, tmp_path, cap
 
     monkeypatch.chdir(tmp_path)
     printed = {}
-    orig_console = web_mod.Console
 
     class CapturingConsole(_Console):
         def print(self, *args, **kwargs):
             printed["text"] = printed.get("text", "") + " ".join(str(a) for a in args)
             return super().print(*args, **kwargs)
 
-    monkeypatch.setattr(web_mod, "Console", CapturingConsole)
+    # The seam is slate_console(), not Console: every console in the product
+    # is built through that factory now so a colour word resolves to a
+    # design token rather than to Rich's own hue.
+    monkeypatch.setattr(web_mod, "slate_console", lambda **kw: CapturingConsole(**kw))
     from relaycli.config import Settings
 
     t = _threading.Thread(

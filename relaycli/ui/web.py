@@ -38,6 +38,8 @@ from urllib.parse import parse_qs, urlparse
 
 from rich.console import Console
 
+from relaycli.ui.console import slate_console
+
 from relaycli.agent.router import Role, resolve_model, role_enabled
 from relaycli.core.config import PermissionMode, Settings
 from relaycli.core.context import ProjectContext
@@ -1077,7 +1079,7 @@ def serve(
     """Serve the desktop UI until Ctrl-C (loopback by default)."""
     session = WebSession(settings)
     server = _ExclusiveHTTPServer((host, port), make_handler(session, allow_hosts))
-    console = Console()
+    console = slate_console()
     # Read back the actual bound port, not the requested one — `--port 0`
     # (a standard "pick any free port" convention) would otherwise print a
     # useless "http://127.0.0.1:0".
@@ -1090,7 +1092,7 @@ def serve(
     )
     if host not in _LOOPBACK_HOSTS:
         console.print(
-            "[bold yellow]⚠ non-loopback bind:[/bold yellow] anyone who can reach "
+            "[bold yellow]▲ non-loopback bind:[/bold yellow] anyone who can reach "
             "this port controls an agent with YOUR permissions — use only on "
             "trusted networks (or keep the container port mapped to 127.0.0.1)."
         )

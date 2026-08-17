@@ -10,6 +10,8 @@ from rich.markup import escape
 from rich.prompt import Confirm
 from rich.table import Table
 
+from relaycli.ui.console import slate_console
+
 from relaycli.plugins import manager
 from relaycli.plugins.manifest import ManifestError
 
@@ -18,7 +20,7 @@ plugin_app = typer.Typer(
     help="Manage plugins (external hook code).",
     no_args_is_help=True,
 )
-console = Console()
+console = slate_console()
 
 
 @plugin_app.command("list")

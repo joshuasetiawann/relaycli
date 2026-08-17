@@ -23,6 +23,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.syntax import Syntax
 
+from relaycli.ui.console import slate_console
+
 from relaycli.agent import Agent
 from relaycli.core.config import CONFIG_DIR, PermissionMode, Settings, ensure_config_dir
 from relaycli.core.context import ProjectContext
@@ -119,7 +121,7 @@ class Repl:
 
     def __init__(self, settings: Settings, console: Console | None = None) -> None:
         self.settings = settings
-        self.console = console or Console()
+        self.console = console or slate_console()
         self.project = ProjectContext(Path.cwd())
         self.permissions = PermissionManager(settings.permission_mode, console=self.console)
         self._manual_model_selected = False
@@ -271,7 +273,7 @@ class Repl:
 
     def _full_auto_banner(self) -> None:
         self.console.print(
-            "[bold yellow]⚠ full-auto:[/bold yellow] edits and commands run "
+            "[bold yellow]▲ full-auto:[/bold yellow] edits and commands run "
             "without asking."
         )
 
@@ -409,7 +411,7 @@ class Repl:
         fallback = recommended_fast_local_model(self.settings)
         if fallback and fallback != self.settings.model:
             old = self.settings.model
-            self.console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+            self.console.print(f"[yellow]▲ {escape(warning)}[/yellow]")
             self.settings.model = fallback
             try:
                 from relaycli.appconfig import set_base_model
@@ -424,7 +426,7 @@ class Repl:
                 "[dim](requires full GPU / avoids CPU-GPU fallback)[/dim]"
             )
             return True
-        self.console.print(f"[yellow]⚠ {escape(warning)}[/yellow]")
+        self.console.print(f"[yellow]▲ {escape(warning)}[/yellow]")
         return False
 
     def _print_manual_slow_warning_once(self, warning: str) -> None:
@@ -438,7 +440,7 @@ class Repl:
             return
         model = short_model_name(self.settings.model)
         self.console.print(
-            f"[yellow]⚠ {escape(model)} may be slow unless Ollama shows 100% GPU.[/yellow]"
+            f"[yellow]▲ {escape(model)} may be slow unless Ollama shows 100% GPU.[/yellow]"
         )
         self.console.print(
             "[dim]manual model kept; RelayCLI will not auto-switch this choice.[/dim]"

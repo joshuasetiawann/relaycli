@@ -9,6 +9,8 @@ from rich.console import Console
 from rich.markup import escape
 from rich.table import Table
 
+from relaycli.ui.console import slate_console
+
 from relaycli.mcp import (
     PRESETS,
     MCPClient,
@@ -24,7 +26,7 @@ mcp_app = typer.Typer(
     help="Manage MCP connectors (external tool servers).",
     no_args_is_help=True,
 )
-console = Console()
+console = slate_console()
 
 
 @mcp_app.command("list")

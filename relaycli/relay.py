@@ -26,6 +26,8 @@ from pathlib import Path
 
 from rich.console import Console
 
+from relaycli.ui.console import slate_console
+
 from relaycli.agent import Agent, AgentResult, Reporter
 from relaycli.config import Settings, get_settings
 from relaycli.core.context import ProjectContext
@@ -290,7 +292,7 @@ class Relay:
         should_stop=None,
     ) -> None:
         self.settings = settings or get_settings()
-        self.console = console or Console()
+        self.console = console or slate_console()
         self.project = project or ProjectContext(Path.cwd())
         self.permissions = permissions or PermissionManager(
             self.settings.permission_mode, console=self.console
