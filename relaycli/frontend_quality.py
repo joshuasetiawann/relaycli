@@ -280,6 +280,26 @@ def _js_issues(root: Path, html: str, js: str) -> list[str]:
             "attribute on the menu in app.js and style that instead (or use "
             "[aria-expanded=\"true\"] + menu)."
         )
+    # Observed in a browser: `.session` <div>s matched by event.target.classList
+    # — a click on the <h3> inside misses, and a keyboard never reaches them.
+    fragile = sorted({
+        "".join(names)
+        for names in re.findall(
+            r"""\.target\.(?:classList\.contains\(\s*['"]([\w-]+)|matches\(\s*['"]\.([\w-]+))""", js
+        )
+        if re.search(
+            r"""<(?:div|li|article|section|span|p|tr|td)\b[^>]*\bclass\s*=\s*["'](?:[^"']*\s)?"""
+            + re.escape("".join(names)) + r"""(?:\s[^"']*)?["']""",
+            html, re.I,
+        )
+    })
+    if fragile:
+        issues.append(
+            f"app.js picks {', '.join('.' + n for n in fragile[:3])} by checking event.target itself, "
+            "but those items are non-interactive elements: clicks on their inner text miss the check "
+            "and keyboard users cannot reach them. Make each item a <button> and match it with "
+            "event.target.closest()."
+        )
     sends = re.search(r"\bfetch\s*\(|XMLHttpRequest|sendBeacon", js) or re.search(
         r"<form\b[^>]*\baction\s*=", html, re.I
     )

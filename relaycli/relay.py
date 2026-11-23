@@ -585,7 +585,8 @@ class Relay:
             else range(self.settings.max_review_cycles + 1)
         )
         reviewer_has_seen_brief = False
-        previous_bundle: dict[Path, bytes] = {}
+        best_bundle: dict[Path, bytes] = {}
+        best_issues: list[str] = []
         for cycle in review_cycles:
             result.cycles = cycle
 
@@ -606,12 +607,18 @@ class Relay:
                 code_report = code_run.result.final_text
             result.final_text = code_report
 
-            # Observed: a fresh repair coder skipped reading the draft and
-            # rewrote it from scratch, 27 page elements down to 10. The gate
-            # then saw fewer defects only because less page was left. A
-            # revision that more than halves the page is undone instead.
+            # Small local models often report success for a technically valid
+            # but visibly empty template. Catch objective failures before
+            # spending another model call on Reviewer.
+            #
+            # The best draft so far wins. Observed: a fresh repair coder
+            # rewrote the draft from scratch (27 page elements down to 10)
+            # and the gate saw fewer defects only because less page was
+            # left; another rewrote styles.css and lost the focus, motion,
+            # and reduced-motion fixes of the cycle before (4 issues to 6).
             rollback = ""
             bundle_label = "."
+            quality_issues: list[str] = []
             if direct_plan:
                 try:
                     bundle, _ = frontend_bundle_root(self.project, request)
@@ -620,24 +627,30 @@ class Relay:
                 snapshot = _bundle_snapshot(bundle) if bundle is not None else {}
                 if bundle is not None:
                     bundle_label = self.project.relative(bundle)
-                before, after = _structure(previous_bundle), _structure(snapshot)
-                if previous_bundle and after * 2 < before:
-                    for path, data in previous_bundle.items():
-                        path.write_bytes(data)
-                    rollback = (
-                        f"Your last revision rewrote the page and removed most of it ({before} "
-                        f"elements down to {after}), so RelayCLI restored the previous files. "
-                        "Fix the issues with targeted changes instead.\n\n"
+                before, after = _structure(best_bundle), _structure(snapshot)
+                if best_bundle and after * 2 < before:
+                    reason = f"rewrote the page and removed most of it ({before} elements down to {after})"
+                else:
+                    quality_issues = frontend_quality_issues(self.project, request)
+                    # ponytail: issue count is an unweighted score; weigh by severity if it misjudges
+                    reason = (
+                        f"broke things an earlier draft had right ({len(best_issues)} gate issues "
+                        f"up to {len(quality_issues)})"
+                        if best_bundle and len(quality_issues) > len(best_issues) else ""
                     )
-                    observer.notice(f"revision rolled back: page shrank from {before} to {after} elements")
-                    result.notes.append("A destructive frontend revision was rolled back.")
-                    snapshot = previous_bundle
-                previous_bundle = snapshot
+                if reason:
+                    for path, data in best_bundle.items():
+                        path.write_bytes(data)
+                    quality_issues = best_issues
+                    rollback = (
+                        f"Your last revision {reason}, so RelayCLI restored the best earlier "
+                        "draft. Fix the issues with targeted changes instead.\n\n"
+                    )
+                    observer.notice(f"revision rolled back: it {reason}")
+                    result.notes.append("A frontend revision was rolled back to the best earlier draft.")
+                else:
+                    best_bundle, best_issues = snapshot, quality_issues
 
-            # Small local models often report success for a technically valid
-            # but visibly empty template. Catch objective failures before
-            # spending another model call on Reviewer.
-            quality_issues = frontend_quality_issues(self.project, request) if direct_plan else []
             if quality_issues:
                 result.verdict = "revise"
                 # Otherwise the next cycle starts with no visible reason.

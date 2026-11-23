@@ -461,12 +461,41 @@ class TestRelayHappyPath:
         )
 
         assert result.stopped_reason == "done" and result.verdict == "approve"
-        assert "A destructive frontend revision was rolled back." in result.notes
+        assert "A frontend revision was rolled back to the best earlier draft." in result.notes
         assert any(n.startswith("revision rolled back") for n in notices)
-        assert "restored the previous files" in llm.calls[2][-1]["content"]
+        assert "removed most of it" in llm.calls[2][-1]["content"]
         assert "Landing Page/. Read each file" in llm.calls[2][-1]["content"]
         # The third coder reads the restored draft, not the skeleton.
         assert "Welcome to our website." in llm.calls[3][-1]["content"]
+
+    def test_revision_that_rebreaks_fixed_work_is_rolled_back(self, sample_project):
+        # Observed NIGHT COURT run 3: cycle 3 rewrote styles.css and lost the
+        # focus, motion, and reduced-motion fixes of cycle 2 (4 issues to 6).
+        draft = _quality_frontend_calls("Landing Page")
+        args = json.loads(draft[0].arguments)
+        args["content"] = args["content"].replace("</main>", "<p>Welcome to our website.</p></main>")
+        draft[0] = ToolCall(id="draft-index", name="write_file", arguments=json.dumps(args))
+        worse = draft[:2] + [ToolCall(id="worse-js", name="write_file", arguments=json.dumps(
+            {"path": "Landing Page/app.js", "content": "alert('booked')"}))]
+        llm = ScriptedLLM([
+            _resp(tool_calls=draft),
+            _resp(tool_calls=worse),
+            _resp(tool_calls=[ToolCall(id="look", name="read_file",
+                                       arguments=json.dumps({"path": "Landing Page/app.js"}))]),
+            _resp(tool_calls=_quality_frontend_calls("Landing Page")),
+            _resp(text="VERDICT: approve"),
+        ])
+
+        result = _relay(sample_project, llm).run('buat landing page di folder "Landing Page"')
+
+        assert result.stopped_reason == "done" and result.verdict == "approve"
+        assert "A frontend revision was rolled back to the best earlier draft." in result.notes
+        repair = llm.calls[2][-1]["content"]
+        assert "broke things an earlier draft had right (1 gate issues up to" in repair
+        # The next coder sees the restored script, and the gate list is the best draft's.
+        assert "addEventListener" in llm.calls[3][-1]["content"]
+        assert "alert(" not in llm.calls[3][-1]["content"]
+        assert "generic placeholder copy" in repair and "Replace inline onclick" not in repair
 
     def test_simple_folder_request_routes_directly_to_coder(self, sample_project):
         llm = ScriptedLLM([])

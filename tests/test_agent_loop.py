@@ -356,6 +356,27 @@ def test_announced_next_step_after_a_write_is_nudged_not_accepted(sample_project
     assert "did not call a tool" in llm.calls[2][-1]["content"]
 
 
+def test_code_printed_instead_of_written_after_a_write_is_nudged(sample_project):
+    # Observed NIGHT COURT run 3, cycle 4: app.js printed in a fenced block, then
+    # "STOP" and a summary claiming the file was created.
+    root = sample_project / "src"
+    root.mkdir()
+    for name in ("index.html", "styles.css", "app.js"):
+        (root / name).write_text("old", encoding="utf-8")
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("write_file", {"path": "src/styles.css", "content": "main{}"})]),
+        _resp(text="Now, we will create the app.js file.\n```javascript\nmenu.hidden = false;\n```\nSTOP"),
+        _resp(tool_calls=[_tc("write_file", {"path": "src/app.js", "content": "menu.hidden = false;"}, "c2")]),
+        _resp(text="Updated styles.css and app.js."),
+    ])
+
+    result = _build_agent(sample_project, llm).run("buat website tenis responsif")
+
+    assert result.stopped_reason == "done"
+    assert (root / "app.js").read_text(encoding="utf-8") == "menu.hidden = false;"
+    assert "printed code" in llm.calls[2][-1]["content"]
+
+
 def test_announced_next_step_nudge_is_bounded(sample_project):
     llm = FakeLLM([_resp(text="Next, I will write the file.")], loop_last=True)
 

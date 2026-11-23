@@ -344,3 +344,31 @@ def test_quality_gate_reports_a_menu_opened_by_an_attribute_it_never_gets(tmp_pa
     assert "via its own [aria-expanded]" not in " ".join(
         frontend_quality_issues(ProjectContext(tmp_path), "build a site")
     )
+
+
+def test_quality_gate_reports_selectable_divs_matched_on_event_target(tmp_path):
+    # Observed in a browser on NIGHT COURT run 3: clicking a session's <h3> did nothing.
+    (tmp_path / "index.html").write_text(
+        '<div id="session-list"><div class="session" data-session="s1"><h3>Baseline</h3></div></div>'
+        '<p id="booking-summary" aria-live="polite"></p><script src="app.js"></script>', encoding="utf-8",
+    )
+    js = tmp_path / "app.js"
+    js.write_text(
+        "list.addEventListener('click', e => { if (e.target.classList.contains('session')) "
+        "{ out.textContent = e.target.dataset.session; } });", encoding="utf-8",
+    )
+    issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a site"))
+    assert "app.js picks .session by checking event.target itself" in issues
+
+    # closest() on real buttons is the fix and is not flagged.
+    (tmp_path / "index.html").write_text(
+        '<div id="session-list"><button class="session" data-session="s1"><b>Baseline</b></button></div>'
+        '<p id="booking-summary" aria-live="polite"></p><script src="app.js"></script>', encoding="utf-8",
+    )
+    js.write_text(
+        "list.addEventListener('click', e => { const b = e.target.closest('.session'); "
+        "if (b) out.textContent = b.dataset.session; });", encoding="utf-8",
+    )
+    assert "by checking event.target itself" not in " ".join(
+        frontend_quality_issues(ProjectContext(tmp_path), "build a site")
+    )

@@ -190,5 +190,44 @@ The changes are covered by regression tests. The full suite passes (1403
 passed, 8 known skips). Run 2 already had the visible notice, the `<style>`
 and placeholder checks, and the styles.css/app.js instruction. The missing-file
 and menu checks, the read-first wording, the rollback and the announced-step
-nudge came after it. A third run is needed to measure their effect. Horizontal overflow, the menu's actual
-visibility, and visual quality still need a browser; the gate is static.
+nudge came after it. Run 3 measured them.
+
+### Run 3 — `Desktop/relaycli-nightcourt-test-3` (2026-11-23)
+
+Log: `docs/test-logs/nightcourt-local-v3.log`. Same settings as run 2, with
+a temporary keep-awake held only while `relaycli` ran. No standby events,
+33.5 minutes in total. It still ended `review_exhausted` after 5 coder passes,
+but it was the best run of the three.
+
+- Every repair cycle read `index.html` first. None rewrote the page from
+  scratch, so the structure rollback never triggered.
+- The gate's issue count went 6 → 4 → 6 → 6 → 2 and ended at 2: a pinned
+  footer and no visual stage.
+- Regression: cycle 3 rewrote `styles.css` and lost the focus, motion and
+  reduced-motion styles that cycle 2 had fixed. The structure rollback only
+  sees HTML, so it let this through.
+- Cycle 4 printed app.js in a fenced block, wrote "STOP", and claimed the
+  file was created; nothing was written. The announced-step nudge only
+  matched "I will" and the code-block check only ran before the first write.
+- Chromium at 390 px: five sections and a footer, a working mobile menu,
+  honest demo feedback from the membership button and contact form, no dead
+  links, no overflow. Two problems: the footer is `position: fixed`, and the
+  booking summary never updates. Sessions are `<div class="session">`
+  matched by `event.target.classList.contains`, so a click on the inner
+  `<h3>` misses and a keyboard can't reach them.
+
+### RelayCLI changes from run 3
+
+- The best draft wins. A revision that more than halves the page structure,
+  or raises the gate's issue count above the best draft so far, is undone.
+  Relay restores that best draft and tells the next coder which case applied.
+- A reply in a file task that contains an html/css/js code block, or ends
+  with "we will…", gets the same bounded nudge as "Next, I will…".
+- New gate check: items picked by testing `event.target` itself, when those
+  items are non-interactive elements. The fix it asks for is `<button>`
+  plus `closest()`. On run 3's output the gate now reports all three problems
+  the browser found.
+
+The full suite passes (1406 passed, 8 known skips). Horizontal overflow,
+whether the menu is really visible, and overall visual quality still need a
+browser; the gate is static.

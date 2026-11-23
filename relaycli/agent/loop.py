@@ -54,10 +54,13 @@ _TEXT_TOOL_REPAIR_RETRIES = 2
 # A reply that ends by announcing work ("Next, I will create styles.css") has
 # not done it; small local models stop here even after earlier writes.
 _NEXT_STEP_RE = re.compile(
-    r"\b(?:next,?\s+i(?:'ll| will| am going to)|now,?\s+i(?:'ll| will)|i(?:'ll| will) now"
-    r"|let me now|next,?\s+let(?:'s| me))\b",
+    r"\b(?:next,?\s+(?:i|we)(?:'ll| will| am going to| are going to)|now,?\s+(?:i|we)(?:'ll| will)"
+    r"|(?:i|we)(?:'ll| will) now|let me now|next,?\s+let(?:'s| me))\b",
     re.I,
 )
+# Observed: a coder printed app.js in a fenced block, wrote "STOP", and claimed
+# the file was created. Code in the reply of a file task was never written.
+_WEB_CODE_FENCE_RE = re.compile(r"```(?:html|css|javascript|js)\b", re.I)
 _JSON_SELF_CORRECT_RETRIES = 1
 _MISSING = object()
 _NAME_KEYS = ("name", "tool", "tool_name", "function_name", "action")
@@ -466,7 +469,11 @@ class Agent:
                     announced_step = (
                         not actionable_text_noop
                         and next_step_nudges < _TEXT_TOOL_REPAIR_RETRIES
-                        and bool(_NEXT_STEP_RE.search(response.text[-300:]))
+                        and bool(
+                            _NEXT_STEP_RE.search(response.text[-300:])
+                            or (_WEB_CODE_FENCE_RE.search(response.text)
+                                and self._heuristics.looks_like_actionable_file_request(request))
+                        )
                     )
 
             if text_calls:
@@ -526,9 +533,10 @@ class Agent:
                     if announced_step:
                         next_step_nudges += 1
                         self.session.add_user(
-                            "You described a next step but did not call a tool, so it has not "
-                            "happened. Do it now with the available tools. If the task is already "
-                            "complete, reply with a short final report and no further plans."
+                            "You described a next step or printed code but did not call a tool, so "
+                            "nothing was written. Do it now with the available tools (write_file or "
+                            "edit_file for code). If the task is already complete, reply with a "
+                            "short final report and no further plans or code blocks."
                         )
                         continue
                 if self._apply_steer():
