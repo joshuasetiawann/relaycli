@@ -116,3 +116,79 @@ execution. A hook string appearing in `app.js` can still be a false sign of
 working behavior; multiple forms may share one detected submit handler. A
 stronger model or browser-level validation remains necessary for a premium
 frontend verdict.
+
+## NIGHT COURT test (2026-11-19, continued 2026-11-23)
+
+Brief: NIGHT COURT, a fictional evening tennis club; ivory, near-black and
+tennis-ball yellow; hero, story, weekly sessions, membership, contact, footer;
+working mobile menu with `aria-expanded`, an accessible booking summary,
+honest demo feedback, no `alert()` or inline `onclick`. Every run used local
+`qwen2.5-coder:14b`, relay on, `local_scaffolds=false`, and parallel off.
+No website file was edited by hand.
+
+### Run 1 — `Desktop/relaycli-nightcourt-test` (2026-11-19)
+
+The run stopped mid-step in cycle 2; its log ends at 15:38. The log is
+`docs/test-logs/nightcourt-local.log`, and the cycle-1 files are saved in
+`docs/test-logs/nightcourt-cycle1/`. Cycle 2 answered the two issues it was
+given by pasting a ~290-line `<style>` block and about 30 placeholder meta tags
+into `index.html` (`your-google-site-verification-code`, `https://example.com`).
+
+Testing the result in Chromium at 390 px found five defects. The static gate
+already reported three: membership buttons crash on a missing
+`#membership-feedback`, the false "Your message has been sent!", and no focus
+style. It missed two:
+
+- the mobile menu never opens: the toggle flips `aria-expanded`, but the CSS
+  shows `#menu[aria-expanded="true"]`, an attribute the menu never gets;
+- `site.webmanifest`, `apple-touch-icon.png` and two favicons are linked but
+  never written, so every page load 404s.
+
+### Run 2 — `Desktop/relaycli-nightcourt-test-2` (2026-11-23)
+
+Log: `docs/test-logs/nightcourt-local-v2.log`. Capped at four revision cycles.
+It ended `review_exhausted` after 5 coder passes and never reached the
+Reviewer. The gate's issue count fell from 7 to 5, then 4, 3 and 3.
+
+- About 50 of the 86 minutes were lost to Windows Modern Standby
+  (13:37–13:52 and 13:52–14:28). Ollama's token log shows matching gaps.
+  Generation ran at ~3.5 tokens/s while the machine was awake, and the
+  blocking Ollama path printed nothing during the gaps. A sleep, a slow turn
+  and a hang look identical in the terminal.
+- Cycle 2 ran `npx http-server src` as a "check". It never exits, so 120 s
+  were lost to the command timeout.
+- Cycle 3's fresh repair coder never read the draft. It listed the root and
+  rewrote all three files from scratch, cutting the page from 27 structural
+  elements to 10. The gate counted that as progress, because a skeleton has
+  fewer features left to fail.
+- Cycles 4 and 5 each made one small edit, then ended on "Next, I will create
+  the `styles.css` file…" without calling a tool. The agent loop accepted that
+  as a finished turn.
+- Final output: 4 bare sections, no nav, no session buttons, a form whose
+  submit calls `alert()`, and 17 px of horizontal overflow at 390 px.
+
+### RelayCLI changes from these runs
+
+- The gate's rejection list is now shown in the terminal and web UI
+  (`RelayObserver.notice`). Before, a new cycle started with no visible reason.
+- New gate checks: a second `<style>` block pasted next to `styles.css`;
+  placeholder metadata (`your-…`, `example.com`); local `href`/`src` files that
+  do not exist; and a menu opened through its own `[aria-expanded]`, inline or
+  in CSS. Together with the 2026-11-19 checks, the gate now reports every
+  defect the browser found in run 1.
+- The repair prompt names the bundle folder and says to read each file
+  before changing it and keep what the issues don't mention. CSS fixes go in
+  `styles.css` and JavaScript fixes in `app.js`.
+- Rollback: if a revision more than halves the page's structural elements,
+  Relay restores the previous cycle's files byte for byte and tells the next
+  coder why.
+- The agent loop nudges a reply that ends by announcing a next step without
+  a tool call. This works even after earlier writes, and is limited to two
+  nudges per turn.
+
+The changes are covered by regression tests. The full suite passes (1403
+passed, 8 known skips). Run 2 already had the visible notice, the `<style>`
+and placeholder checks, and the styles.css/app.js instruction. The missing-file
+and menu checks, the read-first wording, the rollback and the announced-step
+nudge came after it. A third run is needed to measure their effect. Horizontal overflow, the menu's actual
+visibility, and visual quality still need a browser; the gate is static.

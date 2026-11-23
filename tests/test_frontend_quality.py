@@ -285,3 +285,62 @@ def test_quality_gate_rejects_false_success_claims_without_a_network_path(tmp_pa
     assert "Nothing is sent" not in " ".join(
         frontend_quality_issues(ProjectContext(tmp_path), "build a tennis site")
     )
+
+
+def test_quality_gate_rejects_a_pasted_second_stylesheet_and_placeholder_meta(tmp_path):
+    # Observed NIGHT COURT cycle 2: the coder pasted the whole stylesheet into
+    # index.html and filled the head with template verification codes.
+    inline = "<style>" + ".hero{padding:2rem;color:#111}\n" * 20 + "</style>"
+    (tmp_path / "index.html").write_text(
+        f'<head>{inline}<meta name="google-site-verification" content="your-google-site-verification-code">'
+        '<link rel="canonical" href="https://example.com"></head>', encoding="utf-8",
+    )
+    (tmp_path / "styles.css").write_text(".hero{padding:2rem}", encoding="utf-8")
+    issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a tennis site"))
+    assert "own <style> block" in issues
+    assert "your-google-site-verifica" in issues and "https://example.com" in issues
+
+    # A small inline style and real metadata are fine.
+    (tmp_path / "index.html").write_text(
+        '<head><style>.skip{left:0}</style><link rel="canonical" href="https://nightcourt.club/"></head>',
+        encoding="utf-8",
+    )
+    issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a tennis site"))
+    assert "own <style> block" not in issues and "placeholder metadata" not in issues
+
+
+def test_quality_gate_reports_linked_local_files_that_were_never_written(tmp_path):
+    # Observed NIGHT COURT cycle 2: favicons and a manifest linked, none created.
+    (tmp_path / "index.html").write_text(
+        '<link rel="stylesheet" href="styles.css"><link rel="manifest" href="/site.webmanifest">'
+        '<link rel="icon" href="/favicon-32x32.png?v=2"><a href="#top">Top</a>'
+        '<a href="https://nightcourt.club/">Home</a><a href="mailto:hi@nightcourt.club">Mail</a>'
+        '<a href="/">Root</a><script src="app.js"></script>', encoding="utf-8",
+    )
+    (tmp_path / "styles.css").write_text("body{}", encoding="utf-8")
+    (tmp_path / "app.js").write_text("", encoding="utf-8")
+    issues = [i for i in frontend_quality_issues(ProjectContext(tmp_path), "build a site") if "do not exist, so the browser" in i]
+    assert len(issues) == 1
+    assert "/favicon-32x32.png" in issues[0] and "/site.webmanifest" in issues[0]
+    assert "styles.css" not in issues[0] and "app.js" not in issues[0] and "mailto" not in issues[0]
+
+
+def test_quality_gate_reports_a_menu_opened_by_an_attribute_it_never_gets(tmp_path):
+    # Observed in a browser on NIGHT COURT: aria-expanded flipped, menu stayed hidden.
+    (tmp_path / "index.html").write_text(
+        '<button id="menu-toggle" aria-expanded="false" aria-controls="menu">Menu</button>'
+        '<ul id="menu" class="nav-list" hidden></ul><script src="app.js"></script>', encoding="utf-8",
+    )
+    css = tmp_path / "styles.css"
+    css.write_text('@media (max-width:600px){#menu{display:none}#menu[aria-expanded="true"]{display:flex}}', encoding="utf-8")
+    (tmp_path / "app.js").write_text(
+        "t.addEventListener('click', () => t.setAttribute('aria-expanded', 'true'));", encoding="utf-8",
+    )
+    issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a site"))
+    assert "opens #menu via its own [aria-expanded]" in issues
+
+    # Keying on the toggle's own attribute is correct.
+    css.write_text('#menu{display:none}#menu-toggle[aria-expanded="true"] + #menu{display:flex}', encoding="utf-8")
+    assert "via its own [aria-expanded]" not in " ".join(
+        frontend_quality_issues(ProjectContext(tmp_path), "build a site")
+    )

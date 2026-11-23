@@ -335,6 +335,36 @@ def test_existing_frontend_bundle_does_not_stop_revision_before_a_write(sample_p
     assert (root / "index.html").read_text(encoding="utf-8") == "<main>revised</main>"
 
 
+def test_announced_next_step_after_a_write_is_nudged_not_accepted(sample_project):
+    # Observed NIGHT COURT cycles 4-5: one small edit, then "Next, I will create
+    # the styles.css file…" as plain text, which ended the turn every time.
+    root = sample_project / "src"
+    root.mkdir()
+    for name in ("index.html", "styles.css", "app.js"):
+        (root / name).write_text("old", encoding="utf-8")
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("write_file", {"path": "src/index.html", "content": "<main>new</main>"})]),
+        _resp(text="Next, I will create the `styles.css` file to style the website."),
+        _resp(tool_calls=[_tc("write_file", {"path": "src/styles.css", "content": "main{}"}, "c2")]),
+        _resp(text="Updated index.html and styles.css."),
+    ])
+
+    result = _build_agent(sample_project, llm).run("buat website tenis responsif")
+
+    assert result.stopped_reason == "done"
+    assert (root / "styles.css").read_text(encoding="utf-8") == "main{}"
+    assert "did not call a tool" in llm.calls[2][-1]["content"]
+
+
+def test_announced_next_step_nudge_is_bounded(sample_project):
+    llm = FakeLLM([_resp(text="Next, I will write the file.")], loop_last=True)
+
+    result = _build_agent(sample_project, llm).run("explain how the parser works")
+
+    assert result.stopped_reason == "done"
+    assert len(llm.calls) == 3  # two nudges, then the reply stands
+
+
 def test_existing_frontend_bundle_returns_after_three_file_revision(sample_project):
     root = sample_project / "src"
     root.mkdir()

@@ -196,6 +196,9 @@ class WebObserver:
         self._session.add("role", agent=str(role), model=short_model_name(model),
                           cycle=cycle)
 
+    def notice(self, text: str) -> None:
+        self._session.add("note", text=text)
+
     def reporter_for(self, role) -> WebReporter:
         return WebReporter(self._session, str(role))
 

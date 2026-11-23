@@ -35,11 +35,36 @@ from relaycli.core.context import ProjectContext
 from relaycli.core.llm import LLM, Usage
 from relaycli.core.permissions import PermissionManager
 from relaycli.intent import frontend_creation_request, frontend_destination, simple_folder_request
-from relaycli.frontend_quality import frontend_design_brief, frontend_quality_issues
+from relaycli.frontend_quality import (
+    frontend_bundle_root, frontend_design_brief, frontend_quality_issues,
+)
 from relaycli.appconfig import load_app_config
 from relaycli.core.roster import enabled_specialists, is_assignable, specialist_runtime
 from relaycli.agent.router import Role, resolve_model
 from relaycli.tools import ToolRegistry, default_registry, planner_registry, reviewer_registry
+
+
+_STRUCTURE_RE = re.compile(
+    r"<(?:section|button|a|form|input|select|textarea|nav|header|footer|img|svg|ul|li)\b", re.I
+)
+
+
+def _bundle_snapshot(root: Path) -> dict[Path, bytes]:
+    """The frontend files as bytes, so a restore is exact (newlines included)."""
+    if not root.is_dir():
+        return {}
+    return {
+        p: p.read_bytes() for p in root.iterdir()
+        if p.is_file() and p.suffix in {".html", ".css", ".js"}
+    }
+
+
+def _structure(snapshot: dict[Path, bytes]) -> int:
+    """How much page is there: sections, controls, links, and media in the HTML."""
+    return sum(
+        len(_STRUCTURE_RE.findall(data.decode("utf-8", "replace")))
+        for path, data in snapshot.items() if path.suffix == ".html"
+    )
 
 
 def _coder_registry():
@@ -258,6 +283,8 @@ class RelayObserver:
     """No-op presentation hooks for a relay run. Subclasses render."""
 
     def role_start(self, role: Role, model: str, cycle: int) -> None: ...
+
+    def notice(self, text: str) -> None: ...
 
     def reporter_for(self, role: Role) -> Reporter:
         return Reporter()
@@ -558,6 +585,7 @@ class Relay:
             else range(self.settings.max_review_cycles + 1)
         )
         reviewer_has_seen_brief = False
+        previous_bundle: dict[Path, bytes] = {}
         for cycle in review_cycles:
             result.cycles = cycle
 
@@ -578,12 +606,45 @@ class Relay:
                 code_report = code_run.result.final_text
             result.final_text = code_report
 
+            # Observed: a fresh repair coder skipped reading the draft and
+            # rewrote it from scratch, 27 page elements down to 10. The gate
+            # then saw fewer defects only because less page was left. A
+            # revision that more than halves the page is undone instead.
+            rollback = ""
+            bundle_label = "."
+            if direct_plan:
+                try:
+                    bundle, _ = frontend_bundle_root(self.project, request)
+                except ValueError:
+                    bundle = None
+                snapshot = _bundle_snapshot(bundle) if bundle is not None else {}
+                if bundle is not None:
+                    bundle_label = self.project.relative(bundle)
+                before, after = _structure(previous_bundle), _structure(snapshot)
+                if previous_bundle and after * 2 < before:
+                    for path, data in previous_bundle.items():
+                        path.write_bytes(data)
+                    rollback = (
+                        f"Your last revision rewrote the page and removed most of it ({before} "
+                        f"elements down to {after}), so RelayCLI restored the previous files. "
+                        "Fix the issues with targeted changes instead.\n\n"
+                    )
+                    observer.notice(f"revision rolled back: page shrank from {before} to {after} elements")
+                    result.notes.append("A destructive frontend revision was rolled back.")
+                    snapshot = previous_bundle
+                previous_bundle = snapshot
+
             # Small local models often report success for a technically valid
             # but visibly empty template. Catch objective failures before
             # spending another model call on Reviewer.
             quality_issues = frontend_quality_issues(self.project, request) if direct_plan else []
             if quality_issues:
                 result.verdict = "revise"
+                # Otherwise the next cycle starts with no visible reason.
+                observer.notice(
+                    "quality gate rejected the files:\n"
+                    + "\n".join(f"{i + 1}. {issue}" for i, issue in enumerate(quality_issues))
+                )
                 if cycle == 0:
                     result.notes.append(
                         "Deterministic frontend quality gate rejected the first draft."
@@ -598,9 +659,13 @@ class Relay:
                     )
                     return
                 coder_request = (
-                    f"User request:\n{request}\n\nPlan:\n{plan}\n\n"
-                    "The automated frontend quality gate rejected the current files. "
-                    "Inspect them and address every issue:\n"
+                    f"User request:\n{request}\n\nPlan:\n{plan}\n\n{rollback}"
+                    "The automated frontend quality gate rejected the current files in "
+                    f"{bundle_label}/. Read each file before changing it and keep every section, "
+                    "control, and style the issues do not mention. Address every issue. "
+                    "Put CSS fixes in styles.css and "
+                    "JavaScript fixes in app.js; never paste <style> or <script> blocks into "
+                    "index.html:\n"
                     + "\n".join(f"{i + 1}. {issue}" for i, issue in enumerate(quality_issues))
                 )
                 # Start frontend repair with a clean context. Reusing the
@@ -649,10 +714,8 @@ class Relay:
                     f"{code_report}{tester_report}\n\nRe-review."
                 )
             if direct_plan:
-                from relaycli.frontend_quality import frontend_bundle_root
-
                 bundle, _ = frontend_bundle_root(self.project, request)
-                present = [name for name in ("index.html", "styles.css", "app.js") if (bundle / name).is_file()]
+                present =[name for name in ("index.html", "styles.css", "app.js") if (bundle / name).is_file()]
                 review_request += (
                     "\n\nVerified current frontend files (filesystem check): "
                     + (", ".join(present) or "none")

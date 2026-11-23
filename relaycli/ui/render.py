@@ -470,6 +470,15 @@ class RelayRichObserver:
              GUTTER + _tinted(mode, "accent", role_label(str(role)))
              + "  " + _tinted(mode, "muted", escape(model + cycle_note)))
 
+    def notice(self, text: str) -> None:
+        mode = session_color_mode()
+        head, *rest = text.split("\n")
+        _say(self.console)
+        _say(self.console, GUTTER + _tinted(mode, "warning", "▲ " + escape(head)))
+        for line in rest:
+            for chunk in textwrap.wrap(line, width=max(20, console_width(self.console) - len(BODY_INDENT))):
+                _say(self.console, BODY_INDENT + _tinted(mode, "muted", escape(chunk)))
+
     def reporter_for(self, role: "Role") -> RichReporter:
         reporter = RichReporter(self.console)
         self.reporters.append((str(role), reporter))

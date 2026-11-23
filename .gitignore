@@ -22,3 +22,7 @@ htmlcov/
 
 # RelayCLI local state
 .relaycli/
+
+# Generated locally, not source
+graphify-out/
+.thumbnail

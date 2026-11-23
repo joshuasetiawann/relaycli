@@ -51,6 +51,13 @@ _MODE_DESCRIPTIONS = {
 }
 _EMPTY_RESPONSE_RETRIES = 2
 _TEXT_TOOL_REPAIR_RETRIES = 2
+# A reply that ends by announcing work ("Next, I will create styles.css") has
+# not done it; small local models stop here even after earlier writes.
+_NEXT_STEP_RE = re.compile(
+    r"\b(?:next,?\s+i(?:'ll| will| am going to)|now,?\s+i(?:'ll| will)|i(?:'ll| will) now"
+    r"|let me now|next,?\s+let(?:'s| me))\b",
+    re.I,
+)
 _JSON_SELF_CORRECT_RETRIES = 1
 _MISSING = object()
 _NAME_KEYS = ("name", "tool", "tool_name", "function_name", "action")
@@ -328,6 +335,7 @@ class Agent:
         json_self_corrections = 0
         actionable_noop_repairs = 0
         folder_create_nudges = 0
+        next_step_nudges = 0
         frontend_task = frontend_creation_request(request)
         frontend_bundle_existed = frontend_task and _frontend_bundle_ready(
             self.project, request
@@ -448,11 +456,17 @@ class Agent:
             empty_responses = 0
             fake_text_tool: str | None = None
             actionable_text_noop = False
+            announced_step = False
             if response.text and not active_tool_calls and tool_schemas_sent:
                 fake_text_tool = fake_tool_call_text(response.text, self.registry, self._heuristics)
                 if fake_text_tool is None:
                     actionable_text_noop = _should_retry_actionable_file_task(
                         request, response.text, file_write_successes, self._heuristics,
+                    )
+                    announced_step = (
+                        not actionable_text_noop
+                        and next_step_nudges < _TEXT_TOOL_REPAIR_RETRIES
+                        and bool(_NEXT_STEP_RE.search(response.text[-300:]))
                     )
 
             if text_calls:
@@ -509,6 +523,14 @@ class Agent:
                                        "an explicit request to use write_file.",
                             iterations=i, tool_calls=tool_calls, usage=usage,
                             stopped_reason="error", elapsed=time.perf_counter() - started)
+                    if announced_step:
+                        next_step_nudges += 1
+                        self.session.add_user(
+                            "You described a next step but did not call a tool, so it has not "
+                            "happened. Do it now with the available tools. If the task is already "
+                            "complete, reply with a short final report and no further plans."
+                        )
+                        continue
                 if self._apply_steer():
                     # A note landed while this reply was being written. The
                     # agent is one statement from finishing, which is exactly

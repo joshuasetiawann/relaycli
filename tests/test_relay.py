@@ -406,20 +406,67 @@ class TestRelayHappyPath:
             _resp(text="Verified the actual files.\nVERDICT: approve"),
         ])
 
+        notices: list[str] = []
+
+        class Watch(RelayObserver):
+            def notice(self, text: str) -> None:
+                notices.append(text)
+
         result = _relay(sample_project, llm).run(
-            'buat landing page di folder "Landing Page"'
+            'buat landing page di folder "Landing Page"', observer=Watch()
         )
 
         assert result.stopped_reason == "done"
         assert result.verdict == "approve"
         assert [str(run.role) for run in result.role_runs] == ["coder", "coder", "reviewer"]
         assert any("quality gate rejected" in note for note in result.notes)
+        # The watcher sees why cycle 2 started, not just that it did.
+        assert len(notices) == 1 and "generic placeholder copy" in notices[0]
         assert "generic placeholder copy" in llm.calls[2][-1]["content"]
+        assert "CSS fixes in styles.css" in llm.calls[2][-1]["content"]
         first_review = llm.calls[3][-1]["content"]
         assert 'buat landing page di folder "Landing Page"' in first_review
         assert "Plan:" in first_review
         assert "Re-review" not in first_review
         assert "window.alert" not in (sample_project / "Landing Page" / "app.js").read_text()
+
+    def test_destructive_frontend_revision_is_rolled_back(self, sample_project):
+        # Observed NIGHT COURT run 2: a fresh repair coder rewrote the draft
+        # from scratch, 27 page elements down to 10, and the gate called it progress.
+        draft = _quality_frontend_calls("Landing Page")
+        args = json.loads(draft[0].arguments)
+        args["content"] = args["content"].replace("</main>", "<p>Welcome to our website.</p></main>")
+        draft[0] = ToolCall(id="draft-index", name="write_file", arguments=json.dumps(args))
+        skeleton = [
+            ToolCall(id=f"bare-{n}", name="write_file", arguments=json.dumps(
+                {"path": f"Landing Page/{n}", "content": "<main><p>Night</p></main>" if n == "index.html" else "x"}))
+            for n in ("index.html", "styles.css", "app.js")
+        ]
+        llm = ScriptedLLM([
+            _resp(tool_calls=draft),
+            _resp(tool_calls=skeleton),
+            _resp(tool_calls=[ToolCall(id="look", name="read_file",
+                                       arguments=json.dumps({"path": "Landing Page/index.html"}))]),
+            _resp(tool_calls=_quality_frontend_calls("Landing Page")),
+            _resp(text="VERDICT: approve"),
+        ])
+        notices: list[str] = []
+
+        class Watch(RelayObserver):
+            def notice(self, text: str) -> None:
+                notices.append(text)
+
+        result = _relay(sample_project, llm).run(
+            'buat landing page di folder "Landing Page"', observer=Watch()
+        )
+
+        assert result.stopped_reason == "done" and result.verdict == "approve"
+        assert "A destructive frontend revision was rolled back." in result.notes
+        assert any(n.startswith("revision rolled back") for n in notices)
+        assert "restored the previous files" in llm.calls[2][-1]["content"]
+        assert "Landing Page/. Read each file" in llm.calls[2][-1]["content"]
+        # The third coder reads the restored draft, not the skeleton.
+        assert "Welcome to our website." in llm.calls[3][-1]["content"]
 
     def test_simple_folder_request_routes_directly_to_coder(self, sample_project):
         llm = ScriptedLLM([])

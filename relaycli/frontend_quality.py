@@ -198,6 +198,35 @@ def frontend_quality_issues(
         issues.append("Add a visible keyboard focus style (:focus-visible) for links, buttons, and fields.")
     if re.search(r"""(?:<img\b[^>]*\bsrc|url\()\s*=?\s*['"(]?\s*(?:https?:)?//""", html + css, re.I):
         issues.append("Remove remote images; draw the visual with local CSS/SVG instead.")
+    # Observed twice: a revision pasted a second stylesheet into index.html, which
+    # drifts from styles.css and hides fixes from the checks above.
+    inline_css = "".join(re.findall(r"<style\b[^>]*>(.*?)</style>", html, re.I | re.S))
+    if css.strip() and len(inline_css.strip()) > 300:
+        issues.append(
+            "index.html has its own <style> block next to styles.css; move those rules into "
+            "styles.css and delete the block so the page has one stylesheet."
+        )
+    placeholders = sorted(set(re.findall(
+        r"""(?:content|href)\s*=\s*["']((?:https?://)?(?:www\.)?example\.(?:com|org)[^"']*|your[-_ ][^"']*)""",
+        html, re.I,
+    )))
+    if placeholders:
+        issues.append(
+            "Remove template placeholder metadata and links "
+            f"({', '.join(repr(p[:40]) for p in placeholders[:3])}); leave out any tag you cannot "
+            "fill with a real value."
+        )
+    # Observed: favicons and a web manifest linked but never written, so every load 404s.
+    missing_files = sorted({
+        ref for ref in re.findall(r"""\b(?:href|src)\s*=\s*["']([^"'#?]+)""", html, re.I)
+        if not re.match(r"(?:[a-z][a-z0-9+.-]*:|//)", ref, re.I)
+        and ref.strip("/") and not (root / ref.strip("/")).exists()
+    })
+    if missing_files:
+        issues.append(
+            "index.html references local files that do not exist, so the browser gets 404s: "
+            f"{', '.join(missing_files[:6])}. Create them or remove the references."
+        )
     issues.extend(_broken_control_issues(html, js))
     issues.extend(_js_issues(root, html, js))
     return issues
@@ -232,6 +261,25 @@ def _js_issues(root: Path, html: str, js: str) -> list[str]:
         )
     if "aria-expanded" in html.lower() and "aria-expanded" not in js:
         issues.append("app.js never updates aria-expanded; toggle it when the mobile menu opens and closes.")
+    # Observed in a browser: the toggle flips aria-expanded, but the CSS opens
+    # `#menu[aria-expanded="true"]` — an attribute the menu itself never has.
+    styles = html + "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in root.glob("*.css"))
+    dead_states = sorted({
+        f"{kind}{name}"
+        for kind, name in re.findall(r"([#.])([\w-]+)\[aria-expanded", styles)
+        for tag in re.findall(
+            rf"""<[a-z][^>]*\b{'id' if kind == '#' else 'class'}\s*=\s*["'](?:[^"']*\s)?{re.escape(name)}(?:\s[^"']*)?["'][^>]*>""",
+            html, re.I,
+        )
+        if "aria-expanded" not in tag.lower()
+    })
+    if dead_states:
+        issues.append(
+            f"The CSS opens {', '.join(dead_states[:3])} via its own [aria-expanded], but aria-expanded "
+            "lives on the toggle button, so the menu never appears. Toggle a class or the hidden "
+            "attribute on the menu in app.js and style that instead (or use "
+            "[aria-expanded=\"true\"] + menu)."
+        )
     sends = re.search(r"\bfetch\s*\(|XMLHttpRequest|sendBeacon", js) or re.search(
         r"<form\b[^>]*\baction\s*=", html, re.I
     )
