@@ -228,6 +228,41 @@ but it was the best run of the three.
   plus `closest()`. On run 3's output the gate now reports all three problems
   the browser found.
 
-The full suite passes (1406 passed, 8 known skips). Horizontal overflow,
-whether the menu is really visible, and overall visual quality still need a
-browser; the gate is static.
+The full suite passed at this point (1406 passed, 8 known skips).
+
+### Run 4 — `Desktop/relaycli-nightcourt-test-4` (2026-11-23)
+
+Log: `docs/test-logs/nightcourt-local-v4.log`. Same settings, kept awake, no
+standby, 50 minutes. Ended `review_exhausted` after 5 coder passes.
+
+- The gate's issue count went 4 → 2 → 2 → 2 → 2. Cycle 4's revision would
+  have raised it to 6; the best-draft rollback undid it. Unlike run 3, the
+  page never lost ground.
+- Cycle 5's "Next, I will verify the files…" reply was nudged, and the model
+  went on to edit `index.html`.
+- The last two issues survived four cycles because their messages were
+  vague. For "add a visual stage" the model added an empty
+  `<div class="visual-stage">`. For the false-claim issue, the gate quoted
+  only the fragment "You have", so the model fixed the contact message and
+  left `` `You have booked the ${sessionType} session.` `` as it was.
+- Chromium at 390 px: the best output of the four runs. The mobile menu
+  opens, all five session and membership buttons work, the booking summary
+  updates, the contact form is honest, there are no dead links, and the
+  footer is in normal flow. Two problems remain: the booking claim above,
+  and 49 px of sideways scroll. The cause is
+  `footer { width: 100%; padding: 2rem }` with no `box-sizing: border-box`
+  anywhere.
+
+### RelayCLI changes from run 4
+
+- The false-claim issue now quotes each whole offending string and gives an
+  example of honest wording.
+- The visual-stage issue says what counts: an inline `<svg>` or a CSS
+  background or gradient. An empty container named after a visual does not.
+- New gate check: `width: 100%` (or `100vw`) plus side padding with no
+  `box-sizing: border-box`. It flags runs 2, 3 and 4; runs 2 and 4 are the
+  two that scrolled sideways in the browser.
+
+The full suite passes (1407 passed, 8 known skips). Whether the menu is
+really visible, and overall visual quality, still need a browser; the gate
+is static.

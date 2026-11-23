@@ -191,7 +191,12 @@ def frontend_quality_issues(
         issues.append("Keep the footer in normal document flow instead of pinning it over page content.")
     visual_tokens = ("<img", "<picture", "<video", "<canvas", "<svg", "background-image", "radial-gradient", "linear-gradient")
     if not any(token in style_text for token in visual_tokens):
-        issues.append("Add a subject-specific visual stage instead of shipping a text-only centered stack.")
+        # Run 4 answered the vaguer wording with an empty <div class="visual-stage">.
+        issues.append(
+            "Draw a subject-specific visual instead of a text-only page: an inline <svg> (for "
+            "example court lines) or a CSS background-image or gradient on the hero. An empty "
+            "container named after a visual does not count."
+        )
     if css.strip() and not re.search(r"<link\b[^>]*\.css\b", html, re.I):
         issues.append("Link styles.css from index.html with <link rel=\"stylesheet\">; the CSS never loads.")
     if not re.search(r":focus(?:-visible)?\b", css):
@@ -206,6 +211,23 @@ def frontend_quality_issues(
             "index.html has its own <style> block next to styles.css; move those rules into "
             "styles.css and delete the block so the page has one stylesheet."
         )
+    # Observed in a browser (run 4): `footer { width: 100%; padding: 2rem }` with
+    # no border-box anywhere made the page 49px wider than a phone screen.
+    all_css = re.sub(r"/\*.*?\*/", "", css + "\n" + inline_css, flags=re.S)
+    if not re.search(r"box-sizing\s*:\s*border-box", all_css, re.I):
+        too_wide = sorted({
+            selector.strip()[:40]
+            for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", all_css)
+            if re.search(r"(?<![\w-])width\s*:\s*100(?:%|vw)", body, re.I)
+            and _has_side_padding(body)
+        })
+        if too_wide:
+            issues.append(
+                f"{', '.join(too_wide[:3])} set width: 100% plus side padding without box-sizing: "
+                "border-box, so they are wider than the screen (sideways scroll, or clipped edges "
+                "when fixed). Add "
+                "*, *::before, *::after { box-sizing: border-box; } to styles.css."
+            )
     placeholders = sorted(set(re.findall(
         r"""(?:content|href)\s*=\s*["']((?:https?://)?(?:www\.)?example\.(?:com|org)[^"']*|your[-_ ][^"']*)""",
         html, re.I,
@@ -230,6 +252,16 @@ def frontend_quality_issues(
     issues.extend(_broken_control_issues(html, js))
     issues.extend(_js_issues(root, html, js))
     return issues
+
+
+def _has_side_padding(body: str) -> bool:
+    """True when a declaration block pads the left or right side."""
+    for prop, value in re.findall(r"(?<![\w-])(padding(?:-left|-right|-inline)?)\s*:\s*([^;}]+)", body, re.I):
+        parts = value.replace("!important", "").split()
+        side = parts if prop.lower() != "padding" else parts[1:2] or parts[:1]
+        if any(re.sub(r"[a-z%]+$", "", p.lower()) not in ("0", "0.0", "") for p in side):
+            return True
+    return False
 
 
 def _js_issues(root: Path, html: str, js: str) -> list[str]:
@@ -303,17 +335,18 @@ def _js_issues(root: Path, html: str, js: str) -> list[str]:
     sends = re.search(r"\bfetch\s*\(|XMLHttpRequest|sendBeacon", js) or re.search(
         r"<form\b[^>]*\baction\s*=", html, re.I
     )
+    # Whole strings, not the matched fragment: run 4 was told only 'You have'
+    # and fixed a different message than the one still lying.
     claims = [] if sends else sorted({
-        m.group(0)
+        lit[1][:70]
         for lit in re.findall(r"""(['"`])((?:\\.|(?!\1).)*)\1""", js)
-        if not _HONEST.search(lit[1])
-        for m in _FALSE_SUCCESS.finditer(lit[1])
+        if not _HONEST.search(lit[1]) and _FALSE_SUCCESS.search(lit[1])
     })
     if claims:
         issues.append(
-            "Nothing is sent anywhere, yet the feedback claims it was "
-            f"({', '.join(repr(c) for c in claims[:4])}). Say plainly that this is a demo and "
-            "no data was sent, booked, or charged."
+            "Nothing is sent anywhere, yet these app.js messages claim it was: "
+            f"{', '.join(repr(c) for c in claims[:4])}. Rewrite each one to say it is a demo, "
+            "for example 'Thursday drills selected (demo only, nothing is booked)'."
         )
     return issues
 

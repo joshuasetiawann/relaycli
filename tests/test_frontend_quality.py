@@ -271,7 +271,16 @@ def test_quality_gate_rejects_false_success_claims_without_a_network_path(tmp_pa
         "  plan.textContent = \"Thank you for joining NIGHT COURT!\"; });", encoding="utf-8",
     )
     issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a tennis site"))
-    assert "has been sent" in issues and "Thank you for joining" in issues
+    assert "'Your message has been sent!'" in issues and "'Thank you for joining NIGHT COURT!'" in issues
+
+    # Run 4: the whole lying string is quoted, so the model can find it.
+    js.write_text(
+        "out.textContent = `You have booked the ${sessionType} session.`;\n"
+        "f.textContent = 'Thank you for your message. This is a demo and no data was sent.';", encoding="utf-8",
+    )
+    issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a tennis site"))
+    assert "'You have booked the ${sessionType} session.'" in issues
+    assert "Thank you for your message" not in issues
 
     js.write_text(
         "f.addEventListener('submit', e => { e.preventDefault();\n"
@@ -372,3 +381,22 @@ def test_quality_gate_reports_selectable_divs_matched_on_event_target(tmp_path):
     assert "by checking event.target itself" not in " ".join(
         frontend_quality_issues(ProjectContext(tmp_path), "build a site")
     )
+
+
+def test_quality_gate_reports_full_width_padding_without_border_box(tmp_path):
+    # Observed in a browser on NIGHT COURT run 4: 49px of sideways scroll at 390px.
+    (tmp_path / "index.html").write_text('<link rel="stylesheet" href="styles.css"><footer></footer>', encoding="utf-8")
+    css = tmp_path / "styles.css"
+    css.write_text("/* FOOTER STYLES */\nfooter { padding: 2rem; position: relative; width: 100%; }", encoding="utf-8")
+    issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a site"))
+    assert "footer set width: 100% plus side padding" in issues
+
+    for ok in (
+        "*,*::before,*::after{box-sizing:border-box} footer{padding:2rem;width:100%}",
+        "footer{padding:2rem 0;width:100%} .bar{padding-top:1rem;width:100%}",
+        "footer{padding:2rem;max-width:100%}",
+    ):
+        css.write_text(ok, encoding="utf-8")
+        assert "plus side padding" not in " ".join(
+            frontend_quality_issues(ProjectContext(tmp_path), "build a site")
+        ), ok
