@@ -33,7 +33,12 @@ from rich.markup import escape
 
 from relaycli.tools import Tool, ToolRegistry
 from relaycli.tools.base import ToolContext, ToolResult
-from relaycli.tools.run_command import _scrubbed_env, _short
+from relaycli.tools.run_command import (
+    _kill_process_group,
+    _scrubbed_env,
+    _shell_argv,
+    _short,
+)
 
 _MAX_TAIL_BYTES = 16_384
 
@@ -93,8 +98,10 @@ def run_background(args: BgArgs, ctx: ToolContext) -> ToolResult:
     }
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True  # detach: survives the session
+    elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     try:
-        proc = subprocess.Popen(command, shell=True, **popen_kwargs)
+        proc = subprocess.Popen(_shell_argv(command), **popen_kwargs)
     except OSError as exc:
         os.close(fd)
         return ToolResult.error(
@@ -191,8 +198,8 @@ def stop_process(args: StopArgs, ctx: ToolContext) -> ToolResult:
     try:
         if os.name == "posix":
             os.killpg(os.getpgid(entry.proc.pid), signal.SIGTERM)
-        else:  # pragma: no cover - non-POSIX best effort
-            entry.proc.terminate()
+        else:
+            _kill_process_group(entry.proc)
     except (OSError, ProcessLookupError):
         pass
     try:
@@ -201,8 +208,8 @@ def stop_process(args: StopArgs, ctx: ToolContext) -> ToolResult:
         try:
             if os.name == "posix":
                 os.killpg(os.getpgid(entry.proc.pid), signal.SIGKILL)
-            else:  # pragma: no cover
-                entry.proc.kill()
+            else:  # The first tree kill can race a just-spawned child.
+                _kill_process_group(entry.proc)
         except (OSError, ProcessLookupError):
             pass
         entry.proc.wait()

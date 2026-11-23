@@ -6,6 +6,7 @@ The LLM is always scripted/mocked — no network calls.
 from __future__ import annotations
 
 import io
+import json
 
 from rich.console import Console
 from typer.testing import CliRunner
@@ -14,7 +15,7 @@ import relaycli.cli as cli_module
 from relaycli.agent import Agent
 from relaycli.config import PermissionMode, Settings
 from relaycli.core.context import ProjectContext
-from relaycli.core.llm import LLMError, LLMResponse, Usage
+from relaycli.core.llm import LLMError, LLMResponse, ToolCall, Usage
 from relaycli.core.permissions import PermissionManager
 from relaycli.relay import Relay, RelayObserver, RelayResult, parse_verdict
 from relaycli.ui.render import RelayRichObserver, render_relay_summary
@@ -84,6 +85,35 @@ def _console() -> Console:
     return Console(file=io.StringIO(), force_terminal=False, width=100)
 
 
+def _quality_frontend_calls(folder: str = "Toko") -> list[ToolCall]:
+    html = """<!doctype html><html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Aira mineral alami untuk hidrasi harian.">
+<title>Aira — mineral alami</title><link rel="stylesheet" href="styles.css"></head>
+<body><header><nav aria-label="Utama"><a href="#story">Cerita sumber</a></nav></header>
+<main><section class="hero"><h1>Air yang menempuh perjalanan panjang.</h1><p>Aira menjaga rasa mineral dari mata air pegunungan.</p></section>
+<section id="story"><h2>Dari batuan vulkanik</h2><p>Aliran alami membentuk karakter rasa yang ringan.</p></section>
+<section><h2>Diperiksa setiap empat jam</h2><p>Tim mutu memantau sumber hingga pengisian botol.</p></section>
+<section><h2>Bawa kesegaran ke meja Anda</h2><button id="source">Lihat perjalanan air</button><p id="detail" hidden>Perjalanan dimulai di lereng.</p></section></main>
+<footer><p>Aira Mineral · Jawa Barat</p></footer><script src="app.js"></script></body></html>"""
+    css = """:root{--ink:#102522;--paper:#eef5ef;--accent:#176c61}*{box-sizing:border-box}
+body{margin:0;background:linear-gradient(135deg,var(--paper),#dceae4);color:var(--ink);font-family:Georgia,serif}
+nav,main,footer{width:min(72rem,calc(100% - 2rem));margin-inline:auto}nav{padding:1.5rem 0}
+.hero{min-height:70dvh;display:grid;align-content:center;max-width:52rem}h1{font-size:clamp(3rem,9vw,8rem);line-height:.9;text-wrap:balance}
+section{padding:5rem 0;border-top:1px solid color-mix(in srgb,var(--ink) 18%,transparent)}
+button{border:0;background:var(--accent);color:white;padding:1rem 1.4rem;transition:transform .24s ease,background .24s ease}
+button:hover{transform:translateY(-3px)}button:focus-visible{outline:3px solid #e19b54;outline-offset:4px}
+footer{padding:3rem 0 5rem}@media(max-width:40rem){section{padding:3rem 0}.hero{min-height:60dvh}}
+@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}"""
+    js = """const button=document.querySelector('#source');const detail=document.querySelector('#detail');
+button.addEventListener('click',()=>{detail.hidden=!detail.hidden;button.setAttribute('aria-expanded',String(!detail.hidden));});"""
+    return [
+        ToolCall(id="write-index", name="write_file", arguments=json.dumps({"path": f"{folder}/index.html", "content": html})),
+        ToolCall(id="write-css", name="write_file", arguments=json.dumps({"path": f"{folder}/styles.css", "content": css})),
+        ToolCall(id="write-js", name="write_file", arguments=json.dumps({"path": f"{folder}/app.js", "content": js})),
+    ]
+
+
 class TestRouter:
     def test_roles_in_pipeline_order(self):
         assert [r.value for r in Role] == [
@@ -131,7 +161,7 @@ class TestRelayConfig:
         assert s.planner_model is None
         assert s.coder_model is None
         assert s.reviewer_model is None
-        assert s.max_review_cycles == 2
+        assert s.max_review_cycles is None
 
     def test_env_loading(self, monkeypatch, tmp_path):
         monkeypatch.chdir(tmp_path)  # dodge any repo-local .env
@@ -333,6 +363,76 @@ class TestParseVerdict:
 
 
 class TestRelayHappyPath:
+    def test_frontend_without_folder_also_skips_planner(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(tool_calls=_quality_frontend_calls(".")),
+            _resp(text="VERDICT: approve"),
+        ])
+
+        result = _relay(sample_project, llm).run(
+            "buat website booking lapangan tenis merah putih yang responsif"
+        )
+
+        assert result.stopped_reason == "done"
+        assert [str(r.role) for r in result.role_runs] == ["coder", "reviewer"]
+        assert "Verified current frontend files" in llm.calls[1][-1]["content"]
+
+    def test_concrete_frontend_skips_planner_and_disables_question_schema(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(tool_calls=_quality_frontend_calls()),
+            _resp(text="VERDICT: approve"),
+        ])
+        result = _relay(sample_project, llm).run(
+            'buatin website iklan mineral water di folder "Toko"'
+        )
+
+        assert result.stopped_reason == "done"
+        assert [str(r.role) for r in result.role_runs] == ["coder", "reviewer"]
+        assert any("Planner skipped" in note for note in result.notes)
+        assert "do not ask preference questions" in llm.calls[0][-1]["content"]
+        assert "not a storefront" in llm.calls[0][-1]["content"]
+
+    def test_concrete_frontend_quality_gate_forces_revision_before_review(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(tool_calls=[ToolCall(
+                id="thin-index", name="write_file",
+                arguments=json.dumps({
+                    "path": "Landing Page/index.html",
+                    "content": "<h1>Welcome to Our Website</h1><button>Get Started</button>",
+                }),
+            )]),
+            _resp(text="Finished the landing page."),
+            _resp(tool_calls=_quality_frontend_calls("Landing Page")),
+            _resp(text="Verified the actual files.\nVERDICT: approve"),
+        ])
+
+        result = _relay(sample_project, llm).run(
+            'buat landing page di folder "Landing Page"'
+        )
+
+        assert result.stopped_reason == "done"
+        assert result.verdict == "approve"
+        assert [str(run.role) for run in result.role_runs] == ["coder", "coder", "reviewer"]
+        assert any("quality gate rejected" in note for note in result.notes)
+        assert "generic placeholder copy" in llm.calls[2][-1]["content"]
+        first_review = llm.calls[3][-1]["content"]
+        assert 'buat landing page di folder "Landing Page"' in first_review
+        assert "Plan:" in first_review
+        assert "Re-review" not in first_review
+        assert "window.alert" not in (sample_project / "Landing Page" / "app.js").read_text()
+
+    def test_simple_folder_request_routes_directly_to_coder(self, sample_project):
+        llm = ScriptedLLM([])
+        result = _relay(sample_project, llm).run('buat kan folder "alku"')
+
+        assert result.stopped_reason == "done"
+        assert result.verdict == "approve"
+        assert result.usage.total_tokens == 0
+        assert [str(r.role) for r in result.role_runs] == ["coder"]
+        assert result.role_runs[0].result.tool_calls == 1
+        assert llm.calls == []
+        assert (sample_project / "alku").is_dir()
+
     def test_plan_code_review_approve(self, sample_project):
         llm = ScriptedLLM([
             _resp(text="1. Edit app.py\n2. Run tests"),        # planner
@@ -420,6 +520,21 @@ class TestRelayReflection:
         second_coder_call = llm.calls[3]
         assert any("v1 report" in (m.get("content") or "") for m in second_coder_call)
         assert "fix the name" in second_coder_call[-1]["content"]
+
+    def test_default_revision_cycles_continue_until_approved(self, sample_project):
+        llm = ScriptedLLM([
+            _resp(text="plan"),
+            _resp(text="v1"), _resp(text="VERDICT: revise\n1. fix"),
+            _resp(text="v2"), _resp(text="VERDICT: revise\n1. fix"),
+            _resp(text="v3"), _resp(text="VERDICT: revise\n1. fix"),
+            _resp(text="v4"), _resp(text="VERDICT: approve"),
+        ])
+
+        result = _relay(sample_project, llm).run("req")
+
+        assert result.stopped_reason == "done"
+        assert result.cycles == 3
+        assert result.final_text == "v4"
 
     def test_review_exhausted(self, sample_project):
         llm = ScriptedLLM([
@@ -599,6 +714,47 @@ class TestRelayRendering:
 
 
 class TestCliRelayFlag:
+    def test_one_shot_keeps_strong_model_for_file_changing_task(
+        self, sample_project, monkeypatch
+    ):
+        monkeypatch.chdir(sample_project)
+        calls: dict = {}
+
+        class FakeRelay:
+            def __init__(self, settings, **kw):
+                calls["model"] = settings.model
+
+            def run(self, request, *, observer=None):
+                return RelayResult(final_text="ok", stopped_reason="done", cycles=0)
+
+        monkeypatch.setattr(
+            cli_module,
+            "get_settings",
+            lambda: _settings(
+                model="ollama_chat/qwen2.5-coder:14b",
+                relay_enabled=True,
+                experimental_parallel=False,
+            ),
+        )
+        monkeypatch.setattr(
+            "relaycli.ollama_runtime.slow_local_model_warning",
+            lambda model: "partial GPU",
+        )
+        monkeypatch.setattr(
+            "relaycli.ollama_runtime.recommended_fast_local_model",
+            lambda settings: "ollama_chat/qwen2.5-coder:1.5b",
+        )
+        monkeypatch.setattr("relaycli.relay.Relay", FakeRelay)
+
+        result = CliRunner().invoke(
+            cli_module.app,
+            ["-p", 'buat website di folder "proof"', "--relay", "-y"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert calls["model"] == "ollama_chat/qwen2.5-coder:14b"
+        assert "Selected model kept" in result.output
+
     def test_one_shot_uses_relay_when_flagged(self, sample_project, monkeypatch):
         monkeypatch.chdir(sample_project)
         calls: dict = {}
@@ -620,6 +776,35 @@ class TestCliRelayFlag:
         result = CliRunner().invoke(cli_module.app, ["-p", "fix app", "--relay", "-y"])
         assert result.exit_code == 0, result.output
         assert calls == {"enabled": True, "request": "fix app"}
+
+    def test_one_shot_relay_returns_failure_when_work_is_incomplete(
+        self, sample_project, monkeypatch
+    ):
+        monkeypatch.chdir(sample_project)
+
+        class FakeRelay:
+            def __init__(self, settings, **kw):
+                pass
+
+            def run(self, request, *, observer=None):
+                return RelayResult(
+                    final_text="Stopped after the maximum iterations.",
+                    stopped_reason="max_iterations",
+                    cycles=1,
+                )
+
+        monkeypatch.setattr(
+            cli_module,
+            "get_settings",
+            lambda: _settings(model="fake/m", experimental_parallel=False),
+        )
+        monkeypatch.setattr("relaycli.relay.Relay", FakeRelay)
+
+        result = CliRunner().invoke(
+            cli_module.app, ["-p", "fix app", "--relay", "-y"]
+        )
+
+        assert result.exit_code == 1
 
     def test_one_shot_without_flag_uses_single_agent(self, sample_project, monkeypatch):
         monkeypatch.chdir(sample_project)

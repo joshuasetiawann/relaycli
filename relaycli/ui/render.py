@@ -18,6 +18,7 @@ from rich.markup import escape
 from rich.syntax import Syntax
 
 from relaycli.ui import theme
+from relaycli.ui.console import console_width
 
 if TYPE_CHECKING:  # avoid an import cycle (agent -> tools -> render -> agent)
     from pathlib import Path
@@ -197,7 +198,7 @@ def _transcript_layout(console: Console):
     """
     from relaycli.ui.layout import MINIMUM_WIDTH, resolve_columns
 
-    width = max(console.width, MINIMUM_WIDTH)
+    width = max(console_width(console), MINIMUM_WIDTH)
     return width, resolve_columns(width)
 
 
@@ -533,6 +534,7 @@ def render_slash_guide(console: Console) -> None:
         ("/model", "switch the model"),
         ("/mode", "suggest | auto-edit | full-auto"),
         ("/agents", "relay roles and task-split specialists"),
+        ("/tools", "registered tools and capabilities"),
         ("/services", "optional Docker services"),
         ("/doctor", "health check"),
         ("/desktop", "browser UI"),
@@ -598,7 +600,7 @@ def render_session_bar(
     from relaycli.ui import frame, gitinfo
     from relaycli.ui.layout import MINIMUM_WIDTH, resolve_columns
 
-    width = max(console.width, MINIMUM_WIDTH)
+    width = max(console_width(console), MINIMUM_WIDTH)
     columns = resolve_columns(width)
     mode = session_color_mode()
     repo = gitinfo.status(root)
@@ -782,7 +784,7 @@ def render_screen_heading(console: Console, title: str, subtitle: str = "") -> N
     answer — the permission band and an inline diff.
     """
     mode = session_color_mode()
-    rail = theme.MARKERS["focus_rail"]
+    rail = theme.MARKERS["brand_rail"]
     palette = theme.palette_for(mode)
     line = GUTTER + _tinted(mode, "accent",
                             f"[bold]{rail.symbol if palette else rail.ascii}relaycli[/bold]")
@@ -799,7 +801,7 @@ def _render_rule(console: Console) -> None:
     from relaycli.ui import frame
     from relaycli.ui.layout import MINIMUM_WIDTH, resolve_columns
 
-    width = max(console.width, MINIMUM_WIDTH)
+    width = max(console_width(console), MINIMUM_WIDTH)
     console.print(frame.render_rule(resolve_columns(width), session_color_mode(), width))
 
 
@@ -850,6 +852,7 @@ def render_help(console: Console) -> None:
         ("/skill [name]", "toggle a skill for this session (tdd, debug, ponytail, …)"),
         ("/skill auto [on|off]", "toggle per-request skill auto-activation"),
         ("/skills", "list available skills and where they come from"),
+        ("/tools", "list registered native/MCP tools"),
         ("/memory", "show long-term memory (global + project)"),
         ("/mcp", "show MCP connectors and their tools"),
         ("/desktop", "open the desktop web UI in your browser"),

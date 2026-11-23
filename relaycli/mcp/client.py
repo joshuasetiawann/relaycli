@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import threading
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from relaycli import __version__
@@ -43,6 +45,49 @@ def _resolve_env_ref(value: str) -> str:
     return os.environ.get(value[4:], "") if value.startswith("env:") else value
 
 
+def _server_env(config: MCPServerConfig) -> dict[str, str]:
+    """Minimal inherited environment plus explicitly requested MCP secrets."""
+    env = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().endswith("_API_KEY")
+    }
+    for key, value in config.env.items():
+        env[key] = _resolve_env_ref(value)
+    return env
+
+
+def _stop_process_tree(proc: subprocess.Popen) -> None:
+    """Stop an MCP server and every descendant it launched."""
+    try:
+        if os.name == "posix":
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        else:
+            system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            taskkill = system_root / "System32" / "taskkill.exe"
+            if taskkill.is_file():
+                subprocess.run(
+                    [str(taskkill), "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=10, check=False,
+                )
+            elif proc.poll() is None:
+                proc.terminate()
+    except (OSError, ProcessLookupError, subprocess.SubprocessError):
+        if proc.poll() is None:
+            proc.kill()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            if os.name == "posix":
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            else:
+                proc.kill()
+        except (OSError, ProcessLookupError):
+            pass
+        proc.wait()
+
+
 class MCPClient:
     def __init__(self, config: MCPServerConfig) -> None:
         self.config = config
@@ -58,11 +103,20 @@ class MCPClient:
 
     def start(self) -> None:
         command = [_resolve_env_ref(part) for part in self.config.command]
-        env = dict(os.environ)
-        for key, value in self.config.env.items():
-            env[key] = _resolve_env_ref(value)
+        popen_kwargs: dict[str, Any] = {
+            "stdin": subprocess.PIPE,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "env": _server_env(self.config),
+            "text": True,
+            "bufsize": 1,
+        }
+        if os.name == "posix":
+            popen_kwargs["start_new_session"] = True
+        elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         try:
-            self.proc = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, text=True, bufsize=1)
+            self.proc = subprocess.Popen(command, **popen_kwargs)
         except OSError as exc:
             raise MCPError(f"could not start '{command[0]}': {exc}") from exc
         threading.Thread(target=self._read_stdout, daemon=True).start()
@@ -79,14 +133,7 @@ class MCPClient:
         if proc is None:
             return
         self.proc = None
-        try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        except OSError:
-            pass
+        _stop_process_tree(proc)
 
     @property
     def alive(self) -> bool:

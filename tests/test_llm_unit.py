@@ -26,6 +26,20 @@ class _Args(BaseModel):
     label: str = "hi"
 
 
+@pytest.mark.parametrize("limit", [None, 2048])
+@pytest.mark.parametrize("model", ["openrouter/anthropic/claude-sonnet-5.5", "ollama_chat/qwen2.5-coder:14b"])
+def test_configured_output_limit_reaches_provider(monkeypatch, limit, model):
+    from relaycli.core.config import Settings
+
+    llm = LLM(Settings(_env_file=None, max_output_tokens=limit))
+    monkeypatch.setattr(llm, "_credential_kwargs", lambda model: {})
+    args = llm._build_call_args([{"role": "user", "content": "hello"}], None, model, None)
+    if limit is None:
+        assert "max_tokens" not in args
+    else:
+        assert args["max_tokens"] == limit
+
+
 def _echo(args: _Args, ctx=None) -> str:
     return f"{args.label}:{args.x}"
 
@@ -70,6 +84,21 @@ def test_tool_malformed_json_raises_toolerror():
 def test_resolve_arguments(frags, expected):
     out = _resolve_arguments(frags)
     assert json.loads(out) == json.loads(expected)
+
+
+@pytest.mark.parametrize("fragment", ["2048", '"text"', "null", "[]"])
+def test_truncated_tool_arguments_preserve_all_fragments(fragment):
+    fragments = ['{"path":"index.html","content":"', fragment, '<main>']
+    assert _resolve_arguments(fragments) == "".join(fragments)
+
+
+@pytest.mark.parametrize("reason", ["length", "max_tokens", "error", "content_filter"])
+def test_incomplete_provider_response_never_reaches_tools(reason):
+    with pytest.raises(LLMError, match="no incomplete tool calls were executed"):
+        LLM._require_complete(LLMResponse(
+            text="", tool_calls=[ToolCall(id="c1", name="write_file", arguments="{}")],
+            finish_reason=reason,
+        ))
 
 
 def test_to_assistant_message_roundtrip():
@@ -151,6 +180,37 @@ def test_credential_kwargs_ollama_uses_base_url():
     assert kwargs == {"api_base": "http://localhost:11434"}
 
 
+def test_ollama_call_uses_configured_context_window():
+    from relaycli.config import Settings
+
+    llm = LLM(Settings(_env_file=None, ollama_num_ctx=16384))
+    args = llm._build_call_args([], None, "ollama_chat/qwen2.5-coder:14b", None)
+
+    assert args["num_ctx"] == 16384
+    assert args["timeout"] > 2_000_000
+
+
+def test_ollama_ui_callback_uses_bounded_blocking_call(monkeypatch):
+    from relaycli.config import Settings
+
+    llm = LLM(Settings(_env_file=None))
+    response = LLMResponse(text="selesai")
+    seen: list[str] = []
+    monkeypatch.setattr(llm, "_complete_blocking", lambda call_args, model: response)
+    monkeypatch.setattr(
+        llm,
+        "_complete_streaming",
+        lambda *args, **kwargs: pytest.fail("Ollama agent call must not stream"),
+    )
+
+    result = llm.complete(
+        [], model="ollama_chat/qwen2.5-coder:7b", on_token=seen.append
+    )
+
+    assert result is response
+    assert seen == ["selesai"]
+
+
 def test_credential_kwargs_unknown_model_raises():
     from relaycli.config import Settings
 
@@ -204,6 +264,37 @@ def test_wrap_error_ollama_unreachable_gives_actionable_hint():
     ))
     assert "ollama serve" in msg
     assert "localhost:11434" in msg
+
+
+def test_wrap_error_ollama_timeout_does_not_claim_server_is_down():
+    from relaycli.config import Settings
+
+    llm = LLM(Settings(_env_file=None, llm_timeout=45))
+    msg = str(llm._wrap_error(
+        TimeoutError("Connection timed out after 45 seconds"),
+        "ollama_chat/qwen2.5-coder:14b",
+    ))
+
+    assert "did not finish the request" in msg
+    assert "ollama ps" in msg
+    assert "start it with: ollama serve" not in msg
+
+
+def test_wrap_error_ollama_missing_model_does_not_claim_server_is_down():
+    from relaycli.config import Settings
+
+    class APIConnectionError(Exception):
+        pass
+
+    llm = LLM(Settings(_env_file=None, ollama_base_url="http://localhost:11434"))
+    msg = str(llm._wrap_error(
+        APIConnectionError(
+            'Ollama_chatException - {"error":"model \'missing:latest\' not found"}'
+        ),
+        "ollama_chat/missing:latest",
+    ))
+    assert "ollama pull missing:latest" in msg
+    assert "isn't reachable" not in msg
 
 
 def test_wrap_error_non_ollama_connection_error_unchanged():

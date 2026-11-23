@@ -35,6 +35,13 @@ def _console_width_means_console_width(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_color_environment(monkeypatch):
+    """Host colour preferences must not change deterministic UI tests."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _no_ambient_mcp_servers(monkeypatch):
     """Never let a developer's real [mcp] config spawn server processes in
     tests. MCP tests build their own MCPServerConfig / stub this back."""

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
+import sys
 
 import pytest
 from rich.console import Console
@@ -50,6 +52,19 @@ def test_slash_model_switches_model():
     assert repl._handle_slash("/model gpt-4o") is False
     assert repl.settings.model == "gpt-4o"
     assert repl.agent.session.model == "gpt-4o"
+
+
+def test_slash_model_normalizes_installed_ollama_tag(monkeypatch):
+    import relaycli.core.llm as llm
+
+    monkeypatch.setattr(
+        llm, "ollama_models", lambda settings, timeout=0.8: ["qwen2.5-coder:14b"]
+    )
+    repl, console = _repl(model="ollama_chat/qwen2.5-coder:1.5b")
+
+    assert repl._handle_slash("/model qwen2.5-coder:14b") is False
+    assert repl.settings.model == "ollama_chat/qwen2.5-coder:14b"
+    assert "model → ollama_chat/qwen2.5-coder:14b" in _out(console)
 
 
 def test_slash_model_warns_for_slow_local_model(monkeypatch):
@@ -288,11 +303,29 @@ def test_repl_frontend_fashion_shop_scaffold_respects_quoted_folder_and_dark_ton
     html = (tmp_path / "toko baju" / "index.html").read_text(encoding="utf-8")
     css = (tmp_path / "toko baju" / "styles.css").read_text(encoding="utf-8")
     app_js = (tmp_path / "toko baju" / "app.js").read_text(encoding="utf-8")
-    assert 'class="theme-dark"' in html
+    assert 'class="theme-dark layout-fashion"' in html
     assert "Baju harian" in html
     assert "Everyday Cotton Tee" in app_js
     assert "Aero Street Runner" not in html + app_js
     assert ".theme-dark" in css
+    assert "created" in _out(console)
+
+
+def test_repl_mineral_water_scaffold_is_local_and_interactive(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    repl, console = _repl(mode=PermissionMode.full_auto, local_scaffolds=True)
+    calls = []
+    monkeypatch.setattr(repl, "_run_agent", lambda request: calls.append(request))
+
+    assert repl._handle_line('buatin website iklan mineral water di folder "Toko"') is False
+
+    html = (tmp_path / "Toko" / "index.html").read_text(encoding="utf-8")
+    app_js = (tmp_path / "Toko" / "app.js").read_text(encoding="utf-8")
+    assert calls == []
+    assert "AQUAVERA" in html
+    assert "Hening." in html
+    assert "profile-tab" in html
+    assert "addEventListener" in app_js
     assert "created" in _out(console)
 
 
@@ -329,6 +362,18 @@ def test_slash_help_lists_commands():
     text = _out(console)
     assert "/model" in text and "/mode" in text and "/diff" in text
     assert "/setup" in text and "/services" in text and "/doctor" in text
+    assert "/tools" in text
+
+
+def test_slash_tools_lists_the_registered_registry():
+    repl, console = _repl()
+
+    repl._handle_slash("/tools")
+
+    text = _out(console)
+    assert "write_file" in text
+    assert "apply_patch" in text
+    assert f"{len(repl.agent.registry.tools())} registered" in text
 
 
 def test_slash_palette_and_unknown_suggestion():
@@ -858,7 +903,11 @@ def test_bang_binary_output_does_not_crash_repl():
     # A strict UTF-8 decode of !cmd output would raise UnicodeDecodeError
     # out of the REPL loop, killing the session.
     repl, console = _hermetic_repl(model="gpt-4o-mini")
-    assert repl._handle_line("!printf '\\xff\\xfebinary\\n'") is False
+    command = (
+        f'!"{sys.executable}" -c "import sys;'
+        "sys.stdout.buffer.write(bytes((255,254))+b'binary\\n')\""
+    )
+    assert repl._handle_line(command) is False
     assert "exit 0" in _out(console)
 
 
@@ -1247,6 +1296,21 @@ def test_slow_local_model_warning_for_mixed_cpu_gpu_model(monkeypatch):
 
     assert warning is not None
     assert "partially offloading" in warning
+
+
+def test_ollama_processor_uses_bounded_http_status(monkeypatch):
+    import relaycli.ollama_runtime as runtime
+
+    payload = json.dumps({
+        "models": [{
+            "name": "qwen2.5-coder:14b",
+            "size": 1000,
+            "size_vram": 620,
+        }]
+    }).encode()
+    monkeypatch.setattr(runtime, "urlopen", lambda url, timeout: io.BytesIO(payload))
+
+    assert runtime._ollama_processor("qwen2.5-coder:14b", timeout=0.4) == "38%/62% CPU/GPU"
 
 
 def test_slow_local_model_warning_requires_verified_full_gpu_for_large_model(monkeypatch):

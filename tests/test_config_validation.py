@@ -55,6 +55,13 @@ def test_short_but_realistic_placeholder_key_accepted():
     assert _hermetic(ANTHROPIC_API_KEY="sk-ant").anthropic_api_key == "sk-ant"
 
 
+def test_settings_repr_never_exposes_api_keys():
+    secret = "sk-sensitive-regression-value"
+    settings = _hermetic(OPENAI_API_KEY=secret)
+    assert settings.openai_api_key == secret
+    assert secret not in repr(settings)
+
+
 # -- pre-existing numeric bounds (regression guard, not new validators) -----
 def test_temperature_out_of_range_rejected():
     with pytest.raises(ValidationError):
@@ -69,3 +76,8 @@ def test_max_iterations_below_one_rejected():
 def test_token_budget_below_floor_rejected():
     with pytest.raises(ValidationError):
         _hermetic(token_budget=100)
+
+
+def test_ollama_context_below_floor_rejected():
+    with pytest.raises(ValidationError):
+        _hermetic(ollama_num_ctx=1024)

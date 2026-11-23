@@ -1,4 +1,30 @@
-# RelayCLI — Security & Correctness Audit (Prompt 7)
+# RelayCLI — Security & Correctness Audits
+
+## 2026-08-21 autonomous hardening addendum
+
+The production-readiness audit in `docs/AUDIT_2026-08-21.md` extended the
+original Prompt 7 review. The additional fixes include:
+
+- patch paths are validated before both the system `patch` command and the
+  Python fallback; traversal and fixed-name temporary-file attacks are blocked;
+- `webfetch` rejects non-public, non-HTTP, credential-bearing, and unsafe
+  redirect targets, with a 1 MiB response cap;
+- the desktop HTTP API has bounded request bodies, typed JSON objects, robust
+  cursor parsing, CSP/nosniff/no-store headers, and bounded event retention;
+- Windows command timeout/stop kills the complete child tree, and shell
+  commands use an explicit shell argv rather than `shell=True` lookup;
+- MCP shutdown kills descendant processes and does not inherit provider API
+  keys unless the server configuration explicitly maps them;
+- secrets are excluded from Settings/AppConfig repr output, while project
+  `.env` files cannot enable or redirect 9Router;
+- vulnerable runtime dependencies were upgraded, the transitive resolution is
+  committed in `uv.lock`, and `pip-audit` reports no known vulnerabilities.
+
+The remaining trust boundaries are explicit: installed plugins execute as
+trusted Python; `full-auto` permits commands by design; non-loopback desktop
+binding has no authentication and emits a prominent warning.
+
+## Historical Prompt 7 audit
 
 Adversarial audit of the whole codebase, reviewed as a tool that edits real
 files and runs shell commands on a user's machine. Findings were produced
@@ -130,20 +156,20 @@ the budget is enforced even when there is a single user turn.
 
 ## Accepted by design
 
-- **`run_command` uses `shell=True` and, in full-auto, runs without prompts.**
+- **`run_command` executes shell-language commands and, in full-auto, runs without prompts.**
   This is the tool's advertised function (running `pytest`, builds, etc.), and
   full-auto is an explicit, banner-signposted user opt-in. The residual risk is
   materially reduced by the fixes above: full-auto can no longer be entered
   silently (H3), provider keys are scrubbed from commands (M3), and every
-  command preview is now truthful (H2). We intentionally did **not** change
-  full-auto's documented "never prompt" contract.
+  command preview is now truthful (H2). Commands now use an explicit shell argv
+  rather than `shell=True`; this does not change full-auto's documented "never
+  prompt" contract.
 
-- **Dependency hygiene (3 plausible items).** No lockfile/hashes for the
-  transitive closure, a pre-1.0 transitive dep (`annotated-doc`), and an
-  unbounded `requires-python`. Verification concluded none is a concretely
-  exploitable defect: a repo-committed lockfile does not affect `pip install`
-  from PyPI, and an upper `requires-python` bound is against PyPA guidance. The
-  7 direct deps are already `==`-pinned. Left as-is by deliberate decision.
+- **Dependency hygiene.** Direct runtime dependencies are exactly pinned and
+  `uv.lock` now freezes the transitive resolution used for development and CI.
+  The audit upgraded every package identified by `pip-audit`; the remaining
+  pre-1.0 transitive packages are not known-vulnerable. An upper Python bound is
+  intentionally omitted in line with PyPA guidance.
 
 ---
 

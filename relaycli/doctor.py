@@ -233,7 +233,9 @@ def check_installation() -> list[Check]:
         required_tools = {
             "list_dir", "find_files", "read_file", "search", "create_folder",
             "write_file", "edit_file", "run_command", "run_background",
-            "check_process", "stop_process", "remember",
+            "check_process", "stop_process", "remember", "webfetch", "question",
+            "todo_add", "todo_update", "todo_list", "git", "apply_patch", "think",
+            "websearch", "use_skill",
         }
         missing_tools = sorted(required_tools - tools)
         checks.append(Check(

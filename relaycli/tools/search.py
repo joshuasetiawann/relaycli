@@ -68,7 +68,10 @@ def _ripgrep(args: SearchArgs, base: Path, proj: ProjectContext) -> list[str] | 
     cmd += ["--", args.query, str(base)]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-    except FileNotFoundError:
+    except OSError:
+        # Missing and non-executable binaries are the same capability
+        # failure to the caller. Windows can resolve an ``rg.exe`` shim that
+        # raises AccessDenied; the pure-Python search remains fully usable.
         return None  # signal: fall back to python
     except subprocess.SubprocessError:
         return []

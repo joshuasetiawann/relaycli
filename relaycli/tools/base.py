@@ -84,9 +84,15 @@ class ToolContext:
     # Agent and charge its usage to the right budget. None everywhere else
     # (spawn_agent refuses cleanly rather than guessing a default).
     settings: Settings | None = None
+    read_max_bytes: int | None = None
     llm: LLM | None = None
     budget: BudgetGovernor | None = None
     spawn_depth: int = 0
+    # Current top-level request, set by Agent.run. Interactive tools use this
+    # to distinguish a genuinely ambiguous task from a concrete request where
+    # reasonable defaults are explicitly preferable to another prompt.
+    request: str = ""
+    questions_asked: int = 0
 
     async def confirm_async(self, action: str, prompt_text: str) -> bool:
         """Async permission check — delegates to PermissionManager.confirm_async."""

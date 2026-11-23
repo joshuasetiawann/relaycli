@@ -93,6 +93,8 @@ def test_filtered_source_drops_security_fields():
             return {
                 "permission_mode": "full-auto",
                 "ollama_base_url": "http://evil.example",
+                "use_9router": True,
+                "nine_router_base_url": "http://evil.example/v1",
                 "model": "attacker/model",
                 "openai_api_key": "sk-fromdotenv",
             }
@@ -101,6 +103,8 @@ def test_filtered_source_drops_security_fields():
     out = src()
     assert "permission_mode" not in out
     assert "ollama_base_url" not in out
+    assert "use_9router" not in out
+    assert "nine_router_base_url" not in out
     # model + provider keys still load from .env as documented.
     assert out["model"] == "attacker/model"
     assert out["openai_api_key"] == "sk-fromdotenv"
@@ -108,11 +112,14 @@ def test_filtered_source_drops_security_fields():
 
 def test_cwd_dotenv_cannot_escalate_permission_mode(tmp_path, monkeypatch):
     for var in ("RELAYCLI_PERMISSION_MODE", "OLLAMA_BASE_URL", "OLLAMA_API_BASE",
-                "RELAYCLI_OLLAMA_BASE_URL", "RELAYCLI_MODEL", "OPENAI_API_KEY"):
+                "RELAYCLI_OLLAMA_BASE_URL", "RELAYCLI_USE_9ROUTER",
+                "RELAYCLI_NINE_ROUTER_BASE_URL", "RELAYCLI_MODEL", "OPENAI_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     (tmp_path / ".env").write_text(
         "RELAYCLI_PERMISSION_MODE=full-auto\n"
         "OLLAMA_BASE_URL=http://evil.example\n"
+        "RELAYCLI_USE_9ROUTER=true\n"
+        "RELAYCLI_NINE_ROUTER_BASE_URL=http://evil.example/v1\n"
         "RELAYCLI_MODEL=evil-model-xyz\n"
         "OPENAI_API_KEY=sk-fromdotenv\n",
         encoding="utf-8",
@@ -122,9 +129,33 @@ def test_cwd_dotenv_cannot_escalate_permission_mode(tmp_path, monkeypatch):
     # The dangerous fields are ignored...
     assert settings.permission_mode is not PermissionMode.full_auto
     assert settings.ollama_base_url != "http://evil.example"
+    assert settings.use_9router is False
+    assert settings.nine_router_base_url != "http://evil.example/v1"
     # ...but the benign, documented ones still load, proving .env WAS read.
     assert settings.model == "evil-model-xyz"
     assert settings.openai_api_key == "sk-fromdotenv"
+
+
+@pytest.mark.parametrize("field", ["ollama_base_url", "nine_router_base_url"])
+@pytest.mark.parametrize("url", [
+    "file:///tmp/models.json",
+    "ftp://localhost/models",
+    "http://user:pass@localhost:1234/v1",
+    "http://localhost:1234/v1?token=secret",
+])
+def test_local_api_base_urls_reject_unsafe_schemes_and_credentials(field, url):
+    with pytest.raises(ValueError):
+        Settings(_env_file=None, **{field: url})
+
+
+def test_explicit_field_names_override_validation_alias_fields():
+    settings = Settings(
+        _env_file=None,
+        ollama_base_url="http://example.test:11434",
+        openai_api_key="sk-explicit-test",
+    )
+    assert settings.ollama_base_url == "http://example.test:11434"
+    assert settings.openai_api_key == "sk-explicit-test"
 
 
 # === M2: read_file bounds the read itself (no unbounded-memory read) =========

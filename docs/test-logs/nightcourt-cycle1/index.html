@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NIGHT COURT - Premium Evening Tennis Club</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header>
+        <h1>NIGHT COURT</h1>
+        <nav aria-label="Main Navigation">
+            <button aria-expanded="false" aria-controls="menu" id="menu-toggle">Menu</button>
+            <ul id="menu" role="menubar" hidden>
+                <li><a href="#story">Club Story</a></li>
+                <li><a href="#sessions">Weekly Sessions</a></li>
+                <li><a href="#membership">Membership Options</a></li>
+                <li><a href="#contact">Contact</a></li>
+            </ul>
+        </nav>
+    </header>
+    <main>
+        <section id="hero">
+            <h2>Experience the Best of Evening Tennis</h2>
+            <p>Join NIGHT COURT, your premier destination for adult tennis enthusiasts.</p>
+        </section>
+        <section id="story">
+            <h2>Our Club Story</h2>
+            <p>NIGHT COURT was founded with a passion for tennis and a commitment to creating a vibrant community for adults who love the game. Our club offers a unique atmosphere where players of all skill levels can come together to enjoy the sport in a fun and supportive environment.</p>
+        </section>
+        <section id="sessions">
+            <h2>Weekly Sessions</h2>
+            <div class="session">
+                <h3>Beginner's Class</h3>
+                <p>Every Monday at 7:00 PM</p>
+                <button class="book" data-session="Beginner's Class">Book Now</button>
+            </div>
+            <div class="session">
+                <h3>Intermediate Class</h3>
+                <p>Every Wednesday at 7:00 PM</p>
+                <button class="book" data-session="Intermediate Class">Book Now</button>
+            </div>
+            <div class="session">
+                <h3>Advanced Class</h3>
+                <p>Every Friday at 7:00 PM</p>
+                <button class="book" data-session="Advanced Class">Book Now</button>
+            </div>
+            <div id="booking-summary" aria-live="polite" role="status"></div>
+        </section>
+        <section id="membership">
+            <h2>Membership Options</h2>
+            <div class="membership-option">
+                <h3>Monthly Membership</h3>
+                <p>$50 per month</p>
+                <button class="join">Join Now</button>
+            </div>
+            <div class="membership-option">
+                <h3>Annual Membership</h3>
+                <p>$500 per year</p>
+                <button class="join">Join Now</button>
+            </div>
+        </section>
+        <section id="contact">
+            <h2>Contact Us</h2>
+            <form id="contact-form">
+                <label for="name">Name</label>
+                <input type="text" id="name" name="name" required>
+                <label for="email">Email</label>
+                <input type="email" id="email" name="email" required>
+                <label for="message">Message</label>
+                <textarea id="message" name="message" required></textarea>
+                <button type="submit">Send Message</button>
+                <div id="contact-feedback" aria-live="polite" role="status"></div>
+            </form>
+        </section>
+    </main>
+    <footer>
+        <p>&copy; 2023 NIGHT COURT. All rights reserved.</p>
+    </footer>
+    <script src="app.js"></script>
+</body>
+</html>

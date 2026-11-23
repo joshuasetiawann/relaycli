@@ -52,7 +52,8 @@ def test_think_via_registry(ctx):
 
 def test_webfetch_mocked_success(ctx):
     from relaycli.tools.webfetch import webfetch, WebFetchArgs
-    with mock_patch("urllib.request.urlopen") as mock:
+    with mock_patch("relaycli.tools.webfetch._resolve_addresses", return_value={"93.184.216.34"}), \
+         mock_patch("relaycli.tools.webfetch._open_url") as mock:
         mock.return_value.__enter__.return_value.headers = {"Content-Type": "text/plain"}
         mock.return_value.__enter__.return_value.read.return_value = b"hello world"
         result = webfetch(WebFetchArgs(url="https://example.com"), ctx)
@@ -62,7 +63,8 @@ def test_webfetch_mocked_success(ctx):
 def test_webfetch_http_error(ctx):
     from relaycli.tools.webfetch import webfetch, WebFetchArgs
     import urllib.error
-    with mock_patch("urllib.request.urlopen") as mock:
+    with mock_patch("relaycli.tools.webfetch._resolve_addresses", return_value={"93.184.216.34"}), \
+         mock_patch("relaycli.tools.webfetch._open_url") as mock:
         mock.side_effect = urllib.error.HTTPError(
             "https://example.com", 404, "Not Found", {}, None
         )
@@ -73,7 +75,8 @@ def test_webfetch_http_error(ctx):
 def test_webfetch_connection_error(ctx):
     from relaycli.tools.webfetch import webfetch, WebFetchArgs
     import urllib.error
-    with mock_patch("urllib.request.urlopen") as mock:
+    with mock_patch("relaycli.tools.webfetch._resolve_addresses", return_value={"93.184.216.34"}), \
+         mock_patch("relaycli.tools.webfetch._open_url") as mock:
         mock.side_effect = urllib.error.URLError("Connection refused")
         result = webfetch(WebFetchArgs(url="https://example.com"), ctx)
     assert not result.ok
@@ -81,7 +84,8 @@ def test_webfetch_connection_error(ctx):
 
 def test_webfetch_json_format(ctx):
     from relaycli.tools.webfetch import webfetch, WebFetchArgs
-    with mock_patch("urllib.request.urlopen") as mock:
+    with mock_patch("relaycli.tools.webfetch._resolve_addresses", return_value={"93.184.216.34"}), \
+         mock_patch("relaycli.tools.webfetch._open_url") as mock:
         mock.return_value.__enter__.return_value.headers = {"Content-Type": "application/json"}
         mock.return_value.__enter__.return_value.read.return_value = b'{"key": "value"}'
         result = webfetch(WebFetchArgs(url="https://api.example.com", format="json"), ctx)
@@ -91,7 +95,8 @@ def test_webfetch_json_format(ctx):
 def test_webfetch_truncates_long_output(ctx):
     from relaycli.tools.webfetch import webfetch, WebFetchArgs
     big = b"x" * 20000
-    with mock_patch("urllib.request.urlopen") as mock:
+    with mock_patch("relaycli.tools.webfetch._resolve_addresses", return_value={"93.184.216.34"}), \
+         mock_patch("relaycli.tools.webfetch._open_url") as mock:
         mock.return_value.__enter__.return_value.headers = {"Content-Type": "text/plain"}
         mock.return_value.__enter__.return_value.read.return_value = big
         result = webfetch(WebFetchArgs(url="https://example.com/big", format="text"), ctx)
@@ -101,7 +106,8 @@ def test_webfetch_truncates_long_output(ctx):
 def test_webfetch_via_registry(ctx):
     r = default_registry()
     import urllib.error
-    with mock_patch("urllib.request.urlopen") as mock:
+    with mock_patch("relaycli.tools.webfetch._resolve_addresses", return_value={"93.184.216.34"}), \
+         mock_patch("relaycli.tools.webfetch._open_url") as mock:
         mock.side_effect = urllib.error.URLError("timeout")
         result = r.run("webfetch", json.dumps({"url": "https://example.com"}), ctx)
     assert not result.ok
@@ -161,8 +167,8 @@ class MockResponse:
     def __init__(self, data, headers=None):
         self._data = data
         self.headers = headers or {"Content-Type": "text/html"}
-    def read(self):
-        return self._data
+    def read(self, size=-1):
+        return self._data if size < 0 else self._data[:size]
     def __enter__(self):
         return self
     def __exit__(self, *args):
@@ -186,6 +192,29 @@ def test_question_with_options(ctx):
         result = ask_question(QuestionArgs(question="Pick one:", options=["a", "b", "c"]), ctx)
     assert result.ok
     assert "2" in result.output
+
+
+def test_question_noninteractive_selects_default(ctx):
+    from relaycli.tools.question import ask_question, QuestionArgs
+    from rich.prompt import Prompt
+    ctx.permissions._assume_yes = True
+    with mock_patch.object(Prompt, "ask", side_effect=AssertionError("must not prompt")):
+        result = ask_question(QuestionArgs(question="Pick one:", options=["a", "b"]), ctx)
+    assert result.meta["answer"] == "a"
+
+
+def test_question_is_auto_resolved_for_concrete_file_work(ctx):
+    from relaycli.tools.question import ask_question, QuestionArgs
+    from rich.prompt import Prompt
+    ctx.request = 'buatin website di folder "Toko"'
+    with mock_patch.object(Prompt, "ask", side_effect=AssertionError("must not prompt")):
+        result = ask_question(
+            QuestionArgs(question="Simple or attractive?", options=["simple", "attractive"]),
+            ctx,
+        )
+    assert result.ok
+    assert result.meta["auto_resolved"] is True
+    assert "reasonable defaults" in result.output or "sensible defaults" in result.output
 
 def test_question_no_console(ctx):
     from relaycli.tools.question import ask_question, QuestionArgs
@@ -416,6 +445,57 @@ def test_apply_patch_malformed_patch(ctx):
     with mock_patch("subprocess.run", side_effect=FileNotFoundError):
         result = apply_patch(ApplyPatchArgs(patch="not a valid patch"), ctx)
     assert not result.ok
+
+
+@pytest.mark.parametrize("url", [
+    "file:///etc/passwd",
+    "http://127.0.0.1:8080/private",
+    "http://169.254.169.254/latest/meta-data/",
+    "http://[::1]/",
+])
+def test_webfetch_rejects_local_and_non_http_urls_before_open(ctx, url):
+    from relaycli.tools.webfetch import webfetch, WebFetchArgs
+    with mock_patch("relaycli.tools.webfetch._open_url") as opened:
+        result = webfetch(WebFetchArgs(url=url), ctx)
+    assert not result.ok
+    opened.assert_not_called()
+
+
+def test_webfetch_rejects_hostname_resolving_to_private_address(ctx):
+    from relaycli.tools.webfetch import webfetch, WebFetchArgs
+    with mock_patch("relaycli.tools.webfetch._resolve_addresses", return_value={"10.0.0.5"}), \
+         mock_patch("relaycli.tools.webfetch._open_url") as opened:
+        result = webfetch(WebFetchArgs(url="https://internal.example"), ctx)
+    assert not result.ok
+    assert "non-public" in result.output
+    opened.assert_not_called()
+
+
+def test_apply_patch_rejects_paths_outside_project_before_subprocess(tmp_path, ctx):
+    from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
+    outside = tmp_path.parent / "outside.txt"
+    patch_text = (
+        "--- ../outside.txt\n+++ ../outside.txt\n"
+        "@@ -0,0 +1 @@\n+escaped\n"
+    )
+    with mock_patch("subprocess.run") as run:
+        result = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
+    assert not result.ok
+    assert "outside the project root" in result.output
+    run.assert_not_called()
+    assert not outside.exists()
+
+
+def test_apply_patch_uses_unique_temporary_file(tmp_path, ctx):
+    from relaycli.tools.apply_patch import apply_patch, ApplyPatchArgs
+    (tmp_path / "f.txt").write_text("old\n", encoding="utf-8")
+    fixed_name = tmp_path / ".relaycli_patch.tmp"
+    fixed_name.write_text("sentinel", encoding="utf-8")
+    patch_text = "--- f.txt\n+++ f.txt\n@@ -1 +1 @@\n-old\n+new\n"
+    with mock_patch("subprocess.run", side_effect=FileNotFoundError):
+        result = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
+    assert result.ok
+    assert fixed_name.read_text(encoding="utf-8") == "sentinel"
 
 def test_apply_patch_via_registry(tmp_path, ctx):
     r = default_registry()

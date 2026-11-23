@@ -17,6 +17,7 @@ from relaycli.appconfig import (
     resolve_provider_key,
     resolve_role_model,
     save_app_config,
+    set_base_model,
     set_runtime_option,
 )
 from relaycli.core.roles import BUILTIN_ROLES, builtin_role
@@ -54,6 +55,16 @@ def test_save_and_load_round_trip(cfg_path):
     assert again.providers["openai"].api_key == "env:OPENAI_API_KEY"
 
 
+def test_app_config_repr_never_exposes_provider_keys(cfg_path):
+    secret = "sk-sensitive-regression-value"
+    cfg = AppConfig(
+        path=cfg_path,
+        providers={"openai": ProviderConfig(api_key=secret)},
+        _raw={"providers": {"openai": {"api_key": secret}}},
+    )
+    assert secret not in repr(cfg)
+
+
 def test_save_is_0600_and_preserves_unknown_keys(cfg_path):
     # A pre-existing flat key (what pydantic Settings reads) must survive a save.
     cfg_path.write_text('model = "openrouter/x"\nrelay_enabled = true\n', encoding="utf-8")
@@ -87,6 +98,24 @@ def test_set_runtime_option_mirrors_preferences_to_flat_settings(cfg_path):
     assert cfg._raw["permission_mode"] == "full-auto"
     assert cfg._raw["relay_enabled"] is True
     assert cfg._raw["token_budget"] == 64000
+
+
+def test_global_model_switch_moves_only_uniform_explicit_tiers(cfg_path):
+    cfg = load_app_config(cfg_path)
+    cfg.tiers = {tier: "ollama_chat/qwen2.5-coder:1.5b" for tier in ("fast", "balanced", "strong")}
+    save_app_config(cfg)
+
+    assert set_base_model("ollama_chat/qwen2.5-coder:14b", cfg_path, sync_uniform_tiers=True)
+    moved = load_app_config(cfg_path)
+    assert moved._raw["model"] == "ollama_chat/qwen2.5-coder:14b"
+    assert set(moved.tiers.values()) == {"ollama_chat/qwen2.5-coder:14b"}
+
+    moved.tiers = {"fast": "local/fast", "balanced": "local/mid", "strong": "local/strong"}
+    save_app_config(moved)
+    assert not set_base_model("cloud/new", cfg_path, sync_uniform_tiers=True)
+    assert load_app_config(cfg_path).tiers == {
+        "fast": "local/fast", "balanced": "local/mid", "strong": "local/strong",
+    }
 
 
 # -- model resolution -----------------------------------------------------

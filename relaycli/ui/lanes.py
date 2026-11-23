@@ -87,6 +87,12 @@ class LaneView:
     lease_holder: str = ""
     lease_path: str = ""
     lease_held_s: float | None = None
+    # §03's `queue pos 1 of 2 · est 40s`. Only ever set from a real queue —
+    # None means the lease manager has no queue to have a position in, and
+    # the sub-row simply omits the clause rather than guessing at one.
+    lease_queue_position: int | None = None
+    lease_queue_length: int | None = None
+    lease_estimate_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -191,11 +197,28 @@ def format_elapsed(seconds: float | None) -> str:
     return f"{minutes}m{secs:02d}s"
 
 
+def format_duration_short(seconds: float | None) -> str:
+    """`41s` — the spelling the design uses for a *held* duration, as
+    opposed to `0m41s` for a lane's elapsed column.
+
+    Two spellings is deliberate in the source: the elapsed column is one of
+    four right-aligned numbers that have to scan vertically as a table, so
+    it always spells the minutes; a lease clause is prose in the middle of a
+    sentence, where `0m41s` reads like a field and `41s` reads like a fact.
+    Past a minute there is nothing to save and it falls back to the aligned
+    form.
+    """
+    if seconds is None:
+        return "—"
+    total = max(int(seconds), 0)
+    return f"{total}s" if total < 60 else format_elapsed(total)
+
+
 def id_role_label(task_id: str, role_id: str) -> str:
     """`a1 ▣ bnd` — id, family glyph, three-letter code (§2/§9). The glyph
     groups, the code identifies; the id is truncated rather than the code,
     which is fixed at three characters and so never needs clipping."""
-    mark = theme.ROLE_MARKS.get(role_id)
+    mark = theme.role_mark(role_id)
     if mark is None:
         return task_id
     return f"{task_id} {mark.family_glyph} {mark.code}"
@@ -240,7 +263,8 @@ def _fit(text: str, width: int) -> str:
     return clip_goal(shortened, width).rstrip(" ·")
 
 
-def lane_detail(lane: LaneView, mode: theme.ColorMode, width: int) -> tuple[str, str]:
+def lane_detail(lane: LaneView, mode: theme.ColorMode, width: int, *,
+                compact: bool = False, grouped: bool = False) -> tuple[str, str]:
     """The tool+target column's text and its palette token.
 
     §4 gives this column a fixed width; §2 gives it a marker per state. It
@@ -249,6 +273,9 @@ def lane_detail(lane: LaneView, mode: theme.ColorMode, width: int) -> tuple[str,
     `render_lane_row`. Under NO_COLOR the state's word is spelled into the
     text itself (WAIT / NEEDS YOU / …) instead of being carried by the
     colour, which is what makes that mode lossless.
+
+    `compact` is the 80-column form and `grouped` says the lane list is
+    banded — both change what this column says about a lease, see below.
     """
     plain = theme.palette_for(mode) is None
 
@@ -263,12 +290,25 @@ def lane_detail(lane: LaneView, mode: theme.ColorMode, width: int) -> tuple[str,
         # A held path lease, not the dependency graph, is what is keeping
         # this lane out of a slot — the design makes that its own state
         # rather than letting it read as an idle agent.
-        head = "WAIT lease" if plain else f"{theme.MARKERS['lease_waiting'].symbol} lease"
-        parts = [f"{head} {basename_target(lane.lease_path)}" if lane.lease_path else head]
-        parts.append(lane.lease_holder)
-        if lane.lease_held_s is not None:
-            parts.append(format_elapsed(lane.lease_held_s))
-        return out(" · ".join(parts), "waiting")
+        #
+        # Who holds it and for how long belongs on the `└─` sub-row, and the
+        # source's flat-list screens leave it there: `▥ wait lease queue.ts`.
+        # A *grouped* list has no row to spare for the sub-row, so those two
+        # facts move up into this column instead — which is exactly what the
+        # six-agent screen does. One rule, both spellings, no fact dropped.
+        path = basename_target(lane.lease_path)
+        if grouped:
+            head = "WAIT lease" if plain else f"{theme.MARKERS['lease_waiting'].symbol} lease"
+            parts = [f"{head} {path}" if path else head, lane.lease_holder]
+            if lane.lease_held_s is not None:
+                parts.append(format_duration_short(lane.lease_held_s))
+            return out(" · ".join(parts), "waiting")
+        # At 80 columns the word "lease" is what goes: the ▥ marker already
+        # carries it. NO_COLOR has no marker, so there the word stays.
+        head = "WAIT lease" if plain else (
+            f"{theme.MARKERS['lease_waiting'].symbol} wait"
+            if compact else f"{theme.MARKERS['lease_waiting'].symbol} wait lease")
+        return out(f"{head} {path}" if path else head, "waiting")
 
     status = lane.status
     if status == "running":
@@ -279,13 +319,19 @@ def lane_detail(lane: LaneView, mode: theme.ColorMode, width: int) -> tuple[str,
         return out("RUNNING" if plain else "running", "running")
 
     if status == "blocked":
-        # The NO_COLOR word comes from theme.TASK_STATE_WORD rather than a
-        # literal here, so the lane column and the §4 vocabulary can never
-        # disagree about what this state is called.
-        glyph = "" if plain else f"{theme.TASK_STATE_GLYPHS['blocked'].symbol} "
-        head = f"{glyph}{theme.TASK_STATE_WORD['blocked'] if plain else 'blocked'}"
-        deps = f" · dep {lane.detail}" if lane.detail else ""
-        return out(f"{head}{deps}", "waiting")
+        # Blocked on the graph, not on a lease. The NO_COLOR word comes from
+        # theme.TASK_STATE_WORD rather than a literal here, so the lane
+        # column and the §4 vocabulary can never disagree about what this
+        # state is called. With a dependency to name, `dep a2` says both
+        # what the state is and why — the word "blocked" on top of it is a
+        # column of no new information.
+        head = (theme.TASK_STATE_WORD["blocked"] if plain
+                else f"{theme.TASK_STATE_GLYPHS['blocked'].symbol} blocked")
+        if lane.detail:
+            head = (f"{theme.TASK_STATE_WORD['blocked']} dep" if plain
+                    else f"{theme.TASK_STATE_GLYPHS['blocked'].symbol} dep")
+            return out(f"{head} {lane.detail}", "waiting")
+        return out(head, "waiting")
 
     if status == "pending":
         head = "PENDING" if plain else "pending"
@@ -320,7 +366,8 @@ def _row_tokens(lane: LaneView) -> tuple[str, str, str]:
 
 
 def render_lane_row(lane: LaneView, columns: ColumnWidths, mode: theme.ColorMode,
-                    width: int | None = None, spinner: str | None = None) -> Text:
+                    width: int | None = None, spinner: str | None = None,
+                    *, grouped: bool = False) -> Text:
     """One lane row, ready to print/update in the pinned list. `mode`
     selects dark/light palette colors, or NO_COLOR's glyph+bold+word
     fallback (§4: "no fact present in the color version is lost").
@@ -347,8 +394,9 @@ def render_lane_row(lane: LaneView, columns: ColumnWidths, mode: theme.ColorMode
     def field(text: str, width_: int, *, style: str | None = None, right: bool = False) -> None:
         row.append(text[:width_].rjust(width_) if right else _pad(text, width_), style=style)
 
+    rail = theme.MARKERS["focus_rail"]
     row.append(" " * gutter_left(columns))
-    row.append(theme.MARKERS["focus_rail"].symbol if lane.focused else " ",
+    row.append((rail.symbol if palette else rail.ascii) if lane.focused else " ",
                style=(theme.style_for(mode, "accent") if palette else "bold"))
     row.append(" " * max(columns.focus_rail - 1, 0))
 
@@ -385,7 +433,8 @@ def render_lane_row(lane: LaneView, columns: ColumnWidths, mode: theme.ColorMode
     # straight into the tool column with no space between them.
     field(clip_goal(lane.goal, columns.goal - 1), columns.goal, style=goal_style)
 
-    detail, detail_token = lane_detail(lane, mode, columns.tool_target - 1)
+    detail, detail_token = lane_detail(lane, mode, columns.tool_target - 1,
+                                       compact=columns.model is None, grouped=grouped)
     detail_style = theme.style_for(mode, detail_token) if palette else (
         "bold" if lane.awaiting_you else None)
     field(detail, columns.tool_target, style=detail_style)
@@ -408,30 +457,57 @@ def render_lane_row(lane: LaneView, columns: ColumnWidths, mode: theme.ColorMode
     return row
 
 
-def render_lease_row(lane: LaneView, columns: ColumnWidths, mode: theme.ColorMode) -> Text:
-    """The indented `└─ ▤ held by a1 for 41s` line under a lease-blocked
-    lane (§8: "lease conflicts are a first-class state, not a log line").
+LEASE_KEYS: tuple[tuple[str, str], ...] = (("l", "holder"), ("p", "preempt"), ("r", "retarget"))
 
-    The design's version also carries a queue position, an estimate, and
-    the l/p/r keys that resolve it. None of those exist yet: LeaseManager
-    has no queue to have a position in, no history to estimate from, and
-    no reassignment for p/r to call. Inventing them would be exactly the
-    fake progress §8 rules out, so this line reports only what is measured
-    — who holds the path, and for how long.
+
+def render_lease_row(lane: LaneView, columns: ColumnWidths, mode: theme.ColorMode) -> Text:
+    """`└─ ▤ held by a1 for 41s · queue pos 1 of 2 · est 40s · l holder …`
+    — the indented line under a lease-blocked lane (§8: "lease conflicts
+    are a first-class state, not a log line").
+
+    Every clause is measured or omitted. The queue position and estimate
+    are drawn only when the caller actually has them, because a position in
+    a queue that does not exist is precisely the invented progress §8 rules
+    out. The keys are always drawn: they are the point of the row, and they
+    are what turns a stall into a decision.
+
+    The path is not repeated here — the lane's own detail column above
+    already names it, and this row's job is the holder, not the file.
     """
     palette = theme.palette_for(mode)
     plain = palette is None
+    compact = columns.model is None
     row = Text()
     row.append(" " * (gutter_left(columns) + 4))
-    row.append(f"{theme.CONNECTORS['last']} ", style=theme.style_for(mode, "muted") if palette else None)
-    head = "HELD BY" if plain else f"{theme.MARKERS['lease_held'].symbol} held by"
-    row.append(f"{head} {lane.lease_holder}",
-               style=theme.style_for(mode, "waiting") if palette else "bold")
+
+    def muted(text: str) -> None:
+        row.append(text, style=theme.style_for(mode, "muted") if palette else None)
+
+    muted(f"{theme.CONNECTORS['last']} ")
+    if plain:
+        head = f"HELD BY {lane.lease_holder}"
+    elif compact:
+        head = f"{theme.MARKERS['lease_held'].symbol} {lane.lease_holder}"
+    else:
+        head = f"{theme.MARKERS['lease_held'].symbol} held by {lane.lease_holder}"
+    row.append(head, style=theme.style_for(mode, "waiting") if palette else "bold")
+
     if lane.lease_held_s is not None:
-        row.append(f" for {format_elapsed(lane.lease_held_s)}",
-                   style=theme.style_for(mode, "muted") if palette else None)
-    if lane.lease_path:
-        row.append(f" · {lane.lease_path}", style=theme.style_for(mode, "muted") if palette else None)
+        held = format_duration_short(lane.lease_held_s)
+        muted(f" {held}" if compact or plain else f" for {held}")
+    if lane.lease_queue_position and lane.lease_queue_length:
+        muted(f" · pos {lane.lease_queue_position}/{lane.lease_queue_length}" if compact
+              else f" · queue pos {lane.lease_queue_position} of {lane.lease_queue_length}")
+    if lane.lease_estimate_s is not None and not compact:
+        muted(f" · est {format_duration_short(lane.lease_estimate_s)}")
+
+    # At 80 columns only `p` survives — it is the one key that changes the
+    # situation rather than navigating it.
+    for index, (key, label) in enumerate(LEASE_KEYS[1:2] if compact else LEASE_KEYS):
+        muted(" · " if index == 0 else "  ")
+        row.append(key if palette else f"[{key}]",
+                   style=theme.style_for(mode, "accent") if palette else None)
+        muted(f" {label}")
     return row
 
 
@@ -531,4 +607,10 @@ def render_group_row(group: GroupSummary, columns: ColumnWidths, mode: theme.Col
         cost = sum(l.cost_usd for l in group.lanes)
         tail += f" · {format_tokens(tokens)} · {format_cost(cost)}"
     row.append(tail, style=theme.style_for(mode, "muted") if palette else None)
+    # The key that undoes the fold. A collapsed row that does not say how to
+    # open it is a fact the user cannot get back to.
+    row.append("    ", style=theme.style_for(mode, "muted") if palette else None)
+    row.append("^k" if palette else "[^k]",
+               style=theme.style_for(mode, "accent") if palette else None)
+    row.append(" expand settled", style=theme.style_for(mode, "muted") if palette else None)
     return row

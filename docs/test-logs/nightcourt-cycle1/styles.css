@@ -1,0 +1,178 @@
+:root {
+    --warm-ivory: #f5f5dc;
+    --near-black: #1a1a1a;
+    --tennis-ball-yellow: #fff44f;
+    --font-family: 'Georgia', serif;
+    --font-size-base: clamp(1rem, 2vw, 1.5rem);
+}
+
+body {
+    font-family: var(--font-family);
+    color: var(--near-black);
+    background-color: var(--warm-ivory);
+    margin: 0;
+    padding: 0;
+    line-height: 1.6;
+}
+
+header {
+    background-color: var(--near-black);
+    color: var(--warm-ivory);
+    padding: 1rem;
+    text-align: center;
+}
+
+nav {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 1rem;
+}
+
+button {
+    background-color: var(--tennis-ball-yellow);
+    color: var(--near-black);
+    border: none;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button:hover {
+    background-color: #e6d450;
+}
+
+ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    gap: 1rem;
+}
+
+li {
+    margin: 0;
+}
+
+a {
+    color: var(--warm-ivory);
+    text-decoration: none;
+    transition: color 0.3s ease;
+}
+
+a:hover {
+    color: #e6d450;
+}
+
+section {
+    padding: 2rem 1rem;
+    text-align: center;
+}
+
+#hero {
+    background-color: var(--near-black);
+    color: var(--warm-ivory);
+    padding: 4rem 1rem;
+}
+
+#story {
+    background-color: var(--warm-ivory);
+    color: var(--near-black);
+}
+
+#sessions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-around;
+    gap: 2rem;
+}
+
+.session {
+    background-color: var(--near-black);
+    color: var(--warm-ivory);
+    padding: 1rem;
+    border-radius: 0.5rem;
+    width: 30%;
+    min-width: 200px;
+}
+
+.session h3 {
+    color: var(--tennis-ball-yellow);
+}
+
+#booking-summary {
+    margin-top: 1rem;
+    font-weight: bold;
+}
+
+#membership {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-around;
+    gap: 2rem;
+}
+
+.membership-option {
+    background-color: var(--near-black);
+    color: var(--warm-ivory);
+    padding: 1rem;
+    border-radius: 0.5rem;
+    width: 30%;
+    min-width: 200px;
+}
+
+.membership-option h3 {
+    color: var(--tennis-ball-yellow);
+}
+
+#contact {
+    background-color: var(--warm-ivory);
+    color: var(--near-black);
+}
+
+form {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+input, textarea {
+    padding: 0.5rem;
+    border: 1px solid var(--near-black);
+    border-radius: 0.25rem;
+}
+
+button[type="submit"] {
+    background-color: var(--tennis-ball-yellow);
+    color: var(--near-black);
+    border: none;
+    padding: 0.5rem 1rem;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+}
+
+button[type="submit"]:hover {
+    background-color: #e6d450;
+}
+
+#contact-feedback {
+    margin-top: 1rem;
+    font-weight: bold;
+}
+
+@media (max-width: 768px) {
+    nav {
+        flex-direction: column;
+    }
+
+    ul {
+        flex-direction: column;
+        align-items: center;
+    }
+
+    #sessions, #membership {
+        flex-direction: column;
+    }
+}

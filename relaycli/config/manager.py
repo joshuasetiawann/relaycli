@@ -35,7 +35,7 @@ RUNTIME_OPTION_KEYS = frozenset({"permission_mode", "relay_enabled", "relay_expl
 
 @dataclass
 class ProviderConfig:
-    api_key: str | None = None
+    api_key: str | None = field(default=None, repr=False)
     base_url: str | None = None
 
 
@@ -52,7 +52,7 @@ class AppConfig:
     tiers: dict[str, str] = field(default_factory=dict)
     providers: dict[str, ProviderConfig] = field(default_factory=dict)
     roles: dict[str, RoleConfig] = field(default_factory=dict)
-    _raw: dict = field(default_factory=dict)
+    _raw: dict = field(default_factory=dict, repr=False)
 
     def preference(self, key: str) -> object:
         return self.preferences.get(key, DEFAULT_PREFERENCES.get(key))
@@ -112,17 +112,37 @@ def save_app_config(cfg: AppConfig) -> None:
         pass
 
 
-def set_base_model(model: str, path: Path | None = None) -> None:
+def set_base_model(
+    model: str,
+    path: Path | None = None,
+    *,
+    sync_uniform_tiers: bool = False,
+) -> bool:
+    """Persist the base model and optionally move a uniform relay profile.
+
+    ``relaycli init`` commonly writes the same local model into all three
+    tiers.  In that state a later interactive ``/model`` switch should move
+    the active relay too; otherwise the UI says the new model is active while
+    Planner/Coder/Reviewer quietly keep using the old one.  Deliberately
+    heterogeneous tier profiles are left alone.
+
+    Returns whether an explicit uniform tier profile was updated.
+    """
     model = model.strip()
     if not model:
         raise ValueError("model id required")
     cfg = load_app_config(path)
     cfg._raw["model"] = model
+    synced = False
+    if sync_uniform_tiers and cfg.tiers and len(set(cfg.tiers.values())) == 1:
+        cfg.tiers = {tier: model for tier in cfg.tiers}
+        synced = True
     recent = cfg._raw.get("recent_models")
     if not isinstance(recent, list):
         recent = []
     cfg._raw["recent_models"] = [model, *[str(m) for m in recent if str(m) != model]][:8]
     save_app_config(cfg)
+    return synced
 
 
 def set_runtime_option(key: str, value: object, path: Path | None = None) -> None:

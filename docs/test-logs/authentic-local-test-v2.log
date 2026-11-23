@@ -1,0 +1,30 @@
+▲ Model 'ollama_chat/qwen2.5-coder:14b' is likely too slow here (Ollama is only
+partially offloading it (39%/61% CPU/GPU)). Switch to a smaller GPU-safe model 
+like `ollama_chat/qwen2.5-coder:1.5b` or `ollama_chat/qwen2.5-coder:0.5b` with 
+`/model <model>`, or set `RELAYCLI_ALLOW_SLOW_LOCAL=1` if you intentionally 
+want to wait.
+Selected model kept: this task changes files and needs reliable tool use. 
+Automatic fallback is disabled for implementation tasks.
+✦ auto-skill: frontend-taste
+✦ auto-skill: verify
+ |relay relaycli-tennis-authentic-test                                1a  $0.00
+ ──────────────────────────────────────────────────────────────────────────────
+model ollama_chat/qwen2.5-coder:14b  no key needed
+▲ full-auto: edits and commands run without asking.
+
+relay on  planner:ollama_chat/qwen2.5-coder:14b · 
+coder:ollama_chat/qwen2.5-coder:14b · reviewer:ollama_chat/qwen2.5-coder:14b
+
+
+ ◇ pln planner  ollama_chat/qwen2.5-coder:14b
+ 14:33:25 model ollama_chat/qwen2.5-coder:14b · step 1
+          Ollama local is generating · `ollama ps` should show 100% GPU when
+          acceleration is active.
+          1 tool call · 1556 tok
+ 14:33:39 read_file index.html · read index.html
+ 14:33:39 model ollama_chat/qwen2.5-coder:14b · step 2
+          1 tool call · 3029 tok
+ 14:33:54 read_file index.html · read index.html
+ 14:33:54 model ollama_chat/qwen2.5-coder:14b · step 3
+          empty response · 4453 tok
+ 14:34:18 model ollama_chat/qwen2.5-coder:14b · step 4

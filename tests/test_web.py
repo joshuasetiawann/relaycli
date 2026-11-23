@@ -265,7 +265,7 @@ def test_send_frontend_shop_scaffold_respects_quoted_folder_without_llm(tmp_path
     assert llm.calls == []
     html = (tmp_path / "toko baju" / "index.html").read_text(encoding="utf-8")
     app_js = (tmp_path / "toko baju" / "app.js").read_text(encoding="utf-8")
-    assert 'class="theme-dark"' in html
+    assert 'class="theme-dark layout-fashion"' in html
     assert "Baju harian" in html
     assert "Everyday Cotton Tee" in app_js
     assert not (tmp_path / "bernama").exists()
@@ -633,6 +633,9 @@ def test_send_empty_rejected_and_ui_file_ships():
     ui = UI_PATH.read_text(encoding="utf-8")
     for marker in ("projectBtn", "chatCollapse", "sideCollapse", "termLarger"):
         assert marker in ui
+    assert "fonts.googleapis.com" not in ui
+    assert 'rel="icon"' in ui
+    assert "mobile && savedRight === null" in APP_JS_PATH.read_text(encoding="utf-8")
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
     port = server.server_address[1]
     t = threading.Thread(target=server.serve_forever, daemon=True)
@@ -650,6 +653,59 @@ def test_send_empty_rejected_and_ui_file_ships():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_http_rejects_malformed_cursors_and_bodies():
+    session = WebSession(_settings())
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(session))
+    port = server.server_address[1]
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        base = f"http://127.0.0.1:{port}"
+        for url in (base + "/api/events?since=nope", base + "/api/events?since=-1"):
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(url, timeout=5)
+            assert exc.value.code == 400
+
+        for body in (b"[]", b"null", b"\xff"):
+            req = urllib.request.Request(base + "/api/send", method="POST", data=body)
+            with pytest.raises(urllib.error.HTTPError) as exc:
+                urllib.request.urlopen(req, timeout=5)
+            assert exc.value.code == 400
+
+        req = urllib.request.Request(base + "/api/send", method="POST", data=b"{}")
+        req.add_header("Content-Length", "1048577")
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=5)
+        assert exc.value.code == 413
+
+        req = urllib.request.Request(
+            base + "/api/send", method="POST",
+            data=json.dumps({"text": "x" * 100_001}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=5)
+        assert exc.value.code == 413
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_web_event_log_is_bounded_without_reusing_cursors():
+    from relaycli.ui.web import _MAX_WEB_EVENTS
+
+    session = WebSession(_settings())
+    for i in range(_MAX_WEB_EVENTS + 17):
+        session.add("note", text=str(i))
+    retained = session.events_since(0)
+    assert len(retained) == _MAX_WEB_EVENTS
+    assert retained[0]["n"] == 17
+    assert retained[-1]["n"] == _MAX_WEB_EVENTS + 16
+    assert [e["n"] for e in session.events_since(_MAX_WEB_EVENTS + 10)] == list(
+        range(_MAX_WEB_EVENTS + 10, _MAX_WEB_EVENTS + 17)
+    )
 
 
 def test_dns_rebinding_and_cross_origin_posts_rejected():
@@ -727,10 +783,13 @@ def test_current_model_surfaces_under_current_group():
     assert cur[0]["id"] == "some/exotic-model"
 
 
-def test_set_model_and_flags():
+def test_set_model_and_flags(monkeypatch):
     from relaycli.config import manager as appconfig
 
     session = WebSession(_settings())
+    monkeypatch.setattr("relaycli.ui.web.ollama_models", lambda *a, **k: ["llama3.1"])
+    session.set_model("llama3.1")
+    assert session.settings.model == "ollama_chat/llama3.1"
     session.set_model("ollama_chat/llama3.1")
     assert session.settings.model == "ollama_chat/llama3.1"
     assert session.set_mode("auto-edit") is True

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from relaycli.core.context import PathSafetyError, ProjectContext
 from relaycli.tools.base import ToolContext, ToolResult
 from relaycli.tools.registry import Tool, ToolRegistry
 from relaycli.ui.render import structured_diff
@@ -16,6 +19,23 @@ class ApplyPatchArgs(BaseModel):
 
 
 def apply_patch(args: ApplyPatchArgs, ctx: ToolContext | None) -> ToolResult:
+    root = ctx.project.root if ctx else Path.cwd().resolve()
+    project = ctx.project if ctx else ProjectContext(root)
+    hunks = _parse_patches(args.patch)
+    if not hunks:
+        return ToolResult.error("No parseable hunks in patch")
+
+    try:
+        # Check both header paths.  External `patch` may choose the old path
+        # when the new one does not exist, so validating only the fallback's
+        # selected target still permits `--- ../outside` traversal.
+        for old_path, new_path in _patch_header_paths(args.patch):
+            for path in (old_path, new_path):
+                if path != "/dev/null":
+                    project.resolve(path)
+    except PathSafetyError as exc:
+        return ToolResult.error(str(exc), summary="patch (unsafe path)")
+
     if ctx is not None:
         # One pre-flight check covering every file the patch touches,
         # before either the primary (patch binary) or fallback path runs —
@@ -33,13 +53,19 @@ def apply_patch(args: ApplyPatchArgs, ctx: ToolContext | None) -> ToolResult:
         if not decision.approved:
             return ToolResult.error("Patch was not approved.", summary="patch (declined)")
 
-    root = ctx.project.root if ctx else Path.cwd()
-    patch_file = root / ".relaycli_patch.tmp"
+    patch_file: Path | None = None
     try:
-        patch_file.write_text(args.patch, encoding="utf-8")
+        # A random, exclusively-created file avoids following an attacker-
+        # planted `.relaycli_patch.tmp` symlink and permits concurrent agents.
+        fd, name = tempfile.mkstemp(
+            dir=str(root), prefix=".relaycli_patch.", suffix=".tmp"
+        )
+        patch_file = Path(name)
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as handle:
+            handle.write(args.patch)
         proc = subprocess.run(
             ["patch", "-p0", "-i", str(patch_file)],
-            cwd=root, capture_output=True, text=True, timeout=30,
+            cwd=root, capture_output=True, text=True, timeout=30, check=False,
         )
         output = proc.stdout.strip()
         if proc.stderr:
@@ -56,10 +82,11 @@ def apply_patch(args: ApplyPatchArgs, ctx: ToolContext | None) -> ToolResult:
     except subprocess.TimeoutExpired:
         return ToolResult.error("patch command timed out")
     finally:
-        try:
-            patch_file.unlink()
-        except OSError:
-            pass
+        if patch_file is not None:
+            try:
+                patch_file.unlink()
+            except OSError:
+                pass
 
 
 def _fallback_apply(patch_text: str, root: Path, ctx: ToolContext | None) -> ToolResult:
@@ -99,16 +126,23 @@ def _parse_patches(text: str) -> list[tuple[str, list[str]]]:
         m = _HUNK_RE.search(sec)
         if not m:
             continue
-        old = m.group(1)
-        new = m.group(2)
+        old, new = m.groups()
         lines = sec.splitlines(keepends=True)
-        result.append((new, lines))
+        result.append((old if new == "/dev/null" else new, lines))
     return result
 
 
+def _patch_header_paths(text: str) -> list[tuple[str, str]]:
+    """Return every old/new path pair the external patcher can consider."""
+    return [match.groups() for match in _HUNK_RE.finditer(text)]
+
+
 def _apply_hunks(hunks, root):
+    project = ProjectContext(root)
     for filepath, lines in hunks:
-        target = root / filepath
+        # Defence in depth for callers that may use this internal helper
+        # directly in the future.
+        target = project.resolve(filepath)
         if target.exists():
             content = target.read_text(encoding="utf-8")
         else:
@@ -124,14 +158,13 @@ def _apply_diff(content: str, diff_lines: list[str]) -> str | None:
     i = 0
     while i < len(diff_lines):
         line = diff_lines[i]
-        if line.startswith("---") or line.startswith("+++") or line.startswith("diff"):
+        if line.startswith(("---", "+++", "diff")):
             i += 1
             continue
         if line.startswith("@@"):
             m = re.match(r"^@@ -(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s*@@", line)
             if m:
                 old_start = int(m.group(1)) - 1
-                old_len = int(m.group(2) or 1) if m.group(2) else 1
             i += 1
             continue
         if line.startswith("-"):

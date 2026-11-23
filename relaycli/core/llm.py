@@ -75,6 +75,10 @@ _PROVIDER_ENV_HINT: dict[str, str] = {
     "zhipu": "ZHIPUAI_API_KEY",
 }
 _KEYLESS_PROVIDERS = {"ollama", "ollama_chat"}
+# LiteLLM replaces an omitted/None timeout with 600 seconds and rejects an
+# infinite socket timeout on Windows. This is the largest safe practical value;
+# local runs are therefore interrupt-only for human timescales (Ctrl+C).
+_OLLAMA_INTERRUPT_ONLY_TIMEOUT = 2_147_000.0
 _TOOL_CAPABLE_OLLAMA_HINTS = (
     "llama3.1", "llama3.2", "llama3.3", "qwen3", "qwen2.5-coder", "mistral", "granite3",
     "devstral", "gpt-oss", "command-r",
@@ -391,6 +395,16 @@ class LLM:
         model = model or self.settings.model
         call_args = self._build_call_args(messages, tools, model, temperature)
 
+        if on_token is not None and not stream and model.startswith(("ollama_chat/", "ollama/")):
+            # Ollama tool-call turns contain little displayable text, while a
+            # streamed HTTP response can remain active indefinitely as long as
+            # chunks keep arriving. Use the provider's bounded blocking request
+            # so `llm_timeout` is a real wall-clock limit, then publish any final
+            # prose to the UI in one callback.
+            response = self._complete_blocking(call_args, model)
+            if response.text:
+                on_token(response.text)
+            return response
         if stream or on_token is not None:
             return self._complete_streaming(call_args, model, on_token)
         return self._complete_blocking(call_args, model)
@@ -431,9 +445,19 @@ class LLM:
             "model": model,
             "messages": list(messages),
             "temperature": self.settings.temperature if temperature is None else temperature,
-            "timeout": self.settings.llm_timeout,
         }
         args.update(self._credential_kwargs(model))
+        if self.settings.max_output_tokens is not None:
+            args["max_tokens"] = self.settings.max_output_tokens
+        if model.startswith(("ollama_chat/", "ollama/")):
+            # Ollama otherwise defaults to a small context (commonly 4096),
+            # which can truncate the system prompt once tool schemas and a
+            # frontend brief are included. LiteLLM forwards num_ctx into the
+            # native Ollama `options` object.
+            args["num_ctx"] = self.settings.ollama_num_ctx
+            args["timeout"] = _OLLAMA_INTERRUPT_ONLY_TIMEOUT
+        else:
+            args["timeout"] = self.settings.llm_timeout
         if self.settings.use_9router:
             # A config path, not an architecture (v2 prompt §4.4): 9Router
             # is an OpenAI-compatible proxy, so redirecting api_base is the
@@ -507,7 +531,7 @@ class LLM:
             resp = _lazy_litellm().completion(**call_args)
             # Normalize inside the try so a malformed/empty response is surfaced
             # as a clean LLMError, not a raw traceback (the module's contract).
-            return self._normalize(resp, model)
+            return self._require_complete(self._normalize(resp, model))
         except Exception as exc:
             raise self._wrap_error(exc, model) from exc
 
@@ -536,7 +560,16 @@ class LLM:
         # tool calls: some providers (Ollama) stream the *full* arguments in
         # every chunk rather than incremental fragments, and naive
         # concatenation doubles the JSON ({"x":1}{"x":1}).
-        return self._reassemble(chunks, model, call_args["messages"])
+        return self._require_complete(self._reassemble(chunks, model, call_args["messages"]))
+
+    @staticmethod
+    def _require_complete(response: LLMResponse) -> LLMResponse:
+        if response.finish_reason in {"length", "max_tokens", "error", "content_filter"}:
+            raise LLMError(
+                f"Model response ended with {response.finish_reason!r}; no incomplete tool calls were executed. "
+                "Raise max_output_tokens or choose another model if this repeats."
+            )
+        return response
 
     def _reassemble(
         self, chunks: list[Any], model: str, messages: list[dict[str, Any]]
@@ -693,10 +726,22 @@ class LLM:
                 detail = f"Model not found — use '{match.group(1)}' instead."
         msg = f"Model call failed for '{model}' ({name}): {detail}"
         is_ollama = model.startswith(("ollama_chat/", "ollama/"))
-        connection_like = any(
-            kw in detail.lower() for kw in ("connection", "refused", "timed out", "timeout")
-        )
-        if is_ollama and connection_like:
+        model_not_found = "model" in detail.lower() and "not found" in detail.lower()
+        timed_out = any(kw in detail.lower() for kw in ("timed out", "timeout"))
+        connection_like = any(kw in detail.lower() for kw in ("connection", "refused"))
+        if is_ollama and model_not_found:
+            local_name = model.split("/", 1)[-1]
+            msg += (
+                f"\nOllama model '{local_name}' is not installed — "
+                f"install it with: ollama pull {local_name}"
+            )
+        elif is_ollama and timed_out:
+            msg += (
+                "\nOllama did not finish the request. "
+                "The server may still be healthy but this model/context is too slow; "
+                "check `ollama ps` or select a smaller tool-capable model."
+            )
+        elif is_ollama and connection_like:
             msg += (
                 f"\nOllama isn't reachable at {ollama_host_label(self.settings)} — "
                 "start it with: ollama serve"
@@ -749,10 +794,9 @@ def count_tokens(messages: Sequence[dict[str, Any]], model: str) -> int:
         return max(1, chars // 4)
 
 
-def _is_json(text: str) -> bool:
+def _is_json_object(text: str) -> bool:
     try:
-        json.loads(text)
-        return True
+        return isinstance(json.loads(text), dict)
     except Exception:
         return False
 
@@ -768,9 +812,11 @@ def _resolve_arguments(frags: list[str]) -> str:
     if not frags:
         return "{}"
     concat = "".join(frags)
-    if _is_json(concat):
+    if _is_json_object(concat):
         return concat
-    valid = [f for f in frags if _is_json(f)]
+    valid = [f for f in frags if _is_json_object(f)]
     if valid:
         return max(valid, key=len)
-    return frags[-1]
+    # Preserve incomplete arguments for validation/error reporting. A numeric
+    # or quoted fragment inside file content is not a standalone tool payload.
+    return concat

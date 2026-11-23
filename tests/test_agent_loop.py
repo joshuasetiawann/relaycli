@@ -23,10 +23,17 @@ class FakeLLM:
         self._responses = list(responses)
         self._loop_last = loop_last
         self.calls: list[list[dict]] = []
+        self.tool_names: list[set[str]] = []
+        self.temperatures: list[float | None] = []
 
     def complete(self, messages, *, tools=None, model=None, temperature=None,
                  stream=False, on_token=None):
         self.calls.append(list(messages))
+        self.tool_names.append({
+            schema.get("function", {}).get("name")
+            for schema in (tools or [])
+        })
+        self.temperatures.append(temperature)
         if self._responses:
             resp = self._responses.pop(0)
         elif self._loop_last:
@@ -62,6 +69,16 @@ def _build_agent(project_root, llm, mode=PermissionMode.full_auto, prompter=None
         permissions=permissions,
         llm=llm,
     )
+
+
+def test_local_session_budget_fits_ollama_context(sample_project):
+    agent = _build_agent(sample_project, FakeLLM([]))
+    agent.settings.ollama_num_ctx = 4096
+    agent.settings.model = "ollama_chat/qwen2.5-coder:14b"
+    # New sessions must reserve output space before any history is added.
+    local = Agent(agent.settings, console=agent.console, project=agent.project,
+                  permissions=agent.permissions, llm=agent.llm)
+    assert local.session.token_budget == 3072
 
 
 class CaptureReporter:
@@ -168,7 +185,7 @@ def test_text_create_folder_json_is_executed(sample_project):
     ])
     agent = _build_agent(sample_project, llm)
 
-    result = agent.run('buat satu folder bernama "toko laptop"')
+    result = agent.run('Gunakan JSON tool untuk buat satu folder bernama "toko laptop"')
 
     assert result.stopped_reason == "done"
     assert result.tool_calls == 1
@@ -204,7 +221,7 @@ def test_text_tool_alias_and_string_args_are_normalized(sample_project):
     ])
     agent = _build_agent(sample_project, llm)
 
-    result = agent.run('buat satu folder bernama "toko laptop"')
+    result = agent.run('Gunakan alias tool untuk buat satu folder bernama "toko laptop"')
 
     assert result.stopped_reason == "done"
     assert result.tool_calls == 1
@@ -219,7 +236,7 @@ def test_empty_response_is_retried_instead_of_marked_done(sample_project):
     ])
     agent = _build_agent(sample_project, llm)
 
-    result = agent.run('buat satu folder bernama "toko laptop"')
+    result = agent.run('Pikirkan lalu buat satu folder bernama "toko laptop"')
 
     assert result.stopped_reason == "done"
     assert result.iterations == 3
@@ -254,6 +271,85 @@ def test_actionable_frontend_task_retries_when_no_files_written(sample_project):
     ]
     assert any("no files have been written" in text for text in user_messages)
     assert any("`toko laptop`" in text for text in user_messages)
+
+
+def test_concrete_frontend_exposes_only_focused_file_tools(sample_project):
+    llm = FakeLLM([_resp(text="Need files."), _resp(text="Still need files."), _resp(text="No files.")])
+    agent = _build_agent(sample_project, llm)
+
+    agent.run('buatin website iklan mineral water di folder "Toko"')
+
+    assert llm.tool_names[0] == {
+        "list_dir", "read_file", "write_file", "edit_file", "create_folder",
+        "run_command",
+    }
+    assert "question" not in llm.tool_names[0]
+    assert "todo_add" not in llm.tool_names[0]
+    assert llm.temperatures[0] == 0.55
+    system = llm.calls[0][0]["content"]
+    assert "- git:" not in system
+    assert "- question:" not in system
+
+
+def test_concrete_frontend_returns_after_core_bundle_is_written(sample_project):
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("create_folder", {"path": "proof"})]),
+        _resp(tool_calls=[
+            _tc("write_file", {"path": "proof/index.html", "content": "<main></main>"}),
+            _tc("write_file", {"path": "proof/styles.css", "content": "body{}"}),
+            _tc("write_file", {"path": "proof/app.js", "content": "void 0"}),
+        ]),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run('buat landing page di folder "proof"')
+
+    assert result.stopped_reason == "done"
+    assert result.iterations == 2
+    assert result.tool_calls == 4
+    assert len(llm.calls) == 2
+    assert result.final_text == "Frontend files written; ready for quality review."
+
+
+def test_existing_frontend_bundle_does_not_stop_revision_before_a_write(sample_project):
+    root = sample_project / "proof"
+    root.mkdir()
+    (root / "index.html").write_text("<main>old</main>", encoding="utf-8")
+    (root / "styles.css").write_text("body{}", encoding="utf-8")
+    (root / "app.js").write_text("void 0", encoding="utf-8")
+    llm = FakeLLM([
+        _resp(tool_calls=[_tc("list_dir", {"path": "proof"})]),
+        _resp(tool_calls=[_tc("write_file", {
+            "path": "proof/index.html",
+            "content": "<main>revised</main>",
+        })]),
+        _resp(text="Revision complete."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run('buat landing page di folder "proof" dan perbaiki draft yang ada')
+
+    assert result.stopped_reason == "done"
+    assert result.iterations == 3
+    assert len(llm.calls) == 3
+    assert (root / "index.html").read_text(encoding="utf-8") == "<main>revised</main>"
+
+
+def test_existing_frontend_bundle_returns_after_three_file_revision(sample_project):
+    root = sample_project / "src"
+    root.mkdir()
+    for name in ("index.html", "styles.css", "app.js"):
+        (root / name).write_text("old", encoding="utf-8")
+    llm = FakeLLM([_resp(tool_calls=[
+        _tc("write_file", {"path": "src/index.html", "content": "new html"}),
+        _tc("write_file", {"path": "src/styles.css", "content": "new css"}),
+        _tc("write_file", {"path": "src/app.js", "content": "new js"}),
+    ])])
+
+    result = _build_agent(sample_project, llm).run("buat website tenis responsif")
+
+    assert result.stopped_reason == "done"
+    assert result.iterations == 1
 
 
 def test_actionable_frontend_task_nudges_after_folder_creation(sample_project):
@@ -411,16 +507,16 @@ def test_explain_website_prompt_can_finish_without_file_write(sample_project):
 
 
 def test_folder_only_task_does_not_require_file_write(sample_project):
-    llm = FakeLLM([
-        _resp(tool_calls=[_tc("create_folder", {"path": "toko laptop"})]),
-        _resp(text="Folder created."),
-    ])
+    llm = FakeLLM([])
     agent = _build_agent(sample_project, llm)
 
     result = agent.run('buat satu folder bernama "toko laptop"')
 
     assert result.stopped_reason == "done"
+    assert result.iterations == 1
     assert result.tool_calls == 1
+    assert result.usage.total_tokens == 0
+    assert llm.calls == []
     assert (sample_project / "toko laptop").is_dir()
 
 
@@ -590,6 +686,20 @@ def test_iteration_cap_stops_cleanly(sample_project):
     assert result.stopped_reason == "max_iterations"
     assert result.iterations == 3
     assert result.tool_calls == 3
+
+
+def test_default_iterations_continue_until_model_finishes(sample_project):
+    llm = FakeLLM([
+        *[_resp(tool_calls=[_tc("list_dir", {"path": "."})]) for _ in range(9)],
+        _resp(text="Finished."),
+    ])
+    agent = _build_agent(sample_project, llm)
+
+    result = agent.run("inspect repeatedly, then finish")
+
+    assert result.stopped_reason == "done"
+    assert result.iterations == 10
+    assert result.tool_calls == 9
 
 
 def test_system_prompt_mentions_tools_and_mode(sample_project):

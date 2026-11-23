@@ -25,6 +25,7 @@ _BINARY_SNIFF = 8192
 
 class ReadFileArgs(BaseModel):
     path: str = Field(description="File path relative to the project root.")
+    offset_bytes: int = Field(default=0, ge=0, description="Byte offset for reading the next chunk of a large file.")
     max_bytes: int = Field(
         default=_DEFAULT_MAX_BYTES,
         ge=1,
@@ -83,30 +84,42 @@ def read_file(args: ReadFileArgs, ctx: ToolContext) -> ToolResult:
     except OSError as exc:
         return ToolResult.error(f"Could not read '{args.path}': {exc}")
 
+    limit = args.max_bytes
+    if ctx.read_max_bytes is not None:
+        limit = min(limit, ctx.read_max_bytes)
+    if args.offset_bytes > 0 and args.offset_bytes >= total:
+        return ToolResult.error(f"Offset {args.offset_bytes} is past the end of '{rel}' ({total} bytes).")
+
     try:
-        if total <= args.max_bytes:
+        if args.offset_bytes == 0 and total <= limit:
             # Whole file fits under the cap either way — safe to go through
             # the shared cache, which reads (and keeps) the full content.
             data = ctx.file_cache.read_bytes(path)
         else:
-            # Larger than the cap: read only max_bytes+1 (one extra byte to
+            # Larger than the cap: read only limit+1 (one extra byte to
             # detect truncation) rather than pulling the whole file into
             # memory just to cache a copy that would immediately be cut down.
             with path.open("rb") as fh:
-                data = fh.read(args.max_bytes + 1)
+                fh.seek(args.offset_bytes)
+                data = fh.read(limit + 1)
     except OSError as exc:
         return ToolResult.error(f"Could not read '{args.path}': {exc}")
 
-    if b"\x00" in data[:_BINARY_SNIFF]:
+    if args.offset_bytes:
+        with path.open("rb") as fh:
+            binary_sample = fh.read(_BINARY_SNIFF)
+    else:
+        binary_sample = data[:_BINARY_SNIFF]
+    if b"\x00" in binary_sample:
         return ToolResult.error(
             f"'{args.path}' appears to be binary; refusing to read it as text.",
             summary=f"read {args.path} (refused: binary)",
         )
 
-    truncated = len(data) > args.max_bytes
-    text = data[: args.max_bytes].decode("utf-8", errors="replace")
+    truncated = args.offset_bytes + len(data) < total or len(data) > limit
+    text = data[:limit].decode("utf-8", errors="replace")
     if truncated:
-        text += f"\n\n[... truncated: {total} bytes total, showing first {args.max_bytes} ...]"
+        text += f"\n\n[... {total} bytes total; read the next chunk with offset_bytes={args.offset_bytes + limit} ...]"
 
     ctx.read_files.add(rel)
     return ToolResult(

@@ -156,14 +156,38 @@ def _windows_posix_shell() -> str | None:
     return None
 
 
+def _shell_argv(command: str) -> list[str]:
+    """Build an explicit shell argv without `shell=True` search semantics."""
+    posix_shell = _windows_posix_shell()
+    if posix_shell is not None:
+        return [posix_shell, "-c", command]
+    if os.name == "nt":
+        system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        cmd = system_root / "System32" / "cmd.exe"
+        executable = str(cmd) if cmd.is_file() else os.environ.get("COMSPEC", "cmd.exe")
+        return [executable, "/d", "/s", "/c", command]
+    return ["/bin/sh", "-c", command]
+
+
 def _kill_process_group(proc: "subprocess.Popen[bytes]") -> None:
     """SIGKILL the command's whole process group (POSIX) so backgrounded /
     piped children don't survive the timeout; fall back to killing the leader."""
     try:
         if os.name == "posix":
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        else:  # pragma: no cover - non-POSIX best effort
-            proc.kill()
+        else:  # Windows has no killpg; taskkill /T follows the child tree.
+            system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+            taskkill = system_root / "System32" / "taskkill.exe"
+            if taskkill.is_file():
+                subprocess.run(
+                    [str(taskkill), "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+            if proc.poll() is None:
+                proc.kill()
     except (OSError, ProcessLookupError):
         pass
 
@@ -184,13 +208,10 @@ def _execute_shell(command: str, cwd: str, timeout: int) -> tuple[int, str, str,
     }
     if os.name == "posix":
         popen_kwargs["start_new_session"] = True  # own process group -> killpg works
+    elif hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-    shell = _windows_posix_shell()
-    if shell is None:
-        # POSIX (/bin/sh), or a Windows box with no POSIX shell to offer.
-        proc = subprocess.Popen(command, shell=True, **popen_kwargs)
-    else:
-        proc = subprocess.Popen([shell, "-c", command], **popen_kwargs)
+    proc = subprocess.Popen(_shell_argv(command), **popen_kwargs)
 
     buffers: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     overflow = {"hit": False}

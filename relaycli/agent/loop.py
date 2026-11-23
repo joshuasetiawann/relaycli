@@ -11,6 +11,7 @@ Key improvements over the original:
 from __future__ import annotations
 
 import asyncio
+import itertools
 import json
 import re
 import threading
@@ -33,6 +34,8 @@ from relaycli.core.permissions import PermissionManager
 from relaycli.core.session import Session
 from relaycli.core.memory import memory_prompt_block
 from relaycli.heuristics import load_heuristics
+from relaycli.intent import frontend_creation_request, simple_folder_request
+from relaycli.frontend_quality import frontend_bundle_root
 from relaycli.skills import discover_skills, skills_catalog_block
 from relaycli.tools import ToolError, ToolRegistry, default_registry
 from relaycli.tools.base import ToolContext, ToolResult
@@ -52,6 +55,14 @@ _JSON_SELF_CORRECT_RETRIES = 1
 _MISSING = object()
 _NAME_KEYS = ("name", "tool", "tool_name", "function_name", "action")
 _ARG_KEYS = ("arguments", "args", "parameters", "params", "input")
+
+
+def _frontend_bundle_ready(project: ProjectContext, request: str) -> bool:
+    try:
+        root, _label = frontend_bundle_root(project, request)
+    except ValueError:
+        return False
+    return all((root / name).is_file() for name in ("index.html", "styles.css", "app.js"))
 
 # Prefix on a steer note (Agent.steer) when it enters the session. It has
 # to say where the text came from: without it a note reads as one more
@@ -144,8 +155,15 @@ class Agent:
         self._heuristics = load_heuristics()
         self._memory_block = memory_prompt_block(self.project.root)
         self.tool_ctx = ToolContext(self.project, self.permissions, self.console, require_read_before_edit=True)
+        self.tool_ctx.settings = self.settings
+        if is_local(self.model):
+            self.tool_ctx.read_max_bytes = max(2048, self.settings.ollama_num_ctx)
         self._schemas = self.registry.schemas() if pass_tool_schemas else []
-        self.session = Session(self._build_system_prompt(), token_budget=self.settings.token_budget, model=self.model)
+        context_budget = self.settings.token_budget
+        if is_local(self.model):
+            # Keep room for the next reply inside Ollama's actual context.
+            context_budget = min(context_budget, self.settings.ollama_num_ctx - 1024)
+        self.session = Session(self._build_system_prompt(), token_budget=context_budget, model=self.model)
         self._current_iteration = 0
         self._current_request = ""
         # Mid-run instructions from another thread (the live view's `s`
@@ -160,8 +178,11 @@ class Agent:
     def model(self) -> str:
         return self._model_override or self.settings.model
 
-    def _build_system_prompt(self) -> str:
-        tools = "\n".join(f"- {t.name}: {t.description}" for t in self.registry.tools())
+    def _build_system_prompt(self, allowed_tools: set[str] | None = None) -> str:
+        visible = self.registry.tools()
+        if allowed_tools is not None:
+            visible = [tool for tool in visible if tool.name in allowed_tools]
+        tools = "\n".join(f"- {t.name}: {t.description}" for t in visible)
         mode = self.permissions.mode
         prompt = self._prompt_template.format(cwd=self.project.root, mode=mode,
                                                mode_desc=_MODE_DESCRIPTIONS.get(mode, ""), tool_list=tools)
@@ -173,7 +194,7 @@ class Agent:
         # only, gated on the agent actually having tools (no point
         # advertising use_skill to an agent that can't call it, e.g. the
         # Orchestrator's pass_tool_schemas=False planning-only agent).
-        if self._schemas:
+        if self._schemas and (allowed_tools is None or "use_skill" in allowed_tools):
             extra += skills_catalog_block(discover_skills(self.project.root), role_id=self._roster_role_id)
         extra += self._memory_block
         return prompt + extra
@@ -216,9 +237,75 @@ class Agent:
             self.session.add_user(_STEER_PREFIX + note)
         return bool(notes)
 
+    def _run_simple_folder_request(
+        self, request: str, reporter: Reporter, started: float
+    ) -> AgentResult | None:
+        """Execute an exact one-folder request without waking an LLM.
+
+        This is deliberately implemented through the registered tool instead
+        of calling ``Path.mkdir``: permission prompts, path containment,
+        leases, call budgets, and structured UI events remain identical to a
+        model-issued tool call. A role without ``create_folder`` cannot use
+        the shortcut.
+        """
+
+        folder = simple_folder_request(request)
+        if folder is None or self.registry.get("create_folder") is None:
+            return None
+        if self._should_stop is not None and self._should_stop():
+            return AgentResult(
+                final_text="Stopped by user.", iterations=0, tool_calls=0,
+                usage=Usage(), stopped_reason="stopped",
+                elapsed=time.perf_counter() - started,
+            )
+
+        self._current_iteration = 1
+        reporter.iteration(1)
+        call = ToolCall(
+            id="local_create_folder_1",
+            name="create_folder",
+            arguments=json.dumps({"path": folder}, ensure_ascii=False),
+        )
+        self.session.add_assistant_message(
+            LLMResponse(text="", tool_calls=[call]).to_assistant_message()
+        )
+        reporter.tool_start(call)
+        content, tool_result = self._execute(call)
+        reporter.tool_end(call, tool_result)
+        self.session.add_tool_result(call.id, call.name, content)
+
+        verified = False
+        if tool_result is not None and tool_result.ok:
+            try:
+                verified = self.project.resolve(folder).is_dir()
+            except OSError:
+                verified = False
+        if verified:
+            final_text = tool_result.output
+            stopped_reason = "done"
+        else:
+            final_text = content or f"Folder '{folder}' was not created."
+            stopped_reason = "error"
+        self.session.add_assistant_message({"role": "assistant", "content": final_text})
+        return AgentResult(
+            final_text=final_text,
+            iterations=1,
+            tool_calls=1,
+            usage=Usage(),
+            stopped_reason=stopped_reason,
+            elapsed=time.perf_counter() - started,
+        )
+
     def run(self, request: str, *, reporter: Reporter | None = None) -> AgentResult:
         reporter = reporter or Reporter()
         started = time.perf_counter()
+        self._current_request = request[:200] + ("…" if len(request) > 200 else "")
+        self.tool_ctx.request = request
+        self.tool_ctx.questions_asked = 0
+        self.session.add_user(request)
+        simple_result = self._run_simple_folder_request(request, reporter, started)
+        if simple_result is not None:
+            return simple_result
         if self.settings.offline and not is_local(self.model):
             # Checked here rather than only inside resolve_candidates
             # (which only runs when role= is set — most callers, including
@@ -233,8 +320,6 @@ class Agent:
                 iterations=0, tool_calls=0, usage=Usage(), stopped_reason="error",
                 elapsed=time.perf_counter() - started,
             )
-        self._current_request = request[:200] + ("…" if len(request) > 200 else "")
-        self.session.add_user(request)
         usage = Usage()
         tool_calls = 0
         empty_responses = 0
@@ -243,8 +328,39 @@ class Agent:
         json_self_corrections = 0
         actionable_noop_repairs = 0
         folder_create_nudges = 0
+        frontend_task = frontend_creation_request(request)
+        frontend_bundle_existed = frontend_task and _frontend_bundle_ready(
+            self.project, request
+        )
+        active_schemas = self._schemas
+        if self._heuristics.looks_like_actionable_file_request(request):
+            active_schemas = [
+                schema for schema in self._schemas
+                if schema.get("function", {}).get("name") != "question"
+            ]
+        if frontend_task:
+            # Keep the complete tool set installed, but expose only what this
+            # task can use. Local models are much more reliable when optional
+            # todo/web/memory/process tools are not competing with file tools.
+            frontend_tools = {
+                "list_dir", "read_file", "write_file", "edit_file", "create_folder",
+                "run_command",
+            }
+            active_schemas = [
+                schema for schema in active_schemas
+                if schema.get("function", {}).get("name") in frontend_tools
+            ]
+        active_tool_names = {
+            schema.get("function", {}).get("name") for schema in active_schemas
+        }
+        self.session.system_prompt = self._build_system_prompt(active_tool_names)
 
-        for i in range(1, self.settings.max_iterations + 1):
+        iterations = (
+            itertools.count(1)
+            if self.settings.max_iterations is None
+            else range(1, self.settings.max_iterations + 1)
+        )
+        for i in iterations:
             if self._should_stop is not None and self._should_stop():
                 return AgentResult(final_text="Stopped by user.", iterations=i - 1,
                                    tool_calls=tool_calls, usage=usage, stopped_reason="stopped",
@@ -260,14 +376,24 @@ class Agent:
                 reporter.model_start(i, self.model)
                 if self._role is not None:
                     def _attempt(candidate_model: str, *, _msgs=self.session.to_messages()) -> LLMResponse:
-                        return self.llm.complete(_msgs, tools=self._schemas,
-                                                  model=candidate_model, on_token=reporter.assistant_token)
+                        return self.llm.complete(
+                            _msgs,
+                            tools=active_schemas,
+                            model=candidate_model,
+                            temperature=0.55 if frontend_task else None,
+                            on_token=reporter.assistant_token,
+                        )
                     response = call_with_escalation_sync(
                         self.settings, self._role, _attempt, health=self._health
                     )
                 else:
-                    response = self.llm.complete(self.session.to_messages(), tools=self._schemas,
-                                                  model=self.model, on_token=reporter.assistant_token)
+                    response = self.llm.complete(
+                        self.session.to_messages(),
+                        tools=active_schemas,
+                        model=self.model,
+                        temperature=0.55 if frontend_task else None,
+                        on_token=reporter.assistant_token,
+                    )
             except LLMError as exc:
                 reporter.model_error(i, self.model, exc)
                 return AgentResult(final_text=f"LLM error: {exc}", iterations=i,
@@ -276,7 +402,7 @@ class Agent:
 
             usage = usage.add(response.usage)
             text_calls: list[ToolCall] = []
-            tool_schemas_sent = bool(self._schemas)
+            tool_schemas_sent = bool(active_schemas)
 
             if tool_schemas_sent and not response.tool_calls:
                 text_calls = text_tool_calls(
@@ -294,6 +420,9 @@ class Agent:
                         )
                         if text_calls and json_self_corrections < _JSON_SELF_CORRECT_RETRIES:
                             json_self_corrections += 1
+                            self.session.add_assistant_message(
+                                {"role": "assistant", "content": response.text}
+                            )
                             self.session.add_user(
                                 "Your previous response contained malformed JSON. "
                                 "RelayCLI attempted to repair it. Respond with valid JSON "
@@ -394,7 +523,9 @@ class Agent:
             text_tool_repairs = 0
             folder_ready_nudge: str | None = None
 
-            if len(active_tool_calls) > 1 and _all_read_only(active_tool_calls):
+            if (len(active_tool_calls) > 1
+                    and all(call.name in active_tool_names for call in active_tool_calls)
+                    and _all_read_only(active_tool_calls)):
                 try:
                     results = asyncio.run(self._execute_concurrent(active_tool_calls))
                 except BaseException:
@@ -419,6 +550,14 @@ class Agent:
                 for call_index, call in enumerate(active_tool_calls):
                     tool_calls += 1
                     reporter.tool_start(call)
+                    if call.name not in active_tool_names:
+                        result = ToolResult.error(
+                            f"Tool '{call.name}' is not available for this task. "
+                            "Use the offered file and verification tools, then finish."
+                        )
+                        reporter.tool_end(call, result)
+                        self.session.add_tool_result(call.id, call.name, result.output)
+                        continue
                     try:
                         content, result = self._execute(call)
                     except BaseException:
@@ -441,6 +580,27 @@ class Agent:
                 folder_create_nudges += 1
                 self.session.add_user(folder_ready_nudge)
 
+            # A concrete static frontend has a deterministic completion
+            # boundary. Returning as soon as the three requested core files
+            # exist prevents small local models from spending another slow
+            # turn rewriting a finished draft before Relay's quality gate can
+            # inspect it.
+            if (
+                file_write_successes > 0
+                and frontend_task
+                and (not frontend_bundle_existed or file_write_successes >= 3)
+                and _frontend_bundle_ready(self.project, request)
+            ):
+                return AgentResult(
+                    final_text="Frontend files written; ready for quality review.",
+                    iterations=i,
+                    tool_calls=tool_calls,
+                    usage=usage,
+                    stopped_reason="done",
+                    elapsed=time.perf_counter() - started,
+                )
+
+        assert self.settings.max_iterations is not None
         return AgentResult(final_text=f"Stopped after the maximum of {self.settings.max_iterations} iterations.",
                            iterations=self.settings.max_iterations, tool_calls=tool_calls,
                            usage=usage, stopped_reason="max_iterations",

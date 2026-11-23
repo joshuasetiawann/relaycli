@@ -63,6 +63,12 @@ LIGHT = Palette(
 DARK_BASE = "#0D1216"
 LIGHT_BASE = "#EFF2F4"
 
+# The desktop graph uses the stronger cobalt from its visual reference while
+# terminal ANSI output keeps SLATE INSTRUMENT's softer blue for readability.
+# Keeping this named prevents the web contract from silently drifting back to
+# the terminal color whenever either surface is redesigned.
+WEB_DARK_ACCENT = "#3D6CFF"
+
 # Extra surface tokens (§1) — the hues the state table doesn't cover.
 DARK_SURFACE: dict[str, str] = {
     "page_bg": "#080C0F", "heading": "#E4EBF0", "text_secondary": "#8CA0AE",
@@ -200,6 +206,11 @@ TASK_STATE_WORD: dict[TaskStatus, str] = {
 }
 AWAITING_YOU_WORD = "NEEDS YOU"
 
+# A tool's own outcome, as opposed to a task's. The design writes `✓ 12
+# passed` in colour and `PASS 12 passed` under NO_COLOR — test vocabulary,
+# not task vocabulary, which is why this is not TASK_STATE_WORD["done"].
+RESULT_WORD: dict[bool, str] = {True: "PASS", False: "FAIL"}
+
 # Markers & connectors (§2) — glyph, ascii fallback.
 MARKERS: dict[str, Glyph] = {
     "lease_held": Glyph("▤", "[L]"),
@@ -209,8 +220,20 @@ MARKERS: dict[str, Glyph] = {
     "escalation": Glyph("▲", "^"),
     "escalation_light": Glyph("▵", "^"),
     "cost_prefix": Glyph("$", "$"),
-    "focus_rail": Glyph("▌", "|"),
+    # Two roles for one glyph. In colour they are the same ▌: a solid bar in
+    # the accent hue, saying "this is the thing". Without colour they have to
+    # separate, and the source separates them — the brand mark stays `|relay`
+    # because it reads as a mark, while the lane rail becomes `>` because a
+    # `|` sitting in column 0 of a table of columns reads as a frame line,
+    # which §12 says the frame does not have.
+    "brand_rail": Glyph("▌", "|"),
+    "focus_rail": Glyph("▌", ">"),
     "prompt_caret": Glyph("❯", ">"),
+    # The block cursor after typed input. A thinner glyph than the focus
+    # rail on purpose — the rail marks a whole row, this marks a character
+    # position — and the source's monochrome pass keeps it as-is rather
+    # than substituting an ASCII stand-in, so both spellings are the same.
+    "text_cursor": Glyph("▏", "▏"),
 }
 CONNECTORS = {"branch": "├─", "last": "└─", "pipe": "│"}
 BUDGET_METER = {"filled": "▮", "empty": "▯"}
@@ -273,9 +296,26 @@ ROLE_MARKS: dict[str, RoleMark] = {
     "documenter": RoleMark("GOVERN", "⊙", "doc"),
 }
 
-# Reserved family slots the design covers but no current role uses (§9) —
-# kept so a future role addition already has a spoken-for glyph and code.
-RESERVED_ROLE_CODES: dict[str, str] = {
-    "api": "BUILD", "e2e": "VERIFY", "infra": "OPERATE", "release": "OPERATE",
-    "observability": "OPERATE",
+# Reserved family slots the design covers but no current role uses (§9).
+# Full marks rather than bare family names: §2's table gives all seventeen a
+# glyph and a code, and the design's own screens label lanes with them
+# (`a7 ◈ e2e` in §05, the whole roster in §10). A renderer handed one of
+# these ids must be able to draw the same three characters the design does,
+# even though core/roles.py has no role that spawns into it yet — otherwise
+# the label silently degrades to a bare task id.
+RESERVED_ROLE_MARKS: dict[str, RoleMark] = {
+    "api": RoleMark("BUILD", "▣", "api"),
+    "e2e": RoleMark("VERIFY", "◈", "e2e"),
+    "infra": RoleMark("OPERATE", "⊞", "inf"),
+    "release": RoleMark("OPERATE", "⊞", "rel"),
+    "observability": RoleMark("OPERATE", "⊞", "obs"),
 }
+
+
+def role_mark(role_id: str) -> RoleMark | None:
+    """The mark for a role id — a live role first, then a reserved slot.
+
+    One lookup for every renderer, so a lane, a plan row and the roster
+    screen can never disagree about which glyph a role wears.
+    """
+    return ROLE_MARKS.get(role_id) or RESERVED_ROLE_MARKS.get(role_id)

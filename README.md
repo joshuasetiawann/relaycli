@@ -248,6 +248,26 @@ reviewer_model = "gpt-4o-mini"
 max_review_cycles = 2
 ```
 
+For a hybrid local/cloud workflow, keep the base model local and assign a
+stronger model only to roles that need it. For example, with a configured
+OpenRouter key:
+
+```toml
+model = "ollama_chat/qwen2.5-coder:14b"
+relay_enabled = true
+experimental_parallel = false
+local_scaffolds = false
+coder_model = "openrouter/anthropic/claude-sonnet-5.5"
+reviewer_model = "openrouter/anthropic/claude-sonnet-5.5"
+max_output_tokens = 4096
+```
+
+An explicit frontend creation request skips Planner and goes straight to
+Coder. The output limit applies to each model call, independently of the
+iteration and review-cycle limits. Cloud calls can incur provider charges;
+keep `coder_model` local for routine work and switch it for premium frontend
+tasks. Ollama's timeout remains interrupt-only in practice.
+
 Task-split mode lets the planner route numbered steps to specialist roles:
 
 ```text

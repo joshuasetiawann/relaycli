@@ -188,19 +188,22 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
     warning = slow_local_model_warning(settings.model)
     if warning:
         fallback = recommended_fast_local_model(settings)
-        if fallback and fallback != settings.model:
+        from relaycli.heuristics import load_heuristics
+
+        actionable = load_heuristics().looks_like_actionable_file_request(request)
+        if actionable:
+            console.print(f"[yellow]▲ {escape(warning)}[/yellow]")
+            console.print(
+                "[dim]Selected model kept: this task changes files and needs reliable tool use. "
+                "Automatic fallback is disabled for implementation tasks.[/dim]"
+            )
+        elif fallback and fallback != settings.model:
             old_model = settings.model
             console.print(f"[yellow]▲ {escape(warning)}[/yellow]")
             settings.model = fallback
-            try:
-                from relaycli.appconfig import set_base_model
-
-                set_base_model(fallback)
-            except Exception:
-                pass
             console.print(
                 f"[yellow]model auto-switch:[/yellow] {escape(old_model)} → {escape(fallback)} "
-                "[dim](requires full GPU / avoids CPU-GPU fallback)[/dim]"
+                "[dim](this run only; requires full GPU / avoids CPU-GPU fallback)[/dim]"
             )
         else:
             console.print(f"[yellow]▲ {escape(warning)}[/yellow]")
@@ -274,7 +277,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         finally:
             observer.close()  # an error/Ctrl-C must not leave a spinner live
         render_relay_summary(console, relay_result)
-        if relay_result.stopped_reason == "error":
+        if relay_result.stopped_reason != "done":
             raise typer.Exit(code=1)
         return
 
@@ -297,7 +300,7 @@ def _run_once(settings: Settings, request: str, *, assume_yes: bool) -> None:
         reporter.close()  # an error/Ctrl-C must not leave the spinner live
 
     render_task_summary(console, result, reporter.tools_used)
-    if result.stopped_reason == "error":
+    if result.stopped_reason != "done":
         raise typer.Exit(code=1)
 
 

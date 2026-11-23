@@ -24,6 +24,7 @@ COMMANDS: tuple[SlashCommand, ...] = (
     SlashCommand("agents", "[r on|off]", "Show relay agents; toggle explorer/tester/tasks.", "Agents"),
     SlashCommand("skill", "[name]", "Toggle a skill on/off for this session.", "Skills"),
     SlashCommand("skills", "", "List available skills.", "Skills"),
+    SlashCommand("tools", "", "List native tools available to the agent.", "Agents"),
     SlashCommand("config", "", "Roles, per-role models, and provider keys.", "Setup"),
     SlashCommand("settings", "", "General preferences.", "Setup"),
     SlashCommand("setup", "", "Guided setup: model, keys, and optional services.", "Setup"),
@@ -92,4 +93,3 @@ def command_payload() -> list[dict[str, str]]:
         }
         for command in COMMANDS
     ]
-

@@ -53,7 +53,7 @@ def test_settings_defaults(monkeypatch):
     settings = Settings()
     assert settings.model
     assert settings.permission_mode is PermissionMode.suggest
-    assert settings.max_iterations >= 1
+    assert settings.max_iterations is None
     providers = settings.detected_providers()
     assert providers["ollama"] is True
     assert providers["openai"] is False

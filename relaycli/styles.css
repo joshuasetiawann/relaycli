@@ -1,18 +1,18 @@
-  /* SLATE INSTRUMENT tokens (docs/design/DESIGN_TOKENS.md) — same custom-
-     property NAMES as before so every var(--x) reference below is
-     unchanged; only the values move off the old Claude-clay accent
-     (#2D5BFF) onto the shared terminal/web/landing palette. Where §1 has
+  /* Desktop graph tokens — the surface system stays aligned with SLATE
+     INSTRUMENT (docs/design/DESIGN_TOKENS.md), while the primary accent uses
+     the supplied desktop reference's stronger cobalt, replacing legacy
+     (#2D5BFF). The custom-property names remain shared across themes. Where §1 has
      no direct equivalent (--raise/--card/--well, the --t1..t5 text-gray
      scale) the closest extra surface token is reused, or — --card only —
      a small tint is interpolated between --panel and --raise, per §1's
      own "re-derive a tint rather than hardcoding a one-off hex" rule. */
   :root {
-    --accent: #5FA8DC; --bg: #080C0F; --panel: #0D1216; --raise: #131E26;
-    --card: #111820; --well: #080C0F; --border: #24323B; --border2: #1B252C;
-    --t1: #E4EBF0; --t2: #C3CED6; --t3: #8CA0AE; --t4: #64798A; --t5: #3B4A55;
+    --accent: #3D6CFF; --bg: #080A0F; --panel: #0B0E14; --raise: #10141C;
+    --card: #0E131B; --well: #07090E; --border: #242B38; --border2: #1A202B;
+    --t1: #EEF1F7; --t2: #C7CEDA; --t3: #8D98AA; --t4: #626D7E; --t5: #3A4351;
     --green: #6FB77F; --amber: #D6A05C; --red: #D4695C; --waiting: #8E93CC;
-    --mono: 'JetBrains Mono', ui-monospace, monospace;
-    --sans: 'Geist', -apple-system, system-ui, sans-serif;
+    --mono: 'Cascadia Code', 'SFMono-Regular', Consolas, ui-monospace, monospace;
+    --sans: Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
   /* Light theme — DESIGN_TOKENS.md §1 only documents the 9-token state
      table plus one base hex (#EFF2F4) for light, not a full second set of
@@ -38,6 +38,10 @@
   ::-webkit-scrollbar-track { background: transparent; }
   input::placeholder { color: var(--t4); }
   button { font-family: inherit; }
+  :where(button, input, select, [role="button"], [role="switch"]):focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--accent) 78%, white);
+    outline-offset: 2px;
+  }
   @keyframes live { 0%,100% { opacity: 1; transform: scale(1);} 50% { opacity: .35; transform: scale(.8);} }
   @keyframes blink { 0%,48% { opacity: 1;} 52%,100% { opacity: 0;} }
   @keyframes ring { 0% { transform: scale(1); opacity: .5;} 100% { transform: scale(1.55); opacity: 0;} }
@@ -299,9 +303,9 @@
      zoom/legend overlays (direct children of .canvas, not this) stay
      pinned to the corners instead of scrolling away with a tall stage. */
 	  .canvas-scroll { position: absolute; inset: 0; overflow: auto; display: flex; z-index: 2;
-	    align-items: safe center; justify-content: center; padding: clamp(16px, 2vw, 28px); }
+	    align-items: flex-start; justify-content: flex-start; padding: clamp(16px, 2vw, 28px); }
 	  .stage { position: relative; transform-origin: top center; display: flex; flex-direction: column;
-	    width: min(720px, 100%); padding: 28px 24px 32px; }
+	    width: min(720px, 100%); padding: 28px 24px 32px; margin: auto; }
 	  .stage::before { content: ""; position: absolute; left: 47px; top: 88px; bottom: 78px; width: 1px;
 	    background: linear-gradient(to bottom, transparent, var(--border) 12%, var(--border) 88%, transparent);
 	    opacity: .7; pointer-events: none; }
@@ -378,6 +382,73 @@
     color: var(--t2); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .sact::before { content: "▸"; color: var(--accent); flex: 0 0 auto; }
   .ssteps { float: right; font-family: var(--mono); font-size: 9.5px; color: var(--t5); margin-left: 8px; }
+
+  /* Desktop relay map — faithful to the supplied three-panel reference while
+     remaining data-driven for optional roles and specialist agents. */
+  .canvas-scroll { cursor: grab; overscroll-behavior: contain; }
+  .canvas-scroll.dragging { cursor: grabbing; user-select: none; }
+  .flow-stage { display: block; flex: 0 0 auto; min-width: 700px; min-height: 470px;
+    padding: 0; transform-origin: top left; }
+  .flow-stage::before { display: none; }
+  .flow-hint { position: absolute; left: 50%; top: 14px; z-index: 4;
+    transform: translateX(-50%); margin: 0; border-radius: 7px; }
+  .flow-links { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible;
+    pointer-events: none; }
+  .flow-links marker path { fill: var(--border); }
+  .flow-link { fill: none; stroke: var(--border); stroke-width: 1.25;
+    vector-effect: non-scaling-stroke; transition: stroke .25s, opacity .25s; }
+  .flow-link.done { stroke: color-mix(in srgb, var(--green) 58%, var(--border)); }
+  .flow-link.live { stroke: color-mix(in srgb, var(--accent) 75%, var(--border));
+    stroke-dasharray: 6 8; animation: flow .8s linear infinite; }
+  .flow-link.signal { stroke: var(--accent); stroke-width: 3; stroke-linecap: round;
+    stroke-dasharray: 1 150; filter: drop-shadow(0 0 5px var(--accent));
+    animation: signalrun 1.6s linear infinite; }
+  .flow-retry { fill: none; stroke: var(--t5); stroke-width: 1; stroke-dasharray: 3 6;
+    vector-effect: non-scaling-stroke; opacity: .7; }
+  .retry-label { fill: var(--t5); font-family: var(--mono); font-size: 9px; letter-spacing: .5px; }
+  @keyframes signalrun { to { stroke-dashoffset: -302; } }
+
+  .flow-node { position: absolute; left: var(--x); top: var(--y); width: 188px; min-height: 94px;
+    display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-rows: auto auto;
+    gap: 5px 10px; align-items: center; padding: 13px 14px; border: 1px solid var(--border);
+    border-radius: 12px; background: color-mix(in srgb, var(--card) 96%, var(--accent));
+    color: var(--t1); text-align: left; cursor: pointer; overflow: hidden;
+    box-shadow: 0 20px 48px -40px #000;
+    transition: transform .2s cubic-bezier(.2,.8,.2,1), border-color .2s, background .2s, box-shadow .2s, opacity .2s;
+    animation: risein .22s ease-out both; }
+  .flow-node:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+    box-shadow: 0 26px 60px -42px color-mix(in srgb, var(--accent) 65%, #000); }
+  .flow-node:active { transform: translateY(-1px) scale(.99); }
+  .flow-node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 32%, transparent),
+    0 24px 58px -40px var(--accent); }
+  .flow-node.active { border-color: color-mix(in srgb, var(--accent) 76%, var(--border));
+    background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+  .flow-node.done { border-color: color-mix(in srgb, var(--green) 40%, var(--border)); }
+  .flow-node.err { border-color: color-mix(in srgb, var(--red) 55%, var(--border)); }
+  .flow-node.dim { opacity: .56; }
+  .flow-node.active::after { content: ""; position: absolute; inset: 0;
+    background: linear-gradient(110deg, transparent 0 42%, color-mix(in srgb, var(--accent) 13%, transparent) 50%, transparent 58%);
+    animation: cardsweep 3.2s ease-in-out infinite; pointer-events: none; }
+  .flow-icon { grid-row: 1 / 3; width: 32px; height: 32px; border-radius: 8px;
+    display: grid; place-items: center; background: color-mix(in srgb, var(--accent) 12%, var(--well));
+    color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--border));
+    font-family: var(--mono); font-size: 12px; }
+  .flow-node.done .flow-icon { color: var(--green); background: color-mix(in srgb, var(--green) 10%, var(--well)); }
+  .flow-node.err .flow-icon { color: var(--red); }
+  .flow-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .flow-name { font-family: var(--mono); font-size: 12.5px; font-weight: 600; text-transform: capitalize; }
+  .flow-desc { color: var(--t3); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .flow-action { color: var(--t2); font-family: var(--mono); font-size: 10px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .flow-state { align-self: start; display: inline-flex; align-items: center; gap: 5px;
+    color: var(--t4); font-family: var(--mono); font-size: 9px; white-space: nowrap; }
+  .flow-state i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+  .flow-node.active .flow-state { color: var(--accent); }
+  .flow-node.active .flow-state i { animation: live 1.5s ease-in-out infinite; }
+  .flow-node.done .flow-state { color: var(--green); }
+  .flow-node.err .flow-state { color: var(--red); }
+  .flow-model { grid-column: 2 / 4; min-width: 0; color: var(--t5); font-family: var(--mono);
+    font-size: 9px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
   /* specialists branch onto an indented sub-lane with elbow connectors */
 	  .st.branch { margin-left: 48px; --lane-shift: 0px; }
@@ -533,8 +604,9 @@
   .stat .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .4px; text-transform: uppercase; color: var(--t4); }
   .stat .v { font-family: var(--mono); font-size: 12.5px; color: var(--t1); margin-top: 4px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .activity { flex: 0 0 min(280px, 34vh); min-height: 160px; border-bottom: 1px solid var(--border);
+  .activity { flex: 0 1 180px; min-height: 118px; max-height: 200px; border-bottom: 1px solid var(--border);
     padding: 11px 16px 12px; overflow: hidden; }
+  .activity.empty { display: none; }
   .activity .label { display: flex; justify-content: space-between; font-family: var(--mono);
     font-size: 10px; letter-spacing: 1.4px; color: var(--t3); text-transform: uppercase; margin-bottom: 8px; }
   .activity-list { height: calc(100% - 22px); overflow-y: auto; padding-right: 4px; }
@@ -564,12 +636,14 @@
   .agents { flex: 1 1 auto; overflow-y: auto; padding: 11px 16px 14px; }
   .agents .label { display: flex; justify-content: space-between; font-family: var(--mono);
     font-size: 10px; letter-spacing: 1.4px; color: var(--t3); text-transform: uppercase; margin-bottom: 9px; }
-  .card { padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border2); background: var(--card); margin-bottom: 8px;
+  .card { display: block; width: 100%; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--border2); background: var(--card); margin-bottom: 8px;
+    color: inherit; text-align: left; cursor: pointer;
     transition: border-color .18s, background .18s, transform .18s; }
   .card:hover { transform: translateY(-1px); border-color: var(--t5); }
   .card.active { border-color: color-mix(in srgb, var(--accent) 45%, var(--border2));
     background: color-mix(in srgb, var(--accent) 7%, var(--card)); box-shadow: inset 2px 0 0 var(--accent); }
   .card.done { border-color: color-mix(in srgb, var(--green) 30%, var(--border2)); }
+  .card.selected { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
   .card.off { opacity: .55; background: var(--well); }
   .card .row { display: flex; align-items: center; gap: 8px; }
   .card .name { font-family: var(--mono); font-size: 12.5px; font-weight: 500; color: var(--t1); }
@@ -642,11 +716,24 @@
     .side { flex-basis: 280px; width: 280px; }
   }
   @media (max-width: 760px) {
-    .main { flex-direction: column; }
-    .chat, .side { width: 100%; flex: 0 0 auto; max-height: 34vh; border-left: 0; border-right: 0; }
-    .canvas { min-height: 360px; }
+    .top { column-gap: 9px; }
+    .logo { margin-right: auto; }
+    .proj, #projectBtn, #gearBtn, .live { display: none; }
+    #modelBtn { max-width: 156px; }
+    #modelName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #configBtn { width: 32px; height: 30px; justify-content: center; padding: 0; font-size: 0; }
+    #stopBtn:disabled { display: none; }
+    .main { position: relative; flex-direction: column; overflow: hidden; }
+    .chat { width: 100%; flex: 0 1 34vh; min-height: 140px; max-height: 34vh; border-left: 0; border-right: 0; }
+    .side { position: absolute; inset: 0 0 0 auto; z-index: 25; width: min(100%, 360px);
+      max-height: none; border-right: 0; box-shadow: -24px 0 70px -38px rgba(0,0,0,.9); }
+    .canvas { flex: 1 1 0; min-height: 220px; }
     .canvas-scroll { justify-content: flex-start; padding: 16px; }
     .stage { width: clamp(320px, calc(100vw - 32px), 560px); padding-left: 10px; padding-right: 10px; }
+    .flow-stage { min-width: 700px; padding: 0; }
+    .st.lane1, .st.lane2, .st.orch { --lane-shift: 0px; }
+    .st.branch { margin-left: 16px; }
+    .elbow { margin-left: 16px; }
     .legend { display: none; }
   }
   .ab{font-weight:600}

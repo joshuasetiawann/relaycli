@@ -15,9 +15,15 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, field_validator
-from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict, TomlConfigSettingsSource
+from pydantic_settings import (
+    BaseSettings,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 
 CONFIG_DIR: Path = Path.home() / ".relaycli"
 CONFIG_FILE: Path = CONFIG_DIR / "config.toml"
@@ -25,6 +31,8 @@ CONFIG_FILE: Path = CONFIG_DIR / "config.toml"
 _DOTENV_BLOCKED_FIELDS: frozenset[str] = frozenset({
     "permission_mode", "relaycli_permission_mode",
     "ollama_base_url", "relaycli_ollama_base_url", "ollama_api_base",
+    "use_9router", "relaycli_use_9router",
+    "nine_router_base_url", "relaycli_nine_router_base_url",
 })
 
 
@@ -66,23 +74,45 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
         toml_file=None,
     )
 
     model: str = Field(default="gpt-4o-mini")
     permission_mode: PermissionMode = Field(default=PermissionMode.suggest)
-    max_iterations: int = Field(default=8, ge=1)
+    max_iterations: int | None = Field(
+        default=None,
+        ge=1,
+        description="Maximum agent steps; unset means run until completion or Ctrl+C.",
+    )
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     token_budget: int = Field(default=120_000, ge=1_000)
+    max_output_tokens: int | None = Field(
+        default=None, ge=1,
+        description="Maximum output tokens per model call; unset uses the provider default.",
+    )
     llm_timeout: int = Field(default=120, ge=10, description="Timeout in seconds for each LLM completion call")
+    ollama_num_ctx: int = Field(
+        default=6_144,
+        ge=2_048,
+        le=131_072,
+        description="Context window sent to local Ollama chat models.",
+    )
     skills_auto: bool = Field(default=True)
-    local_scaffolds: bool = Field(default=False)
+    local_scaffolds: bool = Field(
+        default=False,
+        description="Use instant repeatable frontend templates instead of unique agent-designed pages.",
+    )
 
     relay_enabled: bool = Field(default=False)
     planner_model: str | None = Field(default=None)
     coder_model: str | None = Field(default=None)
     reviewer_model: str | None = Field(default=None)
-    max_review_cycles: int = Field(default=2, ge=0)
+    max_review_cycles: int | None = Field(
+        default=None,
+        ge=0,
+        description="Maximum Relay revision cycles; unset means revise until approved or Ctrl+C.",
+    )
     relay_explorer: bool = Field(default=False)
     relay_tester: bool = Field(default=False)
     relay_split_tasks: bool = Field(default=False)
@@ -113,12 +143,12 @@ class Settings(BaseSettings):
     )
     nine_router_base_url: str = Field(default="http://localhost:20128/v1")
 
-    openai_api_key: str | None = Field(default=None, validation_alias=AliasChoices("OPENAI_API_KEY", "RELAYCLI_OPENAI_API_KEY"))
-    anthropic_api_key: str | None = Field(default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "RELAYCLI_ANTHROPIC_API_KEY"))
-    gemini_api_key: str | None = Field(default=None, validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY", "RELAYCLI_GEMINI_API_KEY"))
-    groq_api_key: str | None = Field(default=None, validation_alias=AliasChoices("GROQ_API_KEY", "RELAYCLI_GROQ_API_KEY"))
-    mistral_api_key: str | None = Field(default=None, validation_alias=AliasChoices("MISTRAL_API_KEY", "RELAYCLI_MISTRAL_API_KEY"))
-    openrouter_api_key: str | None = Field(default=None, validation_alias=AliasChoices("OPENROUTER_API_KEY", "RELAYCLI_OPENROUTER_API_KEY"))
+    openai_api_key: str | None = Field(default=None, repr=False, validation_alias=AliasChoices("OPENAI_API_KEY", "RELAYCLI_OPENAI_API_KEY"))
+    anthropic_api_key: str | None = Field(default=None, repr=False, validation_alias=AliasChoices("ANTHROPIC_API_KEY", "RELAYCLI_ANTHROPIC_API_KEY"))
+    gemini_api_key: str | None = Field(default=None, repr=False, validation_alias=AliasChoices("GEMINI_API_KEY", "GOOGLE_API_KEY", "RELAYCLI_GEMINI_API_KEY"))
+    groq_api_key: str | None = Field(default=None, repr=False, validation_alias=AliasChoices("GROQ_API_KEY", "RELAYCLI_GROQ_API_KEY"))
+    mistral_api_key: str | None = Field(default=None, repr=False, validation_alias=AliasChoices("MISTRAL_API_KEY", "RELAYCLI_MISTRAL_API_KEY"))
+    openrouter_api_key: str | None = Field(default=None, repr=False, validation_alias=AliasChoices("OPENROUTER_API_KEY", "RELAYCLI_OPENROUTER_API_KEY"))
     ollama_base_url: str = Field(default="http://localhost:11434", validation_alias=AliasChoices("OLLAMA_BASE_URL", "OLLAMA_API_BASE", "RELAYCLI_OLLAMA_BASE_URL"))
 
     @field_validator("model")
@@ -131,6 +161,24 @@ class Settings(BaseSettings):
                 "environment variable."
             )
         return v
+
+    @field_validator("ollama_base_url", "nine_router_base_url")
+    @classmethod
+    def _local_api_url_is_http(cls, v: str, info) -> str:
+        parsed = urlparse(v)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                f"{info.field_name} must be an http(s) base URL without "
+                "credentials, query parameters, or a fragment"
+            )
+        return v.rstrip("/")
 
     @field_validator(
         "openai_api_key", "anthropic_api_key", "gemini_api_key",

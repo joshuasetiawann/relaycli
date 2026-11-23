@@ -1,4 +1,4 @@
-"""Relay pipeline: Planner → Coder → Reviewer with a bounded revision loop.
+"""Relay pipeline: Planner → Coder → Reviewer with a configurable revision loop.
 
 Each role is an ordinary :class:`relaycli.agent.Agent` with its own session,
 its own system-prompt template, a routed model (:mod:`relaycli.agent.router`), and a
@@ -19,6 +19,7 @@ Agent/Reporter), so this module contains no Rich rendering.
 
 from __future__ import annotations
 
+import itertools
 import re
 import time
 from dataclasses import dataclass, field
@@ -33,6 +34,8 @@ from relaycli.config import Settings, get_settings
 from relaycli.core.context import ProjectContext
 from relaycli.core.llm import LLM, Usage
 from relaycli.core.permissions import PermissionManager
+from relaycli.intent import frontend_creation_request, frontend_destination, simple_folder_request
+from relaycli.frontend_quality import frontend_design_brief, frontend_quality_issues
 from relaycli.appconfig import load_app_config
 from relaycli.core.roster import enabled_specialists, is_assignable, specialist_runtime
 from relaycli.agent.router import Role, resolve_model
@@ -65,6 +68,8 @@ Available tools (read-only — you cannot edit files or run commands):
 {tool_list}
 
 How to work:
+- You are planning only. Never attempt a write tool. For an exact request to
+  create one named folder, give Coder one short create-and-verify step.
 - If the request is only a greeting, acknowledgement, or too vague to act on,
   do NOT create an implementation plan. Ask one concise clarification question.
 - Ask clarification only when missing information makes the work unsafe or
@@ -112,6 +117,9 @@ How to work:
   or paths.
 - Use edit_file for targeted changes and write_file to create or fully replace
   a file. Use run_command to run tests or builds.
+- For a multi-file frontend, create or revise exactly one core file per model
+  turn. Finish HTML, CSS, and JavaScript separately instead of abbreviating all
+  three into one tool response.
 - Use run_background for anything that does not exit on its own (dev servers,
   watchers) — run_command kills it at its timeout.
 - Make the smallest correct change. Do not invent files, APIs, or tools.
@@ -180,6 +188,9 @@ How to work:
 - Verify the ACTUAL state of the working tree: read the changed files; run the
   project's tests via run_command when a test suite exists.
 - Judge only whether the request and plan are correctly satisfied — not style.
+- For a user-facing website/frontend, visual and content quality are part of
+  correctness. Reject generic placeholder copy, an empty one-section page,
+  template-like repetition, missing responsive behavior, or dead interactions.
 - Do not reject merely because the Coder chose reasonable defaults for a loose
   request. Reject if exact user names/paths were ignored or the requested
   deliverable was not created.
@@ -322,6 +333,8 @@ class Relay:
 
     # -- internals -------------------------------------------------------
     def _agent(self, role: Role, template: str, registry: ToolRegistry) -> Agent:
+        if role is not Role.coder:
+            registry.unregister("use_skill")
         return Agent(
             self.settings,
             console=self.console,
@@ -430,15 +443,59 @@ class Relay:
         )
 
     def _pipeline(self, request: str, observer: RelayObserver, result: RelayResult) -> None:
+        # A deterministic one-folder operation does not benefit from three
+        # model round trips. Route it straight to Coder; Agent still executes
+        # the normal registered tool with path and permission enforcement.
+        if simple_folder_request(request) is not None:
+            coder = self._agent(Role.coder, CODER_TEMPLATE, _coder_registry())
+            code_run = self._run_role(
+                coder, Role.coder, request, 0, observer, result
+            )
+            result.final_text = code_run.result.final_text
+            result.stopped_reason = code_run.result.stopped_reason
+            if code_run.result.stopped_reason == "done":
+                result.verdict = "approve"
+                result.notes.append(
+                    "Simple folder request executed directly by Coder (no model tokens)."
+                )
+            return
+
         planner = self._agent(Role.planner, PLANNER_TEMPLATE, planner_registry())
         coder = self._agent(Role.coder, CODER_TEMPLATE, _coder_registry())
         reviewer = self._agent(Role.reviewer, REVIEWER_TEMPLATE, reviewer_registry())
+
+        # A concrete frontend build already states the deliverable; the current
+        # project root is the destination when no subfolder was named.
+        direct_plan = (
+            frontend_creation_request(request)
+            and not self.settings.relay_explorer
+            and not self.settings.relay_split_tasks
+        )
+        if direct_plan:
+            design_brief = frontend_design_brief(request)
+            destination_step = (
+                "Inspect the requested destination without changing its name."
+                if frontend_destination(request)
+                else "Use the current project directory as the destination."
+            )
+            plan = (
+                f"1. {destination_step}\n"
+                "2. Build a complete responsive website there using index.html, styles.css, and app.js.\n"
+                "3. Follow the creative direction below; do not ask preference questions.\n"
+                "4. Verify every requested file and run relevant local checks.\n\n"
+                + design_brief
+            )
+            result.notes.append(
+                "Planner skipped: the frontend deliverable was already explicit."
+            )
+        else:
+            plan = ""
 
         # 0. Explore (optional): a read-only context brief for the Planner.
         #    Advisory — a failed Explorer never aborts (nothing was modified,
         #    but planning can proceed exactly as it would without the role).
         planner_request = request
-        if self.settings.relay_explorer:
+        if not direct_plan and self.settings.relay_explorer:
             explorer = self._agent(Role.explorer, EXPLORER_TEMPLATE, planner_registry())
             explore_run = self._run_role(explorer, Role.explorer, request, 0, observer, result)
             brief = explore_run.result.final_text.strip()
@@ -453,7 +510,7 @@ class Relay:
 
         # Task-split: let the Planner delegate each step to a specialist by
         # prefixing it with the role in brackets, drawn from the enabled roster.
-        if self.settings.relay_split_tasks:
+        if not direct_plan and self.settings.relay_split_tasks:
             specialists = enabled_specialists(self.app_config)
             if specialists:
                 planner_request += (
@@ -465,16 +522,17 @@ class Relay:
                 )
 
         # 1. Plan. Nothing has been modified yet, so any failure aborts cleanly.
-        plan_run = self._run_role(planner, Role.planner, planner_request, 0, observer, result)
-        plan = plan_run.result.final_text.strip()
-        if plan_run.result.stopped_reason != "done":
-            result.stopped_reason = plan_run.result.stopped_reason
-            result.final_text = plan_run.result.final_text
-            return
-        if not plan:
-            result.stopped_reason = "error"
-            result.final_text = "Planner produced no plan."
-            return
+        if not direct_plan:
+            plan_run = self._run_role(planner, Role.planner, planner_request, 0, observer, result)
+            plan = plan_run.result.final_text.strip()
+            if plan_run.result.stopped_reason != "done":
+                result.stopped_reason = plan_run.result.stopped_reason
+                result.final_text = plan_run.result.final_text
+                return
+            if not plan:
+                result.stopped_reason = "error"
+                result.final_text = "Planner produced no plan."
+                return
 
         coder_request = (
             f"User request:\n{request}\n\n"
@@ -494,7 +552,13 @@ class Relay:
                 tagged = []
             result.tasks = [t for _role, t in tagged]
 
-        for cycle in range(self.settings.max_review_cycles + 1):
+        review_cycles = (
+            itertools.count()
+            if self.settings.max_review_cycles is None
+            else range(self.settings.max_review_cycles + 1)
+        )
+        reviewer_has_seen_brief = False
+        for cycle in review_cycles:
             result.cycles = cycle
 
             # 2. Code — one specialist agent per task (first cycle only), or
@@ -513,6 +577,38 @@ class Relay:
                     return
                 code_report = code_run.result.final_text
             result.final_text = code_report
+
+            # Small local models often report success for a technically valid
+            # but visibly empty template. Catch objective failures before
+            # spending another model call on Reviewer.
+            quality_issues = frontend_quality_issues(self.project, request) if direct_plan else []
+            if quality_issues:
+                result.verdict = "revise"
+                if cycle == 0:
+                    result.notes.append(
+                        "Deterministic frontend quality gate rejected the first draft."
+                    )
+                if (
+                    self.settings.max_review_cycles is not None
+                    and cycle == self.settings.max_review_cycles
+                ):
+                    result.stopped_reason = "review_exhausted"
+                    result.notes.append(
+                        "Frontend quality issues remain (revision limit reached)."
+                    )
+                    return
+                coder_request = (
+                    f"User request:\n{request}\n\nPlan:\n{plan}\n\n"
+                    "The automated frontend quality gate rejected the current files. "
+                    "Inspect them and address every issue:\n"
+                    + "\n".join(f"{i + 1}. {issue}" for i, issue in enumerate(quality_issues))
+                )
+                # Start frontend repair with a clean context. Reusing the
+                # first draft's small-model conversation keeps the rejected
+                # template and large tool payloads in Ollama's attention,
+                # making it more likely to repeat the same design.
+                coder = self._agent(Role.coder, CODER_TEMPLATE, _coder_registry())
+                continue
 
             # 2b. Test (optional): run the plan's verification step and hand
             #     the evidence to the Reviewer. Advisory — the Reviewer can
@@ -538,7 +634,7 @@ class Relay:
                     )
 
             # 3. Review. The reviewer inspects the real working tree itself.
-            if cycle == 0:
+            if not reviewer_has_seen_brief:
                 review_request = (
                     f"User request:\n{request}\n\n"
                     f"Plan:\n{plan}\n\n"
@@ -552,9 +648,20 @@ class Relay:
                     f"The Coder revised the work and reports:\n"
                     f"{code_report}{tester_report}\n\nRe-review."
                 )
+            if direct_plan:
+                from relaycli.frontend_quality import frontend_bundle_root
+
+                bundle, _ = frontend_bundle_root(self.project, request)
+                present = [name for name in ("index.html", "styles.css", "app.js") if (bundle / name).is_file()]
+                review_request += (
+                    "\n\nVerified current frontend files (filesystem check): "
+                    + (", ".join(present) or "none")
+                    + ". Do not report a listed file as missing; inspect its contents instead."
+                )
             review_run = self._run_role(
                 reviewer, Role.reviewer, review_request, cycle, observer, result
             )
+            reviewer_has_seen_brief = True
             if review_run.result.stopped_reason != "done":
                 # The work already exists; a failed review is advisory. Any
                 # verdict from an earlier cycle judged superseded work — clear
@@ -580,7 +687,10 @@ class Relay:
                 return
 
             # 4. Reflect: bounded retry with the reviewer's feedback.
-            if cycle == self.settings.max_review_cycles:
+            if (
+                self.settings.max_review_cycles is not None
+                and cycle == self.settings.max_review_cycles
+            ):
                 result.stopped_reason = "review_exhausted"
                 result.notes.append(
                     "Reviewer feedback remains unaddressed (revision limit reached)."

@@ -1036,4 +1036,4 @@ def test_a_clipped_field_keeps_the_end_the_user_is_typing():
 
     typed = "".join(str(i % 10) for i in range(200))
     row = render_input_row(resolve_columns(80), "dark", 80, placeholder="idle", typed=typed)
-    assert row.plain.rstrip("▌").endswith(typed[-10:])
+    assert row.plain.rstrip("▏").endswith(typed[-10:])

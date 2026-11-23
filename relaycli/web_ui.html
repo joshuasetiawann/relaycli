@@ -4,9 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RelayCLI</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23131e26'/%3E%3Cpath d='M18 20l14 12-14 12M35 44h12' fill='none' stroke='%235fa8dc' stroke-width='6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -163,14 +161,14 @@
         <button data-v="lanes" class="on" role="tab" aria-selected="true">lanes</button>
         <button data-v="diffs" role="tab" aria-selected="false">changes<span class="vcount" id="diffCount"></span></button>
       </div>
-      <div class="canvas-scroll"><div class="stage" id="stage"></div></div>
+      <div class="canvas-scroll" id="canvasScroll" title="Drag empty canvas to pan"><div class="stage" id="stage"></div></div>
       <div class="legend">
         <span><i style="background:var(--accent)"></i>active</span>
         <span><i style="background:var(--green)"></i>done</span>
         <span><i style="background:var(--t5)"></i>idle</span>
       </div>
       <div class="zoom">
-        <button id="zOut" aria-label="Zoom out">−</button><span class="zv" id="zVal">100%</span><button id="zIn" aria-label="Zoom in">+</button>
+        <button id="zOut" aria-label="Zoom out">−</button><button id="zReset" class="zv" aria-label="Reset canvas view">100%</button><button id="zIn" aria-label="Zoom in">+</button>
       </div>
     </div>
 

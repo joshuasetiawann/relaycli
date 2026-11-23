@@ -113,7 +113,9 @@ def test_role_marks_use_one_of_the_five_families():
 
 def test_reserved_role_codes_do_not_collide_with_live_roles():
     live_codes = {mark.code for mark in theme.ROLE_MARKS.values()}
-    assert set(theme.RESERVED_ROLE_CODES).isdisjoint(live_codes)
+    reserved_codes = {mark.code for mark in theme.RESERVED_ROLE_MARKS.values()}
+    assert reserved_codes.isdisjoint(live_codes)
+    assert set(theme.RESERVED_ROLE_MARKS).isdisjoint(theme.ROLE_MARKS)
 
 
 # --- motion tokens -----------------------------------------------------------

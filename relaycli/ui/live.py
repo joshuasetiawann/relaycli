@@ -57,6 +57,7 @@ from rich.text import Text
 
 from relaycli.core.config import PermissionMode
 from relaycli.ui import frame, keymap, keyreader, theme
+from relaycli.ui.console import console_width
 from relaycli.ui.lanes import (GroupHeader, GroupSummary, LaneView, group_for_display,
                                id_role_label, render_group_header, render_group_row,
                                render_lane_row, render_lease_row, tool_target)
@@ -87,7 +88,7 @@ def narrow_terminal_refusal(console: Console) -> str | None:
     else None. Only gates the boxed lane list — the progress-lines
     fallback doesn't need 80 columns and still runs either way."""
     try:
-        resolve_columns(console.size.width)
+        resolve_columns(console_width(console))
     except TooNarrowError as exc:
         return str(exc)
     return None
@@ -454,7 +455,7 @@ def render_frame_lines(
     collapsed lane list, merged transcript); None renders the default
     view, which is what the non-interactive paths still want."""
     state = state or keymap.ViewState()
-    width = console.size.width
+    width = console_width(console)
     columns = resolve_columns(width)
     # One row short of the terminal: a renderable exactly as tall as the
     # screen makes Live scroll the whole frame up by a line on every

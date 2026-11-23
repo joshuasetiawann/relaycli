@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import importlib.util
+import shutil
 import subprocess
 import sys
 import zipfile
 from pathlib import Path
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_install_script_is_valid_shell():
+    if shutil.which("sh") is None:
+        pytest.skip("POSIX installer syntax requires a POSIX shell")
     subprocess.run(["sh", "-n", str(ROOT / "scripts/install.sh")], check=True)
 
 
@@ -33,12 +39,21 @@ def test_readme_documents_one_line_installer():
 def test_wheel_contains_runtime_assets(tmp_path):
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
+    if importlib.util.find_spec("pip") is not None:
+        command = [
+            sys.executable, "-m", "pip", "wheel", str(ROOT),
+            "-w", str(wheelhouse), "--no-deps",
+        ]
+    elif uv := shutil.which("uv"):
+        # Python installations managed by uv intentionally may not bundle
+        # pip.  The artifact contract is what matters here, not which
+        # standards-compliant frontend invoked the same build backend.
+        command = [uv, "build", "--wheel", "--out-dir", str(wheelhouse), str(ROOT)]
+    else:
+        pytest.skip("wheel test requires pip or uv")
     subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", str(ROOT), "-w", str(wheelhouse), "--no-deps"],
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
+        command, check=True, stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, text=True,
     )
     wheel = next(wheelhouse.glob("relaycli-*.whl"))
     with zipfile.ZipFile(wheel) as archive:

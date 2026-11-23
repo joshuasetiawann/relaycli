@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from unittest.mock import patch
 
 import pytest
 
@@ -10,6 +11,7 @@ from relaycli.config import PermissionMode
 from relaycli.tools import default_registry
 from relaycli.tools.create_folder import CreateFolderArgs, create_folder
 from relaycli.tools.edit_file import EditFileArgs, edit_file
+from relaycli.tools.question import QuestionArgs, ask_question
 from relaycli.tools.read_file import ReadFileArgs, read_file
 from relaycli.tools.run_command import RunCommandArgs, run_command
 from relaycli.tools.search import SearchArgs, search
@@ -63,6 +65,19 @@ def test_read_file_example_is_not_secret(sample_project):
     assert res.ok  # templates are safe
 
 
+def test_local_read_file_chunks_fit_context(sample_project):
+    path = sample_project / "long.txt"
+    path.write_text("a" * 9000, encoding="utf-8")
+    ctx = make_context(sample_project)
+    ctx.read_max_bytes = 4096
+    first = read_file(ReadFileArgs(path="long.txt"), ctx)
+    second = read_file(ReadFileArgs(path="long.txt", offset_bytes=4096), ctx)
+    assert first.ok and second.ok
+    assert "offset_bytes=4096" in first.output
+    assert len(first.output.split("\n\n[...")[0]) == 4096
+    assert len(second.output.split("\n\n[...")[0]) == 4096
+
+
 def test_read_file_refuses_gitignored(sample_project):
     ctx = make_context(sample_project)
     res = read_file(ReadFileArgs(path="ignored.txt"), ctx)
@@ -91,6 +106,15 @@ def test_search_excludes_secret_contents(sample_project):
     res = search(SearchArgs(query="topsecret"), ctx)
     # The .env content must never appear in search results.
     assert "topsecret" not in res.output
+
+
+def test_search_falls_back_when_ripgrep_cannot_execute(sample_project):
+    ctx = make_context(sample_project)
+    with patch("relaycli.tools.search.subprocess.run", side_effect=PermissionError):
+        res = search(SearchArgs(query="TODO"), ctx)
+    assert res.ok
+    assert "app.py" in res.output
+    assert "README.md" in res.output
 
 
 # --- write_file --------------------------------------------------------
@@ -300,6 +324,19 @@ def test_default_registry_has_all_tools():
                 "apply_patch", "think", "use_skill"}
     assert set(reg.names()) == expected
     assert "get_time" not in reg.names()
+
+
+def test_question_tool_auto_selects_first_option(sample_project):
+    ctx = make_context(sample_project)
+    ctx.permissions._assume_yes = True
+    res = ask_question(
+        QuestionArgs(question="Pick one", options=["A", "B", "C"]),
+        ctx,
+    )
+    assert res.ok
+    assert res.meta["auto_resolved"] is True
+    assert res.meta["answer"] == "A"
+    assert "Auto-selected default option: A" in res.output
 
 
 def test_registry_dispatch(sample_project):

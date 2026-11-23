@@ -1,0 +1,18 @@
+✦ auto-skill: frontend-taste
+✦ auto-skill: verify
+ |relay relaycli-tennis-authentic-test                                1a  $0.00
+ ──────────────────────────────────────────────────────────────────────────────
+model ollama_chat/qwen2.5-coder:14b  no key needed
+▲ full-auto: edits and commands run without asking.
+
+relay on  planner:ollama_chat/qwen2.5-coder:14b · 
+coder:ollama_chat/qwen2.5-coder:14b · reviewer:ollama_chat/qwen2.5-coder:14b
+
+
+ ▣ cod coder  ollama_chat/qwen2.5-coder:14b
+ 14:25:29 model ollama_chat/qwen2.5-coder:14b · step 1
+          Ollama local is generating · `ollama ps` should show 100% GPU when
+          acceleration is active.
+          1 tool call · 2498 tok
+ 14:27:37 read_file index.html · read index.html
+ 14:27:37 model ollama_chat/qwen2.5-coder:14b · step 2

@@ -125,6 +125,7 @@ def test_relay_applies_skills_to_coder_only():
     planner = relay._agent(Role.planner, PLANNER_TEMPLATE, planner_registry())
     assert "ACTIVE SKILLS" in coder.session.system_prompt
     assert "ACTIVE SKILLS" not in planner.session.system_prompt
+    assert "use_skill" not in planner.registry.names()
 
 
 def test_relay_agent_threads_role_into_skills_catalog(monkeypatch, tmp_path):

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import os
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -71,6 +73,41 @@ def test_env_reference_resolution(monkeypatch):
         assert c.call_tool("env_probe", {}) == "secret=s3cret-value"
     finally:
         c.close()
+
+
+def test_mcp_environment_scrubs_provider_keys_unless_explicit(monkeypatch):
+    from relaycli.mcp.client import _server_env
+
+    monkeypatch.setenv("OPENAI_API_KEY", "synthetic-provider-secret")
+    assert "OPENAI_API_KEY" not in _server_env(fake_config())
+    explicit = fake_config(env={"OPENAI_API_KEY": "env:OPENAI_API_KEY"})
+    assert _server_env(explicit)["OPENAI_API_KEY"] == "synthetic-provider-secret"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows taskkill process-tree regression")
+def test_close_kills_mcp_descendants_on_windows(tmp_path):
+    marker = (tmp_path / "orphan.txt").as_posix()
+    child = (
+        "import pathlib,time;time.sleep(1.5);"
+        f"pathlib.Path(r'{marker}').write_text('orphan')"
+    )
+    server = (
+        "import json,subprocess,sys\n"
+        f"subprocess.Popen([sys.executable,'-c',{child!r}])\n"
+        "for line in sys.stdin:\n"
+        " m=json.loads(line); i=m.get('id'); method=m.get('method')\n"
+        " if method=='initialize': r={'protocolVersion':m['params']['protocolVersion'],'capabilities':{},'serverInfo':{'name':'tree','version':'1'}}\n"
+        " elif method=='tools/list': r={'tools':[]}\n"
+        " else: continue\n"
+        " print(json.dumps({'jsonrpc':'2.0','id':i,'result':r}),flush=True)\n"
+    )
+    client = MCPClient(MCPServerConfig(
+        name="tree", command=[sys.executable, "-c", server]
+    ))
+    client.start()
+    client.close()
+    time.sleep(1.8)
+    assert not (tmp_path / "orphan.txt").exists()
 
 
 def test_dead_server_raises_cleanly():
@@ -240,7 +277,7 @@ def test_get_client_does_not_cache_failed_start():
     the next call should retry cleanly instead of returning a wedged client."""
     bad = MCPServerConfig(name="badhandshake", command=[
         sys.executable, "-c",
-        "import sys, time; sys.stderr.write('boom\\n'); time.sleep(30)",
+        "import sys, time; sys.stderr.write('boom\\n'); time.sleep(0.5)",
     ])
     with pytest.raises(MCPError):
         mcp.get_client(bad)

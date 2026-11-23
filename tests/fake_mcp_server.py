@@ -78,7 +78,10 @@ def main():
                     "result": {"content": [{"type": "text", "text": "kaboom"}], "isError": True},
                 })
             elif name == "slow":
-                time.sleep(30)
+                # Longer than the client's 0.3/0.5 s test timeouts, but short
+                # enough that one late-response regression does not add half
+                # a minute to every suite run.
+                time.sleep(1)
                 send({"jsonrpc": "2.0", "id": msg_id,
                       "result": {"content": [{"type": "text", "text": "finally"}]}})
             elif name == "env_probe":

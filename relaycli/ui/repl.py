@@ -345,8 +345,10 @@ class Repl:
         try:
             # errors="replace": commands may emit non-UTF-8 bytes (binaries,
             # odd encodings) and a strict decode would crash the whole REPL.
+            from relaycli.tools.run_command import _shell_argv
+
             proc = subprocess.run(
-                cmd, shell=True, cwd=self.project.root, capture_output=True,
+                _shell_argv(cmd), cwd=self.project.root, capture_output=True,
                 text=True, errors="replace",
             )
         except KeyboardInterrupt:
@@ -416,7 +418,7 @@ class Repl:
             try:
                 from relaycli.appconfig import set_base_model
 
-                set_base_model(fallback)
+                set_base_model(fallback, sync_uniform_tiers=True)
             except Exception:
                 pass
             self.agent.session.model = fallback
@@ -537,6 +539,8 @@ class Repl:
             self._cmd_skill(arg)
         elif cmd == "skills":
             self._cmd_skills()
+        elif cmd == "tools":
+            self._cmd_tools()
         elif cmd == "config":
             from relaycli.config_menu import run_configuration
             run_configuration(self.console)
@@ -574,6 +578,24 @@ class Repl:
             set_runtime_option(key, value)
         except Exception:
             pass  # session toggle still applies
+
+    def _cmd_tools(self) -> None:
+        """Show the real registered tools instead of a hard-coded feature list."""
+
+        from rich.table import Table
+
+        tools = self.agent.registry.tools()
+        table = Table(show_header=True, header_style="bold", box=None, padding=(0, 2))
+        table.add_column("tool", style="cyan", no_wrap=True)
+        table.add_column("purpose")
+        for tool in tools:
+            summary = " ".join(tool.description.strip().split())
+            table.add_row(tool.name, summary)
+        self.console.print(table)
+        self.console.print(
+            f"[dim]{len(tools)} registered native/MCP tools; each role receives only "
+            "the safe subset needed for its current task.[/dim]"
+        )
 
     def _cmd_setup(self) -> None:
         from relaycli.onboarding import run_init
@@ -670,9 +692,13 @@ class Repl:
             ))
             return
 
+        installed: list[str] = []
+        if arg.startswith(("ollama_chat/", "ollama/")) or "/" not in arg:
+            installed = ollama_models(self.settings, timeout=0.8)
+        if "/" not in arg and arg in installed:
+            arg = f"ollama_chat/{arg}"
         if arg.startswith(("ollama_chat/", "ollama/")):
             local_name = arg.split("/", 1)[1]
-            installed = ollama_models(self.settings, timeout=0.8)
             if installed and local_name not in installed:
                 self.console.print(
                     f"[red]Ollama model not installed:[/red] {escape(local_name)}"
@@ -691,11 +717,13 @@ class Repl:
         try:
             from relaycli.appconfig import set_base_model
 
-            set_base_model(arg)
+            tiers_followed = set_base_model(arg, sync_uniform_tiers=True)
         except Exception:
-            pass
+            tiers_followed = False
         self.agent.refresh_system_prompt()  # keeps token counting + prompt in sync
         self.console.print(f"model → [green]{escape(arg)}[/green]")
+        if tiers_followed:
+            self.console.print("[dim]relay tiers followed the global model switch.[/dim]")
         from relaycli.ui.render import render_model_warning
 
         render_model_warning(self.console, self.settings)

@@ -22,6 +22,8 @@ whole: `Style.parse` splits its own words and never reaches the theme.
 
 from __future__ import annotations
 
+import os
+
 from rich.console import Console
 from rich.theme import Theme
 
@@ -81,3 +83,22 @@ def slate_console(**kwargs) -> Console:
     """A Console whose colour words are the design's, not Rich's."""
     kwargs.setdefault("theme", slate_theme(session_color_mode()))
     return Console(**kwargs)
+
+
+def console_width(console: Console) -> int:
+    """Return the real/requested width without Rich's Windows 80-col cap.
+
+    Rich 15 reports at most 80 columns for a legacy Windows console, even
+    when ``Console(width=120)`` was explicitly requested or the terminal is
+    wider. That made the live frame select its compact layout on wide
+    terminals and made a real 64-column terminal look safe. Prefer Rich's
+    stored explicit width, then the OS terminal, and only then its clamped
+    public size.
+    """
+    explicit = getattr(console, "_width", None)
+    if explicit is not None:
+        return max(int(explicit), 1)
+    try:
+        return max(os.get_terminal_size(console.file.fileno()).columns, 1)
+    except (AttributeError, OSError, ValueError):
+        return max(console.size.width, 1)

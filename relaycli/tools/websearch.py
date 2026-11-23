@@ -13,6 +13,7 @@ from relaycli.tools.base import ToolContext, ToolResult
 from relaycli.tools.registry import Tool, ToolRegistry
 
 _log = get_logger(__name__)
+_MAX_SEARCH_BYTES = 1_048_576
 
 
 class WebSearchArgs(BaseModel):
@@ -43,7 +44,7 @@ def _search_duckduckgo(query: str, max_results: int) -> list[dict]:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "RelayCLI/1.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read(_MAX_SEARCH_BYTES + 1).decode("utf-8"))
     except (OSError, json.JSONDecodeError, urllib.error.URLError):
         return _fallback_html_search(query, max_results)
 
@@ -74,7 +75,7 @@ def _fallback_html_search(query: str, max_results: int) -> list[dict]:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+            html = resp.read(_MAX_SEARCH_BYTES + 1).decode("utf-8", errors="replace")
     except (OSError, urllib.error.URLError):
         return []
 

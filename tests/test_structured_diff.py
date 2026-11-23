@@ -118,6 +118,10 @@ def test_apply_patch_primary_path_leaves_diff_unset(sample_project):
         "--- app.py\n+++ app.py\n@@ -1,2 +1,2 @@\n"
         " def hello():\n-    return 'hi'\n+    return 'patched'\n"
     )
-    result = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
-    if result.ok:  # only meaningful if the real `patch` binary is present
-        assert result.diff is None
+    with mock_patch("subprocess.run") as run:
+        run.return_value.returncode = 0
+        run.return_value.stdout = "patching file app.py"
+        run.return_value.stderr = ""
+        result = apply_patch(ApplyPatchArgs(patch=patch_text), ctx)
+    assert result.ok
+    assert result.diff is None

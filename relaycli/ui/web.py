@@ -32,6 +32,7 @@ import os
 import socket
 import time
 import threading
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -45,7 +46,7 @@ from relaycli.core.config import PermissionMode, Settings
 from relaycli.core.context import ProjectContext
 from relaycli.frontend_scaffold import create_frontend_scaffold, detect_frontend_scaffold
 from relaycli.intent import continuation_for, local_reply_for
-from relaycli.core.llm import preflight_settings
+from relaycli.core.llm import ollama_models, preflight_settings
 from relaycli.model_catalog import (
     detected_ollama_models,
     model_choices,
@@ -60,6 +61,26 @@ from relaycli.ui.render import brief_tool_error, friendly_error_text, short_mode
 UI_PATH = Path(__file__).parent.parent / "web_ui.html"
 STYLES_PATH = Path(__file__).parent.parent / "styles.css"
 APP_JS_PATH = Path(__file__).parent.parent / "app.js"
+_MAX_WEB_EVENTS = 2_000
+
+
+class _EventBuffer(deque):
+    """Bounded event log whose public cursor never shifts as rows expire."""
+
+    def __init__(self) -> None:
+        super().__init__(maxlen=_MAX_WEB_EVENTS)
+        self._next_n = 0
+
+    def append(self, event: dict) -> None:
+        super().append({**event, "n": self._next_n})
+        self._next_n += 1
+
+    def since(self, cursor: int) -> list[dict]:
+        return [event for event in self if event["n"] >= cursor]
+
+    def clear(self) -> None:
+        super().clear()
+        self._next_n = 0
 
 
 def _copy_diff(entry: dict) -> dict:
@@ -186,7 +207,7 @@ class WebSession:
         self.settings = settings
         self.project = ProjectContext(Path.cwd())
         self._llm = llm  # injection seam for tests
-        self._events: list[dict] = []
+        self._events = _EventBuffer()
         self._lock = threading.Lock()
         self._thread: threading.Thread | None = None
         self._pull_thread: threading.Thread | None = None
@@ -212,7 +233,7 @@ class WebSession:
 
     def events_since(self, n: int) -> list[dict]:
         with self._lock:
-            return self._events[n:]
+            return self._events.since(n)
 
     @property
     def busy(self) -> bool:
@@ -324,13 +345,18 @@ class WebSession:
     def set_model(self, model: str, *, manual: bool = True) -> None:
         model = (model or "").strip()
         if model:
+            if "/" not in model:
+                installed = ollama_models(self.settings, timeout=0.8)
+                if model in installed:
+                    model = f"ollama_chat/{model}"
             self.settings.model = model
             if manual:
                 self._manual_model_selected = True
                 self._manual_slow_warning_shown_for = None
             from relaycli.config.manager import set_base_model
 
-            set_base_model(model)
+            if set_base_model(model, sync_uniform_tiers=True):
+                self.add("note", text="relay tiers followed the global model switch")
 
     def set_mode(self, mode: str) -> bool:
         try:
@@ -901,6 +927,11 @@ class WebSession:
 
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+_MAX_REQUEST_BYTES = 1_048_576
+_CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+    "font-src 'self'; script-src 'self'; connect-src 'self'"
+)
 
 
 def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
@@ -928,21 +959,34 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
                 return True  # non-browser client (curl); Host is checked
             return urlparse(origin).hostname in allowed
 
+        def _write_body(self, body: bytes) -> None:
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+                # Browser polling can overlap a normal Ctrl-C/server shutdown
+                # on Windows. The client is already gone; do not flood the
+                # terminal with a socketserver traceback.
+                pass
+
         def _json(self, obj, status: int = 200) -> None:
             body = json.dumps(obj).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._write_body(body)
 
         def _serve_file(self, path: Path, content_type: str) -> None:
             body = path.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", content_type)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Security-Policy", _CONTENT_SECURITY_POLICY)
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            self._write_body(body)
 
         def do_GET(self) -> None:
             if not self._host_ok():
@@ -960,7 +1004,13 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
             elif url.path == "/api/diffs":
                 self._json({"diffs": session.diffs()})
             elif url.path == "/api/events":
-                since = int((parse_qs(url.query).get("since") or ["0"])[0])
+                try:
+                    since = int((parse_qs(url.query).get("since") or ["0"])[0])
+                    if since < 0:
+                        raise ValueError
+                except ValueError:
+                    self._json({"error": "invalid since cursor"}, status=400)
+                    return
                 self._json({"events": session.events_since(since),
                             "busy": session.busy})
             else:
@@ -974,10 +1024,21 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
                 self._json({"error": "cross-origin request rejected"}, status=403)
                 return
             path = urlparse(self.path).path
-            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length < 0:
+                    raise ValueError
+            except ValueError:
+                self._json({"error": "invalid content length"}, status=400)
+                return
+            if length > _MAX_REQUEST_BYTES:
+                self._json({"error": "request body too large"}, status=413)
+                return
             try:
                 data = json.loads(self.rfile.read(length) or b"{}")
-            except json.JSONDecodeError:
+                if not isinstance(data, dict):
+                    raise ValueError
+            except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
                 self._json({"error": "bad json"}, status=400)
                 return
 
@@ -1031,6 +1092,9 @@ def make_handler(session: WebSession, allowed_hosts: set[str] | None = None):
                 text = (data.get("text") or "").strip()
                 if not text:
                     self._json({"error": "empty message"}, status=400)
+                    return
+                if len(text) > 100_000:
+                    self._json({"error": "message too large"}, status=413)
                     return
                 if not session.send(text, data.get("mode")):
                     self._json({"error": "a run is already in progress"}, status=409)

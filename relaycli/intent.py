@@ -82,6 +82,34 @@ _FOLLOWUP_CONSENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_SIMPLE_FOLDER_RE = re.compile(
+    r"""
+    ^\s*
+    (?:(?:tolong|please)\s+)?
+    (?:
+        (?:buat(?:kan|\s+kan)?|bikin(?:kan)?|create|make)
+        \s+(?:(?:sebuah|satu|a)\s+)?(?:new\s+)?
+        (?:folder|directory|direktori)
+        \s+(?:baru\s+)?(?:(?:bernama|named|namanya)\s+)?
+      | mkdir\s+
+    )
+    (?:
+        (?P<quote>["'`])(?P<quoted>[^\r\n]+?)(?P=quote)
+      | (?P<bare>[^\s"'`]+)
+    )
+    (?:\s+(?:dong|ya|please))?
+    [.!]?\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_FRONTEND_FOLDER_RE = re.compile(
+    r"\bfolder(?:\s+baru)?(?:\s+(?:bernama|namanya|nama|named))?\s+"
+    r"(?:\"(?P<double>[^\"]{1,80})\"|'(?P<single>[^']{1,80})'|"
+    r"“(?P<curly>[^”]{1,80})”|(?P<bare>[A-Za-z0-9][A-Za-z0-9._-]{0,63}))",
+    re.IGNORECASE,
+)
+
 
 def local_reply_for(text: str) -> LocalReply | None:
     """Return a local reply for tiny/vague input, otherwise None."""
@@ -123,6 +151,71 @@ def local_reply_for(text: str) -> LocalReply | None:
         return LocalReply(_VAGUE_TEXT, "vague")
 
     return None
+
+
+def simple_folder_request(text: str) -> str | None:
+    """Extract one unambiguous folder path for deterministic local execution.
+
+    The match is intentionally narrow. Requests with another action, an
+    unquoted multi-word path, shell syntax, or traversal are left to the
+    normal agent loop. The create_folder tool still performs the authoritative
+    path-safety and permission checks before anything is written.
+    """
+
+    raw = (text or "").strip()
+    if not raw or "\n" in raw or "\r" in raw or len(raw) > 240:
+        return None
+    match = _SIMPLE_FOLDER_RE.fullmatch(raw)
+    if match is None:
+        return None
+
+    target = (match.group("quoted") or match.group("bare") or "").strip()
+    if not target or target in {".", ".."}:
+        return None
+    # Keep this gate conservative and platform-neutral. ProjectContext is the
+    # final safety boundary, but obvious absolute/traversal paths should never
+    # enter the fast path in the first place.
+    normalized = target.replace("\\", "/")
+    if normalized.startswith("/") or ":" in target:
+        return None
+    if any(part == ".." for part in normalized.split("/")):
+        return None
+    if match.group("bare") and not re.fullmatch(r"[\w./\\-]+", target, re.UNICODE):
+        return None
+    return target
+
+
+def concrete_frontend_request(text: str) -> bool:
+    """True when a website request already names its destination folder."""
+
+    return frontend_creation_request(text) and frontend_destination(text) is not None
+
+
+def frontend_creation_request(text: str) -> bool:
+    """True when the user clearly asked RelayCLI to build a frontend."""
+
+    raw = " ".join((text or "").strip().split())
+    lowered = raw.lower()
+    if not raw or not any(word in lowered for word in ("buat", "buatin", "buatkan", "bikin", "build", "create", "complete", "finish", "selesaikan", "lanjutkan")):
+        return False
+    if not any(word in lowered for word in ("website", "web ", "frontend", "front end", "landing page", "halaman")):
+        return False
+    return True
+
+
+def frontend_destination(text: str) -> str | None:
+    """Extract a safe, explicit frontend destination folder from user text."""
+
+    match = _FRONTEND_FOLDER_RE.search(text or "")
+    if match is None:
+        return None
+    folder = next((value for value in match.groupdict().values() if value), "")
+    folder = " ".join(folder.strip().strip(".,;:!?").split())
+    if not folder or folder in {".", "..", "bernama", "namanya", "nama"}:
+        return None
+    if "/" in folder or "\\" in folder or ":" in folder:
+        return None
+    return folder
 
 
 def continuation_for(text: str, previous_request: str | None) -> str | None:

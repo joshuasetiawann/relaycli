@@ -322,7 +322,8 @@ def test_a_lease_conflict_reads_as_blocked_not_ready():
                  lease_path="src/lease/queue.ts", lease_held_s=41)
     row = render_lane_row(lane, COLS_120, "dark").plain
     assert "⊘" in row
-    assert "▥ lease queue.ts · a1 · 0m41s" in row
+    assert "▥ wait lease queue.ts" in row
+    assert "a1" not in row
 
 
 def test_lease_row_reports_only_what_is_measured():
@@ -332,9 +333,10 @@ def test_lease_row_reports_only_what_is_measured():
                  lease_path="src/lease/queue.ts", lease_held_s=41)
     row = render_lease_row(lane, COLS_120, "dark").plain
     assert "held by a1" in row
-    assert "0m41s" in row
+    assert "41s" in row
     assert "queue pos" not in row
     assert "est" not in row
+    assert "l holder" in row and "p preempt" in row and "r retarget" in row
 
 
 def test_a_running_lane_with_no_open_tool_says_so():

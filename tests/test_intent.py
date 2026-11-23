@@ -1,6 +1,14 @@
 """Local intent gate tests."""
 
-from relaycli.intent import continuation_for, is_permissive_followup, local_reply_for
+from relaycli.intent import (
+    continuation_for,
+    concrete_frontend_request,
+    frontend_destination,
+    frontend_creation_request,
+    is_permissive_followup,
+    local_reply_for,
+    simple_folder_request,
+)
 
 
 def test_greeting_gets_local_guide_reply():
@@ -70,3 +78,37 @@ def test_permissive_followup_continues_previous_request():
 def test_permissive_followup_needs_actionable_previous_request():
     assert continuation_for("apa aja", "halo") is None
     assert continuation_for("apa aja", None) is None
+
+
+def test_simple_folder_request_extracts_indonesian_and_english_names():
+    assert simple_folder_request('buat kan folder "alku"') == "alku"
+    assert simple_folder_request('tolong buatkan satu folder bernama "shop "') == "shop"
+    assert simple_folder_request("bikin folder nested/demo dong") == "nested/demo"
+    assert simple_folder_request("create a new directory assets") == "assets"
+    assert simple_folder_request("mkdir cache") == "cache"
+
+
+def test_simple_folder_request_rejects_complex_or_unsafe_input():
+    assert simple_folder_request("buat folder shop lalu buat index.html") is None
+    assert simple_folder_request("buat folder dua kata") is None
+    assert simple_folder_request("buat folder ../outside") is None
+    assert simple_folder_request("buat folder C:\\outside") is None
+    assert simple_folder_request("jelaskan cara buat folder shop") is None
+
+
+def test_concrete_frontend_request_requires_kind_and_destination():
+    assert concrete_frontend_request('buatin website iklan mineral water di folder "Toko"')
+    assert concrete_frontend_request("build landing page di folder campaign")
+    assert not concrete_frontend_request("buatin website iklan mineral water")
+    assert not concrete_frontend_request('jelaskan website di folder "Toko"')
+
+
+def test_complete_existing_website_routes_as_frontend_work():
+    assert frontend_creation_request("Complete the tennis club website in this directory")
+    assert frontend_creation_request("Selesaikan website tenis di folder ini")
+
+
+def test_frontend_destination_preserves_quoted_spaces_and_rejects_traversal():
+    assert frontend_destination('buat landing page di folder "Landing Page"') == "Landing Page"
+    assert frontend_destination("buat website di folder bernama toko-air") == "toko-air"
+    assert frontend_destination('buat website di folder "../outside"') is None

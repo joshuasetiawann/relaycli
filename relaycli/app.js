@@ -2,10 +2,10 @@
 // (renderSettings() does, to set the theme toggle's initial position) —
 // unlike the accent restore at the end of this script, nothing here can
 // safely wait until the script finishes running.
-document.documentElement.dataset.theme = localStorage.theme ||
-  (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+document.documentElement.dataset.theme = localStorage.theme || "dark";
 const $ = (id) => document.getElementById(id);
 const DESC = {
+  orchestrator: "coordinates the relay",
   explorer: "scouts the codebase", planner: "decomposes the goal",
   coder: "writes and edits code", tester: "runs the verification step",
   reviewer: "reviews the result", agent: "single-agent run",
@@ -14,7 +14,7 @@ const GLYPH = { explorer: "◎", planner: "≣", coder: "⟨⟩", tester: "✓",
 // SLATE INSTRUMENT accent/success/warning/waiting/danger — the same 5
 // hues used everywhere else, so picking "the green swatch" here matches
 // the green used for state elsewhere instead of a mismatched leftover.
-const ACCENTS = ["#5FA8DC", "#6FB77F", "#D6A05C", "#8E93CC", "#D4695C"];
+const ACCENTS = ["#3D6CFF", "#6FB77F", "#D6A05C", "#8E93CC", "#D4695C"];
 let since = 0, mode = "auto-edit", busy = false, state = null;
 const activity = {}, status = {}, steps = {};
 // One entry per task-graph node (--experimental-parallel), keyed by task_id —
@@ -26,6 +26,7 @@ const taskLanes = {};
 // can be touched by more than one task.
 const diffs = [];
 let canvasView = "lanes";
+let selectedAgent = "";
 // Which diff cards are expanded, keyed by a monotonic id rather than by
 // array index or path: a file can be edited twice in one run, and keying
 // by anything re-derived at render time loses the user's expansion the
@@ -41,18 +42,24 @@ let diffSeq = 0;
 	const activityFeed = [], activeToolByAgent = {}, activeModelByAgent = {};
 	function stepsOf(name) { return steps[name] || 0; }
 
-	function setPanelCollapsed(which, collapsed) {
+function setPanelCollapsed(which, collapsed) {
 	  localStorage[which + "Collapsed"] = collapsed ? "1" : "0";
 	  applyPanelLayout();
 	}
 	function applyPanelLayout() {
 	  const left = localStorage.leftCollapsed === "1";
-	  const right = localStorage.rightCollapsed === "1";
+	  const mobile = window.matchMedia && window.matchMedia("(max-width: 760px)").matches;
+	  const savedRight = localStorage.getItem("rightCollapsed");
+	  // On a narrow first visit the run inspector is an on-demand sheet.  It
+	  // must not participate in the column layout and be silently covered by
+	  // the terminal.  An explicit user choice ("0" or "1") still wins.
+	  const right = savedRight === "1" || (mobile && savedRight === null);
 	  $("app").classList.toggle("left-collapsed", left);
 	  $("app").classList.toggle("right-collapsed", right);
 	  $("chatShow").classList.toggle("hidden", !left);
 	  $("sideShow").classList.toggle("hidden", !right);
 	}
+	window.addEventListener("resize", applyPanelLayout);
 
 // textContent->innerHTML escapes & < > but NOT quotes, and esc() output is
 // interpolated into double-quoted HTML attributes throughout this file
@@ -63,6 +70,10 @@ let diffSeq = 0;
 function esc(s) {
   const d = document.createElement("div"); d.textContent = s == null ? "" : s;
   return d.innerHTML.replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function setTerminalCollapsed(collapsed) {
+  localStorage.termCollapsed = collapsed ? "1" : "0";
+  $("term").classList.toggle("collapsed", collapsed);
 }
 async function api(path, body) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" },
@@ -301,7 +312,7 @@ function renderSettings() {
   sw.innerHTML = ACCENTS.map((c, i) => `<span class="swatch" data-c="${c}" style="background:${c}"
     role="button" tabindex="0" aria-pressed="false" aria-label="${ACCENT_NAMES[i] || "accent"} accent"></span>`).join("");
   for (const s of sw.children) {
-    const on = s.dataset.c === (localStorage.accent || "#5FA8DC");
+    const on = s.dataset.c === (localStorage.accent || "#3D6CFF");
     s.classList.toggle("on", on);
     s.setAttribute("aria-pressed", String(on));
     s.onclick = () => { document.documentElement.style.setProperty("--accent", s.dataset.c);
@@ -663,6 +674,7 @@ function finishActivity(item, text, ok = true) {
 }
 function renderActivity() {
   const list = $("activityList"); if (!list) return;
+  list.closest(".activity")?.classList.toggle("empty", !activityFeed.length);
   $("activityCount").textContent = activityFeed.length ? activityFeed.length : "";
   if (!activityFeed.length) {
     list.innerHTML = `<div class="activity-empty">Aktivitas agent akan muncul di sini: membaca file, berpikir, mengedit, menjalankan command, dan selesai.</div>`;
@@ -721,24 +733,26 @@ function renderCards() {
       const cls = t.status === "running" ? "active" : t.status === "done" ? "done" : "";
       const pill = t.status === "running" ? "Working" : t.status === "done" ? "Done"
         : t.status === "failed" ? "Failed" : t.status === "blocked" ? "Blocked" : "Idle";
-      return `<div class="card ${cls}"><div class="row"><span class="name">${esc(t.role_id)}</span>` +
+      return `<button type="button" class="card ${cls}${selectedAgent === t.role_id ? " selected" : ""}" data-agent="${esc(t.role_id)}"><div class="row"><span class="name">${esc(t.role_id)}</span>` +
         `<span class="pill"><i></i>${pill}</span></div>` +
         `<div class="desc">${esc(DESC[t.role_id] || "specialist")}</div>` +
-        `<div class="act">${esc(t.goal)}</div></div>`;
+        `<div class="act">${esc(t.goal)}</div></button>`;
     }).join("");
     return;
   }
-  const roles = participants();
+  const roles = state && state.relay
+    ? [{ name: "orchestrator", model: "" }, ...participants()]
+    : participants();
   $("agentCount").textContent = roles.length;
   $("cards").innerHTML = roles.map(r => {
-    const st = status[r.name] || "idle";
+    const st = r.name === "orchestrator" && busy ? "active" : (status[r.name] || "idle");
     const cls = st === "active" ? "active" : st === "done" ? "done" : "";
     const pill = st === "active" ? "Working" : st === "done" ? "Done" : "Idle";
-    const act = activity[r.name] || "waiting";
-    return `<div class="card ${cls}"><div class="row"><span class="name">${esc(r.name)}</span>` +
+    const act = activity[r.name] || (r.name === "orchestrator" && busy ? "coordinating the relay" : "waiting");
+    return `<button type="button" class="card ${cls}${selectedAgent === r.name ? " selected" : ""}" data-agent="${esc(r.name)}"><div class="row"><span class="name">${esc(r.name)}</span>` +
       `<span class="pill"><i></i>${pill}</span></div>` +
       `<div class="desc">${esc(DESC[r.name] || "specialist")}${r.model ? " · " + esc(short(r.model)) : ""}</div>` +
-      `<div class="act">${esc(act)}</div></div>`;
+      `<div class="act">${esc(act)}</div></button>`;
   }).join("");
 }
 
@@ -750,6 +764,8 @@ function renderCards() {
 function renderDiffs() {
   const stage = $("stage"); if (!stage) return;
   stage.classList.add("tasks");
+  stage.classList.remove("flow-stage");
+  stage.style.width = ""; stage.style.height = "";
   stage.style.transform = `scale(${zoom})`;
   if (!diffs.length) {
     stage.innerHTML = `<div class="dempty"><b>no file changes yet</b>` +
@@ -829,6 +845,8 @@ function taskDepth(id, seen) {
 function renderTaskLanes() {
   const stage = $("stage"); if (!stage) return;
   stage.classList.add("tasks");
+  stage.classList.remove("flow-stage");
+  stage.style.width = ""; stage.style.height = "";
   stage.style.transform = `scale(${zoom})`;
   const ids = Object.keys(taskLanes);
   if (!ids.length) {
@@ -883,10 +901,9 @@ function renderTaskLanes() {
   };
 }
 
-// The orchestration rail: one station per participant on a vertical rail.
-// The segment INTO the active station flows; segments past finished stations
-// set green; task-split specialists sit on an indented branch lane. Scales to
-// any number of participants — never cramped, never chaotic.
+// Interactive relay map. The model pipeline remains linear, but a graph is a
+// better desktop representation than a long list: it makes hand-offs, retry
+// direction, active ownership and per-role model selection visible at once.
 function renderFlow() {
   const stage = $("stage"); if (!stage) return;
   if (canvasView === "diffs") { renderDiffs(); return; }
@@ -898,42 +915,79 @@ function renderFlow() {
     renderTaskLanes(); return;
   }
   stage.classList.remove("tasks");
+  stage.classList.add("flow-stage");
   const relay = state && state.relay;
   const roles = participants();
-  const rows = [];
-  if (relay) rows.push({ name: "orchestrator", desc: "coordinates the relay", orch: true });
-  roles.forEach(r => rows.push({
-    name: r.name, desc: DESC[r.name] || "specialist", model: r.model, spec: !!r.specialist,
-  }));
-
   const anyRun = busy || Object.keys(status).length > 0;
+  const nodeW = 188, nodeH = 94, gap = 36;
+  const stageW = Math.max(700, 64 + roles.length * nodeW + Math.max(0, roles.length - 1) * gap);
+  const stageH = 470;
+  stage.style.width = stageW + "px";
+  stage.style.height = stageH + "px";
   stage.style.transform = `scale(${zoom})`;
   const hint = anyRun ? "" :
-    `<div class="hint">team ready — <b>send a request</b> to watch it work</div>`;
+    `<div class="hint flow-hint">team ready — <b>send a request</b> to watch the relay</div>`;
 
-  stage.innerHTML = hint + rows.map((row, i) => {
-    const st = row.orch ? (busy ? "active" : "idle") : (status[row.name] || "idle");
+  const roleNodes = roles.map((role, i) => ({
+    name: role.name,
+    desc: DESC[role.name] || "specialist",
+    model: role.model,
+    spec: !!role.specialist,
+    x: 32 + i * (nodeW + gap),
+    y: 275 + (i % 2 ? -38 : 0),
+  }));
+  const orch = { name: "orchestrator", desc: "coordinates the relay", x: 32, y: 56, orch: true };
+  const nodes = relay ? [orch, ...roleNodes] : roleNodes;
+  const point = (node, side) => ({
+    x: node.x + (side === "right" ? nodeW : side === "left" ? 0 : nodeW / 2),
+    y: node.y + (side === "bottom" ? nodeH : side === "top" ? 0 : nodeH / 2),
+  });
+  const pathBetween = (from, to, vertical) => {
+    const a = point(from, vertical ? "bottom" : "right");
+    const b = point(to, vertical ? "top" : "left");
+    if (vertical) return `M ${a.x} ${a.y} C ${a.x} ${a.y + 54}, ${b.x} ${b.y - 54}, ${b.x} ${b.y}`;
+    const bend = Math.max(58, (b.x - a.x) * .46);
+    return `M ${a.x} ${a.y} C ${a.x + bend} ${a.y}, ${b.x - bend} ${b.y}, ${b.x} ${b.y}`;
+  };
+  const edge = (from, to, vertical) => {
+    const st = status[to.name] || "idle";
+    const cls = st === "active" && busy ? "live" : st === "done" ? "done" : "idle";
+    const d = pathBetween(from, to, vertical);
+    return `<path class="flow-link ${cls}" d="${d}" marker-end="url(#flowArrow)"></path>` +
+      (cls === "live" ? `<path class="flow-link signal" d="${d}"></path>` : "");
+  };
+  const edges = [];
+  if (relay && roleNodes.length) edges.push(edge(orch, roleNodes[0], true));
+  for (let i = 1; i < roleNodes.length; i++) edges.push(edge(roleNodes[i - 1], roleNodes[i], false));
+  let retry = "";
+  if (roleNodes.length >= 3) {
+    const from = point(roleNodes.at(-1), "bottom");
+    const to = point(roleNodes.at(-2), "bottom");
+    const bottom = stageH - 34;
+    retry = `<path class="flow-retry" d="M ${from.x} ${from.y} C ${from.x} ${bottom}, ${to.x} ${bottom}, ${to.x} ${to.y}"></path>` +
+      `<text class="retry-label" x="${(from.x + to.x) / 2}" y="${bottom - 7}" text-anchor="middle">retry on review</text>`;
+  }
+  const svg = `<svg class="flow-links" viewBox="0 0 ${stageW} ${stageH}" aria-hidden="true">` +
+    `<defs><marker id="flowArrow" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 8 4 0 8z"></path></marker></defs>` +
+    edges.join("") + retry + `</svg>`;
+
+  const cards = nodes.map((row) => {
+    const st = row.orch
+      ? (busy ? "active" : (anyRun && roleNodes.every(r => status[r.name] === "done") ? "done" : "idle"))
+      : (status[row.name] || "idle");
     const cls = st === "active" ? "active" : st === "done" ? "done" : st === "err" ? "err"
       : (busy && !row.orch ? "dim" : "");
     const glyph = st === "done" ? "✓" : st === "err" ? "✕" : (row.orch ? "◈" : (GLYPH[row.name] || "●"));
-    // rail segments: above flows while this station is active; below goes
-    // green once the station is done.
-    const segTop = i === 0 ? "none" : (st === "active" && busy ? "flow" : (st === "done" ? "done" : ""));
-    const segBot = i === rows.length - 1 ? "none" : (st === "done" ? "done" : "");
-    const steps = stepsOf(row.name);
+    const count = stepsOf(row.name);
     const act = (!row.orch && st === "active" && activity[row.name])
-      ? `<div class="sact">${esc(activity[row.name])}</div>` : "";
-    const chip = row.model ? `<span class="schip" title="${esc(row.model)}">${esc(short(row.model))}</span>` : "";
-    const stepsBadge = steps ? `<span class="ssteps">${steps} step${steps > 1 ? "s" : ""}</span>` : "";
-    const prevSpec = i > 0 && rows[i - 1].spec;
-    const fork = row.spec && !prevSpec ? `<div class="elbow"></div>` : "";
-    const join = !row.spec && prevSpec ? `<div class="elbow join"></div>` : "";
-    return fork + join + `<div class="st ${cls} ${row.orch ? "orch" : ""} ${row.spec ? "branch" : ""} lane${i % 3}">` +
-      `<div class="rail"><i class="seg ${segTop}"></i><span class="ring">${esc(glyph)}</span>` +
-      `<i class="seg ${segBot}"></i></div>` +
-      `<div class="scard"><div class="shead"><span class="sname">${esc(row.name)}</span>${chip}</div>` +
-      `<div class="sdesc">${esc(row.desc)}${stepsBadge}</div>${act}</div></div>`;
+      ? `<span class="flow-action">${esc(activity[row.name])}</span>` : "";
+    const chip = row.model ? `<span class="flow-model" title="${esc(row.model)}">${esc(short(row.model))}</span>` : "";
+    const stepText = count ? `${count} step${count > 1 ? "s" : ""}` : (st === "active" ? "working" : st);
+    return `<button type="button" class="flow-node ${cls}${selectedAgent === row.name ? " selected" : ""}" data-agent="${esc(row.name)}" style="--x:${row.x}px;--y:${row.y}px" aria-pressed="${selectedAgent === row.name}">` +
+      `<span class="flow-icon">${esc(glyph)}</span><span class="flow-copy"><span class="flow-name">${esc(row.name)}</span>` +
+      `<span class="flow-desc">${esc(row.desc)}</span>${act}</span><span class="flow-state"><i></i>${esc(stepText)}</span>${chip}</button>`;
   }).join("");
+  stage.innerHTML = hint + svg + cards;
 }
 function updateProgress() {
   if (Object.keys(taskLanes).length) {
@@ -967,7 +1021,10 @@ function addMsg(cls, who, text) {
   const dot = cls === "you" ? "" : `<i style="background:${cls === "err" ? "var(--red)" : "var(--accent)"}"></i>`;
   el.className = "msg " + cls;
   el.innerHTML = `<div class="who">${dot}<span>${esc(who)}</span><span class="ago">now</span></div><div class="bubble">${esc(text)}</div>`;
-  $("thread").appendChild(el); $("thread").scrollTop = 1e9;
+  const thread = $("thread");
+  thread.appendChild(el);
+  while (thread.children.length > 400) thread.removeChild(thread.firstChild);
+  thread.scrollTop = 1e9;
 }
 /* ANSI SGR → spans (colors 30-37/90-97, bold; everything else stripped). */
 function ansiToHtml(s) {
@@ -1241,7 +1298,7 @@ $("modes").addEventListener("click", async (e) => {
     $("stCost").textContent = "—";
     renderCards(); renderFlow(); updateProgress(); }
 };
-$("termToggle").onclick = () => $("term").classList.toggle("collapsed");
+$("termToggle").onclick = () => setTerminalCollapsed(!$("term").classList.contains("collapsed"));
 $("termClear").onclick = () => {
   $("log").innerHTML = ""; logLines = 0; unseen = 0;
   $("lineCount").textContent = ""; $("newLines").classList.add("hidden");
@@ -1273,13 +1330,64 @@ $("termCopy").onclick = async () => {
 	    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
 	  });
 	})();
-function setZoom(z) { zoom = Math.max(0.5, Math.min(1.3, z)); $("zVal").textContent = Math.round(zoom * 100) + "%";
+function setZoom(z) { zoom = Math.max(0.5, Math.min(1.3, z)); $("zReset").textContent = Math.round(zoom * 100) + "%";
   const s = $("stage"); if (s) s.style.transform = `scale(${zoom})`; }
+function selectAgent(name) {
+  if (!name) return;
+  selectedAgent = selectedAgent === name ? "" : name;
+  renderCards();
+  if (canvasView === "lanes") renderFlow();
+  const node = [...$("stage").querySelectorAll(".flow-node")]
+    .find(el => el.dataset.agent === selectedAgent);
+  if (node) {
+    node.focus({ preventScroll: true });
+    node.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+  }
+}
+$("stage").addEventListener("click", (e) => {
+  const node = e.target.closest(".flow-node"); if (node) selectAgent(node.dataset.agent);
+});
+$("cards").addEventListener("click", (e) => {
+  const card = e.target.closest(".card[data-agent]"); if (card) selectAgent(card.dataset.agent);
+});
 $("viewTabs").addEventListener("click", (e) => {
   const b = e.target.closest("button"); if (b) setCanvasView(b.dataset.v);
 });
 $("zIn").onclick = () => setZoom(zoom + 0.1);
 $("zOut").onclick = () => setZoom(zoom - 0.1);
+$("zReset").onclick = () => {
+  setZoom(1);
+  $("canvasScroll").scrollTo({ left: 0, top: 0, behavior: "smooth" });
+};
+
+// Dragging empty canvas pans the graph; buttons and diff/task controls keep
+// their native click behaviour. Ctrl+wheel zooms only this surface.
+(() => {
+  const scroller = $("canvasScroll");
+  let drag = null;
+  scroller.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest("button, input, select, a, [role=button]")) return;
+    drag = { x: e.clientX, y: e.clientY, left: scroller.scrollLeft, top: scroller.scrollTop };
+    scroller.classList.add("dragging");
+    scroller.setPointerCapture(e.pointerId);
+  });
+  scroller.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    scroller.scrollLeft = drag.left - (e.clientX - drag.x);
+    scroller.scrollTop = drag.top - (e.clientY - drag.y);
+  });
+  const stopPan = (e) => {
+    if (!drag) return;
+    drag = null; scroller.classList.remove("dragging");
+    if (scroller.hasPointerCapture(e.pointerId)) scroller.releasePointerCapture(e.pointerId);
+  };
+  scroller.addEventListener("pointerup", stopPan);
+  scroller.addEventListener("pointercancel", stopPan);
+  scroller.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey) return;
+    e.preventDefault(); setZoom(zoom + (e.deltaY < 0 ? .1 : -.1));
+  }, { passive: false });
+})();
 
 async function send() {
   const text = $("input").value.trim(); if (!text || busy) return;
@@ -1323,5 +1431,7 @@ $("input").addEventListener("keydown", (e) => {
 
 if (localStorage.accent) document.documentElement.style.setProperty("--accent", localStorage.accent);
 applyPanelLayout();
+setTerminalCollapsed(localStorage.getItem("termCollapsed") !== "0");
 addLog("relay", "desktop ready — agent output appears here");
+renderActivity();
 boot();

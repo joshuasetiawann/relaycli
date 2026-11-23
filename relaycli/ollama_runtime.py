@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
 
 
 _LOCAL_PREFIXES = ("ollama_chat/", "ollama/")
@@ -101,20 +103,34 @@ def _param_billions(model_name: str) -> float | None:
 
 
 def _ollama_processor(local_name: str, *, timeout: float) -> str | None:
+    host = (
+        os.environ.get("RELAYCLI_OLLAMA_BASE_URL")
+        or os.environ.get("OLLAMA_API_BASE")
+        or os.environ.get("OLLAMA_HOST")
+        or "http://localhost:11434"
+    )
+    if "://" not in host:
+        host = "http://" + host
+    endpoint = host.rstrip("/")
+    endpoint += "/ps" if endpoint.endswith("/api") else "/api/ps"
     try:
-        proc = subprocess.run(
-            ["ollama", "ps"],
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        with urlopen(endpoint, timeout=timeout) as response:
+            payload = json.load(response)
+    except (OSError, ValueError):
         return None
-    for line in proc.stdout.splitlines()[1:]:
-        cols = line.split()
-        if cols and cols[0] == local_name:
-            return " ".join(cols[4:6])
+    for model in payload.get("models", []):
+        if model.get("name") != local_name and model.get("model") != local_name:
+            continue
+        size = int(model.get("size") or 0)
+        vram = int(model.get("size_vram") or 0)
+        if size <= 0:
+            return None
+        gpu = max(0, min(100, round(vram * 100 / size)))
+        if gpu >= 99:
+            return "100% GPU"
+        if gpu <= 1:
+            return "100% CPU"
+        return f"{100 - gpu}%/{gpu}% CPU/GPU"
     return None
 
 

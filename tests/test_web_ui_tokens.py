@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from relaycli.ui.theme import DARK, LIGHT
+from relaycli.ui.theme import DARK, LIGHT, WEB_DARK_ACCENT
 from relaycli.ui.web import APP_JS_PATH, STYLES_PATH, UI_PATH
 
 _OLD_BRAND_HEX = ("#2D5BFF", "#3FB950", "#E3A008", "#F0554E")
@@ -66,7 +66,7 @@ def test_old_web_blue_accent_is_gone():
 
 def test_root_token_block_uses_the_shared_dark_palette():
     css = _css()
-    assert f"--accent: {DARK.accent};" in css
+    assert f"--accent: {WEB_DARK_ACCENT};" in css
     assert f"--green: {DARK.success};" in css
     assert f"--amber: {DARK.warning};" in css
     assert f"--red: {DARK.danger};" in css
@@ -74,8 +74,8 @@ def test_root_token_block_uses_the_shared_dark_palette():
 
 def test_accent_swatch_picker_defaults_to_the_new_accent():
     js = _js()
-    assert f'const ACCENTS = ["{DARK.accent}"' in js
-    assert f'localStorage.accent || "{DARK.accent}"' in js
+    assert f'const ACCENTS = ["{WEB_DARK_ACCENT}"' in js
+    assert f'localStorage.accent || "{WEB_DARK_ACCENT}"' in js
 
 
 def test_old_semantic_literals_do_not_leak_outside_the_untouched_activity_palette():
@@ -151,7 +151,7 @@ def test_every_color_token_used_is_defined_in_both_themes():
     light mode — the same class of bug as a hardcoded hex, just harder to
     spot."""
     dark, light = _token_blocks()
-    structural = {"--mono", "--sans", "--term-h", "--lane-shift", "--x"}
+    structural = {"--mono", "--sans", "--term-h", "--lane-shift", "--x", "--y"}
     used = set(re.findall(r"var\((--[a-z0-9-]+)", _css())) - structural
     assert used, "no tokens found — the regex or the file layout changed"
     assert not (used - dark.keys()), f"used but undefined in dark: {sorted(used - dark.keys())}"
