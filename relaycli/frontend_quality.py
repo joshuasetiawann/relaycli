@@ -187,8 +187,15 @@ def frontend_quality_issues(
         issues.append(
             "Replace inline onclick/window.alert interaction with an event listener and a useful inline state."
         )
-    if re.search(r"footer\s*\{[^}]*position\s*:\s*(?:fixed|absolute)", css, re.DOTALL | re.I):
-        issues.append("Keep the footer in normal document flow instead of pinning it over page content.")
+    pinned = re.search(r"footer\s*\{[^}]*position\s*:\s*(fixed|absolute)", css, re.DOTALL | re.I)
+    if pinned:
+        # Run 5 spent two cycles on the vaguer wording, then patched index.html
+        # with style="position: static" while styles.css stayed pinned.
+        issues.append(
+            f"styles.css pins the footer over page content (footer {{ position: {pinned.group(1)} }}). "
+            "Delete that position line and its bottom/left offsets in styles.css itself; an inline "
+            "style= override in index.html is not a fix."
+        )
     visual_tokens = ("<img", "<picture", "<video", "<canvas", "<svg", "background-image", "radial-gradient", "linear-gradient")
     if not any(token in style_text for token in visual_tokens):
         # Run 4 answered the vaguer wording with an empty <div class="visual-stage">.

@@ -263,6 +263,49 @@ standby, 50 minutes. Ended `review_exhausted` after 5 coder passes.
   `box-sizing: border-box`. It flags runs 2, 3 and 4; runs 2 and 4 are the
   two that scrolled sideways in the browser.
 
-The full suite passes (1407 passed, 8 known skips). Whether the menu is
-really visible, and overall visual quality, still need a browser; the gate
-is static.
+The full suite passed at this point (1407 passed, 8 known skips).
+
+### Run 5 — `Desktop/relaycli-nightcourt-test-5` (2026-11-23)
+
+Log: `docs/test-logs/nightcourt-local-v5.log`. Same settings, kept awake, no
+standby, 51 minutes. Ended `review_exhausted` with **one** gate issue left.
+
+- The gate's issue count went 10 → 2 → 2 (cycle 3 rolled back from a higher
+  count) → 1 → 1. With the clearer messages, cycle 2 fixed the visual (an
+  inline SVG) and the false claims.
+- The last issue was a pinned footer. Cycle 4 tried to edit `styles.css`
+  and failed four times with `old_string not found`, then fixed Arial
+  instead. Cycle 5 added `style="position: static;"` to the `<footer>` in
+  index.html. That works in a browser, but `styles.css` still pins the
+  footer, so the gate rejected it again. The message never named the file
+  or the declaration.
+- Chromium at 390 px: hero, story, sessions, membership and contact, an
+  inline SVG, no overflow, no dead links, a working mobile menu, a working
+  form, and the footer in flow (through the inline override). Sessions are
+  `<div>`s with a click listener each: a mouse works, a keyboard cannot reach
+  them, and `#booking-summary` has no `aria-live`. The static gate does not
+  catch either.
+
+### RelayCLI change from run 5
+
+- The pinned-footer issue now names the file and the declaration:
+  `styles.css pins the footer … (footer { position: fixed })`. It says to
+  fix it there, and that an inline `style=` override does not count.
+
+Full suite: 1408 passed, 8 known skips. This change has not been measured by
+another run.
+
+### Across runs 2–5
+
+| Run | Gate issues per cycle | Final | Browser |
+|---|---|---|---|
+| 2 | 7 → 5 → 4 → 3 → 3 | 3 | skeleton: no nav or session buttons, `alert()`, 17 px scroll |
+| 3 | 6 → 4 → 6 → 6 → 2 | 2 | menu and forms work; booking dead; footer fixed |
+| 4 | 4 → 2 → 2 → 2 → 2 | 2 | everything wired; false booking claim; 49 px scroll |
+| 5 | 10 → 2 → 2 → 1 → 1 | 1 | everything wired, SVG visual; keyboard can't pick sessions |
+
+No run reached the Reviewer. With `max_review_cycles=4` the gate always ran
+out of cycles first. Without the cap (RelayCLI's default), these runs would
+have kept revising. Run 5's last cycles cost about two minutes each, so the
+cap and the gate's strictness are now the main trade-off for a local model.
+That is a product decision, not a defect.

@@ -400,3 +400,11 @@ def test_quality_gate_reports_full_width_padding_without_border_box(tmp_path):
         assert "plus side padding" not in " ".join(
             frontend_quality_issues(ProjectContext(tmp_path), "build a site")
         ), ok
+
+
+def test_pinned_footer_issue_names_the_file_and_declaration(tmp_path):
+    # Observed NIGHT COURT run 5: the vague wording led to an inline style= patch.
+    (tmp_path / "index.html").write_text('<footer style="position: static;"></footer>', encoding="utf-8")
+    (tmp_path / "styles.css").write_text("footer { position: fixed; bottom: 0; }", encoding="utf-8")
+    issues = " ".join(frontend_quality_issues(ProjectContext(tmp_path), "build a site"))
+    assert "styles.css pins the footer over page content (footer { position: fixed })" in issues
